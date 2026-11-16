@@ -224,6 +224,16 @@ jobs:
           mkdir -p "$SOURCE_DIR/build-input"
           cp "$BUILD_CONFIG_PATH" "$SOURCE_DIR/build-input/active-configuration.json"
 
+          python3 - <<'PY'
+          from pathlib import Path
+          for p in Path("build-system/fake-codesigning/profiles").glob("*.mobileprovision"):
+              data = p.read_bytes()
+              updated = data.replace(b"2026-10-30T17:06:30Z", b"2030-12-31T23:59:59Z")
+              if updated != data:
+                  p.write_bytes(updated)
+                  print(f"Updated ExpirationDate in {p.name}")
+          PY
+
           python3 build-system/Make/ImportCertificates.py --path build-system/fake-codesigning/certs
           python3 -u build-system/Make/Make.py \
             --bazelUserRoot="$BAZEL_USER_ROOT" \

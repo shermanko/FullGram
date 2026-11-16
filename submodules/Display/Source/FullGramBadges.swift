@@ -5,12 +5,14 @@ public struct FullGramBadgeRole: Codable, Equatable {
     public var label: String
     public var shortLabel: String?
     public var emoji: String
+    public var customEmojiId: String?
     public var color: String
 
-    public init(label: String, shortLabel: String? = nil, emoji: String, color: String) {
+    public init(label: String, shortLabel: String? = nil, emoji: String, customEmojiId: String? = nil, color: String) {
         self.label = label
         self.shortLabel = shortLabel
         self.emoji = emoji
+        self.customEmojiId = customEmojiId
         self.color = color
     }
 }
@@ -39,6 +41,7 @@ public struct FullGramBadge: Equatable {
     public let label: String
     public let shortLabel: String
     public let emoji: String
+    public let customEmojiId: Int64?
     public let colorHex: String
 
     public var chipText: String {
@@ -150,6 +153,7 @@ public final class FullGramBadges {
             label: role.label,
             shortLabel: role.shortLabel ?? role.label,
             emoji: role.emoji,
+            customEmojiId: role.customEmojiId.flatMap { Int64($0) },
             colorHex: role.color
         )
     }
