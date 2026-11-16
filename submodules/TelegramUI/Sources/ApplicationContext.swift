@@ -156,6 +156,7 @@ final class AuthorizedApplicationContext {
     private var showNewsTab: Bool
     private var showNewsTabDisposable: Disposable?
     private var enablePostboxTransactionsDiposable: Disposable?
+    private var fullGramAIOverlayCoordinator: FullGramAIOverlayCoordinator?
     
     init(sharedApplicationContext: SharedApplicationContext, mainWindow: Window1, context: AccountContextImpl, accountManager: AccountManager<TelegramAccountManagerTypes>, showCallsTab: Bool, reinitializedNotificationSettings: @escaping () -> Void) {
         self.sharedApplicationContext = sharedApplicationContext
@@ -266,6 +267,8 @@ final class AuthorizedApplicationContext {
         }
         
         let accountId = context.account.id
+        self.fullGramAIOverlayCoordinator = FullGramAIOverlayCoordinator(context: self.context, rootController: self.rootController)
+        FullGramBadges.shared.refreshIfNeeded()
         self.loggedOutDisposable.set((context.account.loggedOut
         |> deliverOnMainQueue).start(next: { [weak self] value in
             if value {
@@ -801,6 +804,7 @@ final class AuthorizedApplicationContext {
                 if previousTheme.swap(presentationData.theme) !== presentationData.theme {
                     strongSelf.lockedCoveringView.updateTheme(presentationData.theme)
                     strongSelf.rootController.updateTheme(NavigationControllerTheme(presentationTheme: presentationData.theme))
+                    strongSelf.fullGramAIOverlayCoordinator?.updateTheme(presentationData.theme)
                 }
             }
         })

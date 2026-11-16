@@ -429,6 +429,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         let statusBarHost = ApplicationStatusBarHost(scene: window.windowScene)
         self.statusBarHost = statusBarHost
         self.mainWindow = Window1(hostView: hostView, statusBarHost: statusBarHost)
+        FullGramAnimationSpeed.applyAtLaunch()
         if let traitCollection = window.rootViewController?.traitCollection {
             if #available(iOS 13.0, *) {
                 switch traitCollection.userInterfaceStyle {
@@ -2034,7 +2035,28 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         }))
     }
 
+    private var fullGramSwitcherBlurView: UIView?
+
+    private func fullGramUpdateSwitcherBlur(active: Bool) {
+        if active, FullGramExtras.shared.blurInAppSwitcher, self.fullGramSwitcherBlurView == nil, let window = self.window {
+            let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterial))
+            blur.frame = window.bounds
+            blur.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            window.addSubview(blur)
+            self.fullGramSwitcherBlurView = blur
+        } else if !active, let blur = self.fullGramSwitcherBlurView {
+            self.fullGramSwitcherBlurView = nil
+            UIView.animate(withDuration: 0.2, animations: {
+                blur.alpha = 0.0
+            }, completion: { _ in
+                blur.removeFromSuperview()
+            })
+        }
+    }
+
     func handleWillResignActive() {
+        self.fullGramUpdateSwitcherBlur(active: true)
+        FullGramChatPrivacy.relock()
         self.isActiveValue = false
         self.isActivePromise.set(false)
         self.clearNotificationsManager?.commitNow()
@@ -2141,6 +2163,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
     }
 
     func handleDidBecomeActive() {
+        self.fullGramUpdateSwitcherBlur(active: false)
         self.isInForegroundValue = true
         self.isInForegroundPromise.set(true)
         self.isActiveValue = true

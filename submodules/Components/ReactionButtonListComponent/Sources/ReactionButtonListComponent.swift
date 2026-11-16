@@ -1104,7 +1104,7 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
         }
         layout.spec.component.action(self, layout.spec.component.reaction.value, self.containerView)
         
-        if case .stars = layout.spec.component.reaction.value {
+        if case .stars = layout.spec.component.reaction.value, FullGramExtras.shared.glowingReactions {
             self.addStarsTap()
         }
     }
@@ -1230,7 +1230,7 @@ public final class ReactionButtonAsyncNode: ContextControllerSourceView {
             glassView.removeFromSuperview()
         }
         
-        if case .stars = layout.spec.component.reaction.value {
+        if case .stars = layout.spec.component.reaction.value, FullGramExtras.shared.glowingReactions {
             let starsEffectLayer: StarsButtonEffectLayer
             if let current = self.starsEffectLayer {
                 starsEffectLayer = current

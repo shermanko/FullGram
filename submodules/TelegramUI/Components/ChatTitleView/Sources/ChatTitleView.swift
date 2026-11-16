@@ -177,6 +177,7 @@ enum ChatTitleCredibilityIcon: Equatable {
     case verified
     case premium
     case emojiStatus(PeerEmojiStatus)
+    case fullGram(FullGramBadge)
 }
 
 public final class ChatTitleView: UIView, NavigationBarTitleView {
@@ -320,6 +321,10 @@ public final class ChatTitleView: UIView, NavigationBarTitleView {
                                     
                                     if peer.isVerified {
                                         titleCredibilityIcon = .verified
+                                    }
+                                    if !peer.isFake && !peer.isScam && (titleCredibilityIcon == .none || titleCredibilityIcon == .premium),
+                                       let badge = FullGramBadges.shared.badge(forPeerId: peer.id.toInt64(), username: peer.addressName) {
+                                        titleCredibilityIcon = .fullGram(badge)
                                     }
                                     if let verificationIconFileId = peer.verificationIconFileId {
                                         titleVerifiedIcon = .emojiStatus(PeerEmojiStatus(content: .emoji(fileId: verificationIconFileId), expirationDate: nil))
@@ -936,6 +941,8 @@ public final class ChatTitleView: UIView, NavigationBarTitleView {
             titleCredibilityContent = .text(color: self.theme.chat.message.incoming.scamColor, string: self.strings.Message_ScamAccount.uppercased())
         case let .emojiStatus(emojiStatus):
             titleCredibilityContent = .animation(content: .customEmoji(fileId: emojiStatus.fileId), size: CGSize(width: 32.0, height: 32.0), placeholderColor: self.theme.list.mediaPlaceholderColor, themeColor: self.theme.list.itemAccentColor, loopMode: .count(2))
+        case let .fullGram(badge):
+            titleCredibilityContent = .text(color: badge.uiColor, string: badge.chipText)
         }
         
         let titleVerifiedContent: EmojiStatusComponent.Content
@@ -952,6 +959,8 @@ public final class ChatTitleView: UIView, NavigationBarTitleView {
             titleVerifiedContent = .text(color: self.theme.chat.message.incoming.scamColor, string: self.strings.Message_ScamAccount.uppercased())
         case let .emojiStatus(emojiStatus):
             titleVerifiedContent = .animation(content: .customEmoji(fileId: emojiStatus.fileId), size: CGSize(width: 32.0, height: 32.0), placeholderColor: self.theme.list.mediaPlaceholderColor, themeColor: self.theme.list.itemAccentColor, loopMode: .count(2))
+        case let .fullGram(badge):
+            titleVerifiedContent = .text(color: badge.uiColor, string: badge.chipText)
         }
         
         let titleStatusContent: EmojiStatusComponent.Content

@@ -398,7 +398,7 @@ private class ReplyThreadHistoryContextImpl {
                 }
                 strongSelf.readDisposable.set(signal.start())
             } else {
-                var signal = strongSelf.account.network.request(Api.functions.messages.readDiscussion(peer: inputPeer, msgId: Int32(clamping: threadId), readMaxId: messageIndex.id.id))
+                var signal = strongSelf.account.network.requestFullGramCloudRead(Api.functions.messages.readDiscussion(peer: inputPeer, msgId: Int32(clamping: threadId), readMaxId: messageIndex.id.id), peerId: strongSelf.peerId.toInt64())
                 |> `catch` { _ -> Signal<Api.Bool, NoError> in
                     return .single(.boolFalse)
                 }

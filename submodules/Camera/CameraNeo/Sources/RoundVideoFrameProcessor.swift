@@ -6,6 +6,7 @@ import Metal
 import MetalPerformanceShaders
 import QuartzCore
 import Camera
+import Display
 
 private final class CameraBundleMarker: NSObject {
 }
@@ -222,8 +223,8 @@ private final class RoundVideoLanczosScaler {
 }
 
 final class RoundVideoFrameProcessor {
-    static let outputWidth = 480
-    static let outputHeight = 480
+    static var outputWidth: Int { return FullGramRoundVideoSettings.resolution }
+    static var outputHeight: Int { return FullGramRoundVideoSettings.resolution }
 
     private let device: MTLDevice
     private let mediaQueue: DispatchQueue
@@ -237,6 +238,7 @@ final class RoundVideoFrameProcessor {
     private var isRendering = false
     private var primaryLanczosScaler: RoundVideoLanczosScaler?
     private var secondaryLanczosScaler: RoundVideoLanczosScaler?
+    private let roundMask = FullGramRoundVideoMask.makeIfEnabled()
 
     init?(mediaQueue: DispatchQueue, decorationResources: RoundVideoDecorationResources?, mode: NeoCameraImpl.RoundVideoMode) {
         guard let device = MTLCreateSystemDefaultDevice(), let commandQueue = device.makeCommandQueue() else {
@@ -521,6 +523,9 @@ final class RoundVideoFrameProcessor {
                     return
                 }
                 self.isRendering = false
+                if let roundMask = self.roundMask, let frame = processedFrame {
+                    roundMask.renderInPlace(frame.pixelBuffer)
+                }
                 withExtendedLifetime(retainedPixelBuffers) {
                     withExtendedLifetime(retainedTextures) {
                         completion(processedFrame)

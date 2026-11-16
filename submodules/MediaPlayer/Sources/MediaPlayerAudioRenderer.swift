@@ -4,6 +4,7 @@ import CoreMedia
 import AVFoundation
 import TelegramCore
 import TelegramAudio
+import Display
 
 private enum AudioPlayerRendererState {
     case paused
@@ -237,6 +238,7 @@ private final class AudioPlayerRendererContext {
     var mixerAudioUnit: AudioComponentInstance?
     var equalizerAudioUnit: AudioComponentInstance?
     var outputAudioUnit: AudioComponentInstance?
+    private var mixerObserver: NSObjectProtocol?
     
     var bufferContextId: Int32!
     let bufferContext: Atomic<AudioPlayerRendererBufferContext>
@@ -305,10 +307,20 @@ private final class AudioPlayerRendererContext {
                 }
             }
         }
+        
+        self.mixerObserver = NotificationCenter.default.addObserver(forName: FullGramMixer.didChangeNotification, object: nil, queue: nil) { [weak self] _ in
+            audioPlayerRendererQueue.async {
+                self?.applyMixerParameters()
+            }
+        }
     }
     
     deinit {
         assert(audioPlayerRendererQueue.isCurrent())
+        
+        if let mixerObserver = self.mixerObserver {
+            NotificationCenter.default.removeObserver(mixerObserver)
+        }
         
         self.audioSessionDisposable.dispose()
         
@@ -600,6 +612,10 @@ private final class AudioPlayerRendererContext {
                 AudioUnitSetParameter(equalizerAudioUnit, kAUNBandEQParam_GlobalGain, kAudioUnitScope_Global, 0, self.forceAudioToSpeaker ? 0.0 : 12.0, 0)
             } else if self.soundMuted {
                 AudioUnitSetParameter(equalizerAudioUnit, kAUNBandEQParam_GlobalGain, kAudioUnitScope_Global, 0, 0.0, 0)
+            } else {
+                var bandCount = UInt32(FullGramMixer.frequencies.count)
+                AudioUnitSetProperty(equalizerAudioUnit, kAUNBandEQProperty_NumberOfBands, kAudioUnitScope_Global, 0, &bandCount, UInt32(MemoryLayout<UInt32>.size))
+                self.applyMixerParameters(to: equalizerAudioUnit)
             }
             
             var maybeOutputAudioUnit: AudioComponentInstance?
@@ -670,6 +686,23 @@ private final class AudioPlayerRendererContext {
         }
     }
     
+    private func applyMixerParameters(to unit: AudioComponentInstance? = nil) {
+        assert(audioPlayerRendererQueue.isCurrent())
+        guard !(self.forAudioVideoMessage && !self.ambient), !self.soundMuted else { return }
+        guard let equalizerAudioUnit = unit ?? self.equalizerAudioUnit else { return }
+        let enabled = FullGramMixer.isEnabled
+        let gains = FullGramMixer.gains
+        let freqs = FullGramMixer.frequencies
+        AudioUnitSetParameter(equalizerAudioUnit, kAUNBandEQParam_GlobalGain, kAudioUnitScope_Global, 0, enabled ? FullGramMixer.headroomCompensation : 0.0, 0)
+        for index in 0 ..< freqs.count {
+            AudioUnitSetParameter(equalizerAudioUnit, AudioUnitParameterID(kAUNBandEQParam_FilterType + UInt32(index)), kAudioUnitScope_Global, 0, Float32(kAUNBandEQFilterType_Parametric), 0)
+            AudioUnitSetParameter(equalizerAudioUnit, AudioUnitParameterID(kAUNBandEQParam_Frequency + UInt32(index)), kAudioUnitScope_Global, 0, Float32(freqs[index]), 0)
+            AudioUnitSetParameter(equalizerAudioUnit, AudioUnitParameterID(kAUNBandEQParam_Bandwidth + UInt32(index)), kAudioUnitScope_Global, 0, 1.0, 0)
+            AudioUnitSetParameter(equalizerAudioUnit, AudioUnitParameterID(kAUNBandEQParam_BypassBand + UInt32(index)), kAudioUnitScope_Global, 0, enabled ? 0.0 : 1.0, 0)
+            AudioUnitSetParameter(equalizerAudioUnit, AudioUnitParameterID(kAUNBandEQParam_Gain + UInt32(index)), kAudioUnitScope_Global, 0, enabled && index < gains.count ? Float32(gains[index]) : 0.0, 0)
+        }
+    }
+
     private func closeAudioUnit() {
         assert(audioPlayerRendererQueue.isCurrent())
         

@@ -199,6 +199,7 @@ enum PeerInfoSettingsSection {
     case stars
     case ton
     case wallet
+    case fullgram
 }
 
 enum PeerInfoReportType {
@@ -2574,9 +2575,20 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
             reactionSourceMessage = .single(nil)
         }
 
+        let fullGramExtrasTick = Signal<Int, NoError> { subscriber in
+            var tick = 0
+            subscriber.putNext(tick)
+            let observer = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { _ in
+                tick += 1
+                subscriber.putNext(tick)
+            }
+            return ActionDisposable {
+                NotificationCenter.default.removeObserver(observer)
+            }
+        }
         self.dataDisposable = combineLatest(
             queue: Queue.mainQueue(),
-            screenData,
+            combineLatest(screenData, fullGramExtrasTick) |> map { data, _ in data },
             self.forceIsContactPromise.get(),
             reactionSourceMessage
         ).startStrict(next: { [weak self] data, forceIsContact, reactionSourceMessage in

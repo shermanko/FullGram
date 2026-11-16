@@ -1863,11 +1863,15 @@ public class ChatMessageAnimatedStickerItemNode: ChatMessageItemView {
                     dateAndStatusApply(animation)
                     if case .customChatContents = item.associatedData.subject {
                         strongSelf.dateAndStatusNode.isHidden = true
+                    } else if FullGramDisplayOptions.hideStickerTime {
+                        strongSelf.dateAndStatusNode.isHidden = true
                     } else if hidesStatusForBubbleless {
                         strongSelf.hidesStatusWithoutBubbles = true
                         strongSelf.dateAndStatusNode.isHidden = true
                     } else if strongSelf.hidesStatusWithoutBubbles {
                         strongSelf.hidesStatusWithoutBubbles = false
+                        strongSelf.dateAndStatusNode.isHidden = false
+                    } else {
                         strongSelf.dateAndStatusNode.isHidden = false
                     }
 

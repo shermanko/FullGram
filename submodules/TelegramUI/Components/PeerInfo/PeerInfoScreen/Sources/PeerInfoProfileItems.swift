@@ -16,6 +16,7 @@ import WebUI
 import AvatarNode
 import PeerNameColorItem
 import BoostLevelIconComponent
+import UndoUI
 
 private let enabledPublicBioEntities: EnabledEntityTypes = [.allUrl, .mention, .hashtag]
 private let enabledPrivateBioEntities: EnabledEntityTypes = [.internalUrl, .mention, .hashtag]
@@ -177,7 +178,7 @@ func infoItems(
             ))
         }
         
-        if let phone = user.phone {
+        if let phone = user.phone, !(user.id == context.account.peerId && FullGramExtras.shared.hidePhoneNumber) {
             let formattedPhone = formatPhoneNumber(context: context, number: phone)
             let label: String
             if formattedPhone.hasPrefix("+888 ") {
@@ -953,6 +954,24 @@ func infoItems(
         }
     }
     
+    if FullGramExtras.shared.showPeerIds, let peer = data.peer {
+        let value: String
+        switch peer.id.namespace {
+        case Namespaces.Peer.CloudChannel:
+            value = "-100\(peer.id.id._internalGetInt64Value())"
+        case Namespaces.Peer.CloudGroup:
+            value = "-\(peer.id.id._internalGetInt64Value())"
+        default:
+            value = "\(peer.id.id._internalGetInt64Value())"
+        }
+        let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+        let copy: () -> Void = {
+            UIPasteboard.general.string = value
+            interaction.getController()?.present(UndoOverlayController(presentationData: presentationData, content: .copy(text: ru ? "ID скопирован" : "ID copied"), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), in: .current)
+        }
+        items[.peerInfo]!.append(PeerInfoScreenLabeledValueItem(id: "fullgram-peer-id", label: "Telegram ID", text: value, textColor: .accent, action: { _, _ in copy() }, longTapAction: { _ in copy() }, requestLayout: { interaction.requestLayout($0) }))
+    }
+
     var result: [(AnyHashable, [PeerInfoScreenItem])] = []
     for section in InfoSection.allCases {
         if let sectionItems = items[section], !sectionItems.isEmpty {

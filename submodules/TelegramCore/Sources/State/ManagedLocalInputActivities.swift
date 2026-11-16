@@ -78,7 +78,10 @@ private final class ManagedLocalTypingActivitiesContext {
 func managedLocalTypingActivities(activities: Signal<[PeerActivitySpace: [(PeerId, PeerInputActivityRecord)]], NoError>, postbox: Postbox, network: Network, accountPeerId: PeerId) -> Signal<Void, NoError> {
     return Signal { subscriber in
         let context = Atomic(value: ManagedLocalTypingActivitiesContext())
-        let disposable = activities.start(next: { activities in
+        let disposable = combineLatest(activities, network.fullGramGhostMode.signal).start(next: { activities, settings in
+            let activities = activities.mapValues { records in
+                return records.filter { !fullGramSuppressInputActivity($0.1.activity, settings: settings.effective(forPeer: $0.0.toInt64())) }
+            }
             let (start, dispose) = context.with { context in
                 return context.update(activities: activities)
             }
@@ -143,6 +146,9 @@ private func actionFromActivity(_ activity: PeerInputActivity?) -> Api.SendMessa
 
 private func requestActivity(postbox: Postbox, network: Network, accountPeerId: PeerId, peerId: PeerId, threadId: Int64?, activity: PeerInputActivity?) -> Signal<Void, NoError> {
     return postbox.transaction { transaction -> Signal<Void, NoError> in
+        if let activity, fullGramSuppressInputActivity(activity, settings: network.fullGramGhostMode.current.effective(forPeer: peerId.toInt64())) {
+            return .complete()
+        }
         if let peer = transaction.getPeer(peerId) {
             if peerId == accountPeerId {
                 return .complete()

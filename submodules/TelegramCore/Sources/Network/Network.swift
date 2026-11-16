@@ -918,6 +918,7 @@ public final class Network: NSObject {
     let mainSession: NetworkEngineSession
     let requestService: NetworkEngineRequestService
     let basePath: String
+    public let fullGramGhostMode: FullGramGhostModeStore
     private let mainSessionDelegate: NetworkMainSessionDelegate
     public let telemetry: NetworkTelemetry?
     private let useRequestTimeoutTimers: Bool
@@ -1015,6 +1016,7 @@ public final class Network: NSObject {
         self._connectionStatus = _connectionStatus
         self.appDataDisposable = appDataDisposable
         self.basePath = basePath
+        self.fullGramGhostMode = FullGramGhostModeStore(accountPath: basePath)
         self.useRequestTimeoutTimers = useRequestTimeoutTimers
         self.baseTcpConnectionInterfaceFactory = baseTcpConnectionInterfaceFactory
         self.isAppExtension = isAppExtension

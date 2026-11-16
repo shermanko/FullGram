@@ -545,6 +545,20 @@ func chatContextMenuItems(context: AccountContext, peerId: EnginePeer.Id, promoI
                             }
                         }
                         
+                        if FullGramChatPrivacy.isEnabled {
+                            let fgRu = strings.baseLanguageCode.hasPrefix("ru")
+                            let fgPeerValue = peerId.toInt64()
+                            let fgLocked = FullGramChatPrivacy.isLocked(fgPeerValue)
+                            items.append(.action(ContextMenuActionItem(
+                                text: fgLocked ? (fgRu ? "Снять блокировку Face ID" : "Remove Face ID lock") : (fgRu ? "Заблокировать Face ID" : "Lock with Face ID"),
+                                icon: { theme in UIImage(systemName: fgLocked ? "lock.open.fill" : "faceid")?.withTintColor(theme.contextMenu.primaryColor, renderingMode: .alwaysOriginal) },
+                                action: { _, f in
+                                    FullGramChatPrivacy.setLocked(fgPeerValue, !fgLocked)
+                                    f(.default)
+                                }
+                            )))
+                        }
+
                         let appendDeleteOrUngroupItem = {
                             if case .community = peer {
                                 items.append(.action(ContextMenuActionItem(text: strings.ChatList_Context_Ungroup, textColor: .destructive, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Ungroup"), color: theme.contextMenu.destructiveColor) }, action: { _, f in

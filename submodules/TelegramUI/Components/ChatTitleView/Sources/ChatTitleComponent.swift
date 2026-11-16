@@ -768,6 +768,10 @@ public final class ChatTitleComponent: Component {
                             if peer.isVerified {
                                 titleCredibilityIcon = .verified
                             }
+                            if !peer.isFake && !peer.isScam && (titleCredibilityIcon == .none || titleCredibilityIcon == .premium),
+                               let badge = FullGramBadges.shared.badge(forPeerId: peer.id.toInt64(), username: peer.addressName) {
+                                titleCredibilityIcon = .fullGram(badge)
+                            }
                             if let verificationIconFileId = peer.verificationIconFileId {
                                 titleVerifiedIcon = .emojiStatus(PeerEmojiStatus(content: .emoji(fileId: verificationIconFileId), expirationDate: nil))
                             }
@@ -1310,6 +1314,8 @@ public final class ChatTitleComponent: Component {
                     return .text(color: component.theme.chat.message.incoming.scamColor, string: component.strings.Message_ScamAccount.uppercased())
                 case let .emojiStatus(emojiStatus):
                     return .animation(content: .customEmoji(fileId: emojiStatus.fileId), size: CGSize(width: 32.0, height: 32.0), placeholderColor: component.theme.list.mediaPlaceholderColor, themeColor: component.theme.list.itemAccentColor, loopMode: .count(2))
+                case let .fullGram(badge):
+                    return .text(color: badge.uiColor, string: badge.chipText)
                 }
             }
             

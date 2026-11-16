@@ -67,6 +67,8 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
     private var linkHighlightingNode: LinkHighlightingNode?
     private var shimmeringNode: ShimmeringLinkNode?
     private var textSelectionNode: TextSelectionNode?
+    private var fullGramScamBannerView: UIView?
+    private var fullGramScamBannerLabel: UILabel?
     
     private var textHighlightingNodes: [LinkHighlightingNode] = []
     
@@ -340,6 +342,7 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                 }
                 
                 var rawText: String
+                var fullGramScamWarningText: String?
                 let attributedText: NSAttributedString
                 var messageEntities: [MessageTextEntity]?
                 
@@ -376,6 +379,36 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                         rawText = updatingMedia.text
                     } else {
                         rawText = item.message.text
+                    }
+                    rawText = FullGramPluginManager.shared.processRenderMessage(
+                        text: rawText,
+                        peerId: item.message.id.peerId.toInt64(),
+                        isIncoming: incoming,
+                        messageId: item.message.id.id
+                    )
+                    if incoming {
+                        let sourceText = rawText
+                        var warnings: [String] = []
+                        let isForwarded = item.message.forwardInfo != nil
+                        let fromUnknown = item.message.forwardInfo?.author == nil || item.message.forwardInfo?.author?.id != item.message.author?.id
+                        let viaBot = item.message.attributes.contains(where: { $0 is InlineBotMessageAttribute }) || (item.message.author as? TelegramUser)?.botInfo != nil
+                        if let offerVerdict = FullGramAntiScam.shared.inspectOffer(
+                            text: sourceText,
+                            isForwarded: isForwarded,
+                            fromUnknownAuthor: fromUnknown,
+                            viaBot: viaBot
+                        ) {
+                            warnings.append("⚠️ Анти-офер: \(offerVerdict.summary) (\(offerVerdict.reasons.joined(separator: ", ")))")
+                        }
+                        if let otcWarning = FullGramAntiScam.shared.inspectOTC(text: sourceText) {
+                            warnings.append("⚠️ \(otcWarning)")
+                        }
+                        if let scamVerdict = FullGramAntiScam.shared.inspectIncomingMessage(sourceText) {
+                            warnings.append("⚠️ Возможный скам: \(scamVerdict.reasons.first ?? scamVerdict.summary)")
+                        }
+                        if !warnings.isEmpty {
+                            fullGramScamWarningText = warnings.joined(separator: "\n")
+                        }
                     }
                     
                     for attribute in item.message.attributes {
@@ -736,7 +769,33 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                 
                 textFrameWithoutInsets = textFrameWithoutInsets.offsetBy(dx: layoutConstants.text.bubbleInsets.left, dy: topInset)
                 
-                var suggestedBoundingWidth: CGFloat = textFrameWithoutInsets.width
+                var scamBannerAttributed: NSAttributedString?
+                var scamBannerSize = CGSize.zero
+                let scamBannerTopSpacing: CGFloat = 6.0
+                let scamBannerPadding = UIEdgeInsets(top: 5.0, left: 8.0, bottom: 5.0, right: 8.0)
+                if let fullGramScamWarningText {
+                    let bannerColor = incoming ? UIColor(rgb: 0xd9383a) : messageTheme.primaryTextColor
+                    let attr = NSAttributedString(
+                        string: fullGramScamWarningText,
+                        attributes: [
+                            .font: Font.medium(11.5),
+                            .foregroundColor: bannerColor
+                        ]
+                    )
+                    let maxBannerTextWidth = max(140.0, textConstrainedSize.width - scamBannerPadding.left - scamBannerPadding.right)
+                    let measured = attr.boundingRect(
+                        with: CGSize(width: maxBannerTextWidth, height: .greatestFiniteMagnitude),
+                        options: [.usesLineFragmentOrigin, .usesFontLeading],
+                        context: nil
+                    ).integral
+                    scamBannerAttributed = attr
+                    scamBannerSize = CGSize(
+                        width: ceil(measured.width) + scamBannerPadding.left + scamBannerPadding.right,
+                        height: ceil(measured.height) + scamBannerPadding.top + scamBannerPadding.bottom
+                    )
+                }
+
+                var suggestedBoundingWidth: CGFloat = max(textFrameWithoutInsets.width, scamBannerSize.width)
                 if let statusSuggestedWidthAndContinue = statusSuggestedWidthAndContinue, !hasDraft {
                     suggestedBoundingWidth = max(suggestedBoundingWidth, statusSuggestedWidthAndContinue.0)
                 }
@@ -749,6 +808,10 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                     let statusSizeAndApply = statusSuggestedWidthAndContinue?.1(boundingWidth - sideInsets)
                     
                     boundingSize = textFrameWithoutInsets.size
+                    if scamBannerSize.height > 0.0 {
+                        boundingSize.width = max(boundingSize.width, scamBannerSize.width)
+                        boundingSize.height += scamBannerTopSpacing + scamBannerSize.height
+                    }
                     if let statusSizeAndApply = statusSizeAndApply, !hasDraft {
                         boundingSize.height += statusSizeAndApply.0.height
                     }
@@ -886,9 +949,56 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                             }
                             strongSelf.updateIsTranslating(isTranslating, showTextAsPlaceholder: showTextAsPlaceholder)
                             
+                            if let scamBannerAttributed, scamBannerSize.height > 0.0 {
+                                let bannerView: UIView
+                                if let existing = strongSelf.fullGramScamBannerView {
+                                    bannerView = existing
+                                } else {
+                                    let created = UIView()
+                                    created.layer.cornerRadius = 8.0
+                                    created.clipsToBounds = true
+                                    created.isUserInteractionEnabled = false
+                                    strongSelf.fullGramScamBannerView = created
+                                    strongSelf.containerNode.view.addSubview(created)
+                                    bannerView = created
+                                }
+                                let bannerLabel: UILabel
+                                if let existing = strongSelf.fullGramScamBannerLabel {
+                                    bannerLabel = existing
+                                } else {
+                                    let created = UILabel()
+                                    created.numberOfLines = 0
+                                    created.isUserInteractionEnabled = false
+                                    strongSelf.fullGramScamBannerLabel = created
+                                    bannerView.addSubview(created)
+                                    bannerLabel = created
+                                }
+                                bannerView.backgroundColor = UIColor(rgb: 0xd9383a).withAlphaComponent(0.12)
+                                let bannerWidth = max(scamBannerSize.width, boundingWidth - sideInsets)
+                                let bannerFrame = CGRect(
+                                    x: textFrameWithoutInsets.minX,
+                                    y: textFrameWithoutInsets.maxY + scamBannerTopSpacing,
+                                    width: bannerWidth,
+                                    height: scamBannerSize.height
+                                )
+                                bannerView.frame = bannerFrame
+                                bannerLabel.attributedText = scamBannerAttributed
+                                bannerLabel.frame = CGRect(
+                                    x: scamBannerPadding.left,
+                                    y: scamBannerPadding.top,
+                                    width: bannerWidth - scamBannerPadding.left - scamBannerPadding.right,
+                                    height: scamBannerSize.height - scamBannerPadding.top - scamBannerPadding.bottom
+                                )
+                            } else {
+                                strongSelf.fullGramScamBannerView?.removeFromSuperview()
+                                strongSelf.fullGramScamBannerView = nil
+                                strongSelf.fullGramScamBannerLabel = nil
+                            }
+
+                            let scamBannerOffsetY = scamBannerSize.height > 0.0 ? (scamBannerTopSpacing + scamBannerSize.height) : 0.0
                             if let statusSizeAndApply {
                                 let statusNode = statusSizeAndApply.1(strongSelf.statusNode == nil ? .None : animation)
-                                let statusFrame = CGRect(origin: CGPoint(x: textFrameWithoutInsets.minX, y: textFrameWithoutInsets.maxY), size: statusSizeAndApply.0)
+                                let statusFrame = CGRect(origin: CGPoint(x: textFrameWithoutInsets.minX, y: textFrameWithoutInsets.maxY + scamBannerOffsetY), size: statusSizeAndApply.0)
                                 
                                 if strongSelf.statusNode !== statusNode {
                                     strongSelf.statusNode?.removeFromSupernode()

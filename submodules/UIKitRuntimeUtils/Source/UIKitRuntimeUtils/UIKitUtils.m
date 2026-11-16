@@ -8,11 +8,43 @@
 UIKIT_EXTERN float UIAnimationDragCoefficient();
 #endif
 
+static double fullGramSlowMotionFactorValue = 1.0;
+
+@interface UIView (FullGramSlowMotion)
+@end
+
+@implementation UIView (FullGramSlowMotion)
+
++ (void)_fg_animateWithDuration:(NSTimeInterval)duration delay:(NSTimeInterval)delay options:(UIViewAnimationOptions)options animations:(void (^)(void))animations completion:(void (^ _Nullable)(BOOL))completion {
+    [self _fg_animateWithDuration:duration * fullGramSlowMotionFactorValue delay:delay * fullGramSlowMotionFactorValue options:options animations:animations completion:completion];
+}
+
++ (void)_fg_animateWithDuration:(NSTimeInterval)duration delay:(NSTimeInterval)delay usingSpringWithDamping:(CGFloat)dampingRatio initialSpringVelocity:(CGFloat)velocity options:(UIViewAnimationOptions)options animations:(void (^)(void))animations completion:(void (^ _Nullable)(BOOL))completion {
+    [self _fg_animateWithDuration:duration * fullGramSlowMotionFactorValue delay:delay * fullGramSlowMotionFactorValue usingSpringWithDamping:dampingRatio initialSpringVelocity:velocity / fullGramSlowMotionFactorValue options:options animations:animations completion:completion];
+}
+
+@end
+
+void fullGramSetAnimationSlowMotionFactor(double factor) {
+    fullGramSlowMotionFactorValue = MAX(1.0, MIN(20.0, factor));
+    if (fullGramSlowMotionFactorValue > 1.0) {
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            [RuntimeUtils swizzleClassMethodOfClass:[UIView class] currentSelector:@selector(animateWithDuration:delay:options:animations:completion:) newSelector:@selector(_fg_animateWithDuration:delay:options:animations:completion:)];
+            [RuntimeUtils swizzleClassMethodOfClass:[UIView class] currentSelector:@selector(animateWithDuration:delay:usingSpringWithDamping:initialSpringVelocity:options:animations:completion:) newSelector:@selector(_fg_animateWithDuration:delay:usingSpringWithDamping:initialSpringVelocity:options:animations:completion:)];
+        });
+    }
+}
+
+double fullGramAnimationSlowMotionFactor(void) {
+    return fullGramSlowMotionFactorValue;
+}
+
 double animationDurationFactorImpl() {
 #if TARGET_IPHONE_SIMULATOR
-    return (double)UIAnimationDragCoefficient();
-#endif   
-    return 1.0f;
+    return (double)UIAnimationDragCoefficient() * fullGramSlowMotionFactorValue;
+#endif
+    return fullGramSlowMotionFactorValue;
 }
 
 @interface CASpringAnimation ()

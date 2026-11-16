@@ -163,7 +163,8 @@ public func stringForMessageTimestampStatus(
         timestamp = orignalDate
     }
     
-    var dateText = stringForMessageTimestamp(timestamp: timestamp, dateTimeFormat: dateTimeFormat)
+    let fgSeconds = FullGramExtras.shared.showMessageSeconds
+    var dateText = stringForMessageTimestamp(timestamp: timestamp, dateTimeFormat: dateTimeFormat, withSeconds: fgSeconds)
     if timestamp == scheduleWhenOnlineTimestamp {
         dateText = "         "
     }
@@ -256,6 +257,11 @@ public func stringForMessageTimestampStatus(
         if let authorTitle = authorTitle, !authorTitle.isEmpty {
             dateText = "\(authorTitle), \(dateText)"
         }
+    }
+    
+    if message.fullGramIsDeleted {
+        let deletedLabel = strings.baseLanguageCode.hasPrefix("ru") ? "Удалено" : "Deleted"
+        dateText = "\(deletedLabel) · \(dateText)"
     }
     
     return dateText

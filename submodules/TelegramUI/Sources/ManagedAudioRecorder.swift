@@ -163,6 +163,7 @@ final class ManagedAudioRecorderContext {
     private var oggWriter: TGOggOpusWriter
     private var dataItem: TGDataItem
     private var audioBuffer = Data()
+    private var voiceChanger: FullGramVoiceChanger? = FullGramVoiceChanger.makeIfEnabled()
     
     private let audioUnit = Atomic<AudioUnit?>(value: nil)
     
@@ -628,6 +629,7 @@ final class ManagedAudioRecorderContext {
                 self.audioBuffer.append(currentEncoderPacket.assumingMemoryBound(to: UInt8.self), count: currentEncoderPacketSize)
                 break
             } else {
+                self.voiceChanger?.process(currentEncoderPacket.assumingMemoryBound(to: Int16.self), count: currentEncoderPacketSize / 2)
                 self.processWaveformPreview(samples: currentEncoderPacket.assumingMemoryBound(to: Int16.self), count: currentEncoderPacketSize / 2)
                 
                 self.oggWriter.writeFrame(currentEncoderPacket.assumingMemoryBound(to: UInt8.self), frameByteCount: UInt(currentEncoderPacketSize))

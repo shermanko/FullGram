@@ -339,6 +339,10 @@ alternate_icon_folders = [
     "Premium",
     "PremiumBlack",
     "PremiumTurbo",
+    "FullGramDefault",
+    "FullGramRed",
+    "FullGramMascot",
+    "FullGramOrange",
 ]
 
 composer_icon_folders = ["Telegram"]
@@ -1786,6 +1790,12 @@ plist_fragment(
     <array>
         <string>AremacFS-Regular.otf</string>
         <string>AremacFS-Semibold.otf</string>
+        <string>dream-font.ttf</string>
+        <string>ink-italic.ttf</string>
+        <string>narrow-x.ttf</string>
+        <string>slice-cut.ttf</string>
+        <string>JetBrainsMono-Regular.ttf</string>
+        <string>Minecraft.ttf</string>
     </array>
     <key>UIApplicationSceneManifest</key>
     <dict>

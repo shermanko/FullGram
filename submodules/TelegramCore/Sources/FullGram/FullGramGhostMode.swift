@@ -1,0 +1,1644 @@
+import Foundation
+import Postbox
+import SwiftSignalKit
+internal import TelegramApi
+import MtProtoKit
+import Security
+import ImageIO
+import UniformTypeIdentifiers
+
+public struct FullGramInterfaceSettings: Codable, Equatable {
+    public var hideFastShare: Bool
+    public var showReactionPicker: Bool
+    public var showReadSummary: Bool
+    public var showEditedInfo: Bool
+    public var showAuthorSearch: Bool
+    public var showCopyMessageIds: Bool
+    public var hideStickerTime: Bool
+    public var unlimitedRecentStickers: Bool
+    public var disableJumpToNextChannel: Bool
+    public var hideKeyboardOnScroll: Bool
+    public var addCommaAfterMention: Bool
+    public var horizonLockVideoMessages: Bool
+
+    public init(
+        hideFastShare: Bool = false,
+        showReactionPicker: Bool = true,
+        showReadSummary: Bool = true,
+        showEditedInfo: Bool = true,
+        showAuthorSearch: Bool = true,
+        showCopyMessageIds: Bool = true,
+        hideStickerTime: Bool = false,
+        unlimitedRecentStickers: Bool = false,
+        disableJumpToNextChannel: Bool = false,
+        hideKeyboardOnScroll: Bool = false,
+        addCommaAfterMention: Bool = false,
+        horizonLockVideoMessages: Bool = false
+    ) {
+        self.hideFastShare = hideFastShare
+        self.showReactionPicker = showReactionPicker
+        self.showReadSummary = showReadSummary
+        self.showEditedInfo = showEditedInfo
+        self.showAuthorSearch = showAuthorSearch
+        self.showCopyMessageIds = showCopyMessageIds
+        self.hideStickerTime = hideStickerTime
+        self.unlimitedRecentStickers = unlimitedRecentStickers
+        self.disableJumpToNextChannel = disableJumpToNextChannel
+        self.hideKeyboardOnScroll = hideKeyboardOnScroll
+        self.addCommaAfterMention = addCommaAfterMention
+        self.horizonLockVideoMessages = horizonLockVideoMessages
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case hideFastShare
+        case showReactionPicker
+        case showReadSummary
+        case showEditedInfo
+        case showAuthorSearch
+        case showCopyMessageIds
+        case hideStickerTime
+        case unlimitedRecentStickers
+        case disableJumpToNextChannel
+        case hideKeyboardOnScroll
+        case addCommaAfterMention
+        case horizonLockVideoMessages
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.hideFastShare = try values.decodeIfPresent(Bool.self, forKey: .hideFastShare) ?? false
+        self.showReactionPicker = try values.decodeIfPresent(Bool.self, forKey: .showReactionPicker) ?? true
+        self.showReadSummary = try values.decodeIfPresent(Bool.self, forKey: .showReadSummary) ?? true
+        self.showEditedInfo = try values.decodeIfPresent(Bool.self, forKey: .showEditedInfo) ?? true
+        self.showAuthorSearch = try values.decodeIfPresent(Bool.self, forKey: .showAuthorSearch) ?? true
+        self.showCopyMessageIds = try values.decodeIfPresent(Bool.self, forKey: .showCopyMessageIds) ?? true
+        self.hideStickerTime = try values.decodeIfPresent(Bool.self, forKey: .hideStickerTime) ?? false
+        self.unlimitedRecentStickers = try values.decodeIfPresent(Bool.self, forKey: .unlimitedRecentStickers) ?? false
+        self.disableJumpToNextChannel = try values.decodeIfPresent(Bool.self, forKey: .disableJumpToNextChannel) ?? false
+        self.hideKeyboardOnScroll = try values.decodeIfPresent(Bool.self, forKey: .hideKeyboardOnScroll) ?? false
+        self.addCommaAfterMention = try values.decodeIfPresent(Bool.self, forKey: .addCommaAfterMention) ?? false
+        self.horizonLockVideoMessages = try values.decodeIfPresent(Bool.self, forKey: .horizonLockVideoMessages) ?? false
+    }
+}
+
+public struct FullGramReactionDisplaySettings: Codable, Equatable {
+    public var enabled: Bool
+    public var showCounts: Bool
+    public var maxVisibleCount: Int32
+
+    public init(enabled: Bool = true, showCounts: Bool = true, maxVisibleCount: Int32 = 8) {
+        self.enabled = enabled
+        self.showCounts = showCounts
+        self.maxVisibleCount = min(11, max(1, maxVisibleCount))
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case enabled
+        case showCounts
+        case maxVisibleCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.enabled = try values.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        self.showCounts = try values.decodeIfPresent(Bool.self, forKey: .showCounts) ?? true
+        self.maxVisibleCount = min(11, max(1, try values.decodeIfPresent(Int32.self, forKey: .maxVisibleCount) ?? 8))
+    }
+}
+
+public struct FullGramTranslationSettings: Codable, Equatable {
+    public enum Provider: String, Codable, CaseIterable {
+        case telegram
+        case libreTranslate
+        case deepLFree
+    }
+
+    public static let supportedLanguageCodes: [String] = [
+        "ru", "en", "uk", "de", "fr", "es", "it", "pt", "pl", "tr", "ar", "zh", "ja", "ko"
+    ]
+
+    public var provider: Provider
+    public var targetLanguage: String
+    public var libreTranslateURL: String
+
+    public init(
+        provider: Provider = .telegram,
+        targetLanguage: String = "ru",
+        libreTranslateURL: String = ""
+    ) {
+        self.provider = provider
+        self.targetLanguage = Self.normalizeLanguageCode(targetLanguage)
+        self.libreTranslateURL = Self.normalizeEndpoint(libreTranslateURL)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider
+        case targetLanguage
+        case libreTranslateURL
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.provider = (try? values.decode(Provider.self, forKey: .provider)) ?? .telegram
+        self.targetLanguage = Self.normalizeLanguageCode(try values.decodeIfPresent(String.self, forKey: .targetLanguage) ?? "ru")
+        self.libreTranslateURL = Self.normalizeEndpoint(try values.decodeIfPresent(String.self, forKey: .libreTranslateURL) ?? "")
+    }
+
+    public static func normalizeLanguageCode(_ code: String) -> String {
+        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let base = String(trimmed.split(separator: "-").first ?? Substring(trimmed))
+        if supportedLanguageCodes.contains(base) {
+            return base
+        }
+        return "ru"
+    }
+
+    public static func normalizeEndpoint(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let components = URLComponents(string: trimmed),
+              components.scheme?.lowercased() == "https",
+              let host = components.host, !host.isEmpty else {
+            return ""
+        }
+        return String(trimmed.prefix(512))
+    }
+}
+
+public enum FullGramTranslationError: Error {
+    case emptyText
+    case missingEndpoint
+    case missingApiKey
+    case invalidEndpoint
+    case networkFailure(String)
+    case serviceError(String)
+    case invalidResponse
+}
+
+private enum FullGramCoreKeychain {
+    static func read(service: String, account: String) -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else {
+            return nil
+        }
+        return result as? Data
+    }
+
+    static func write(_ data: Data, service: String, account: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        let attrs: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+        if SecItemUpdate(query as CFDictionary, attrs as CFDictionary) == errSecItemNotFound {
+            var newItem = query
+            newItem[kSecValueData as String] = data
+            newItem[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            SecItemAdd(newItem as CFDictionary, nil)
+        }
+    }
+
+    static func delete(service: String, account: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+}
+
+public enum FullGramTranslationKeys {
+    private static let service = "FullGram.TranslationKeys"
+
+    public static func apiKey(for provider: FullGramTranslationSettings.Provider, accountId: Int64) -> String {
+        guard let data = FullGramCoreKeychain.read(service: self.service, account: "\(accountId):\(provider.rawValue)"),
+              let value = String(data: data, encoding: .utf8) else {
+            return ""
+        }
+        return value
+    }
+
+    public static func setApiKey(_ value: String, for provider: FullGramTranslationSettings.Provider, accountId: Int64) {
+        let account = "\(accountId):\(provider.rawValue)"
+        let trimmed = String(value.trimmingCharacters(in: .whitespacesAndNewlines).prefix(512))
+        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else {
+            FullGramCoreKeychain.delete(service: self.service, account: account)
+            return
+        }
+        FullGramCoreKeychain.write(data, service: self.service, account: account)
+    }
+}
+
+public enum FullGramTranslationRequest {
+    private static let session: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 20
+        config.httpCookieAcceptPolicy = .never
+        config.httpShouldSetCookies = false
+        config.urlCache = nil
+        return URLSession(configuration: config)
+    }()
+
+    public static func translateExternal(
+        text: String,
+        targetLanguage: String,
+        settings: FullGramTranslationSettings,
+        accountId: Int64
+    ) -> Signal<String, FullGramTranslationError> {
+        let trimmed = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(4096))
+        guard !trimmed.isEmpty else {
+            return .fail(.emptyText)
+        }
+        let target = FullGramTranslationSettings.normalizeLanguageCode(targetLanguage)
+        switch settings.provider {
+        case .telegram:
+            return .fail(.invalidResponse)
+        case .libreTranslate:
+            return self.translateLibre(text: trimmed, targetLanguage: target, settings: settings, accountId: accountId)
+        case .deepLFree:
+            return self.translateDeepL(text: trimmed, targetLanguage: target, accountId: accountId)
+        }
+    }
+
+    private static func translateLibre(
+        text: String,
+        targetLanguage: String,
+        settings: FullGramTranslationSettings,
+        accountId: Int64
+    ) -> Signal<String, FullGramTranslationError> {
+        let rawEndpoint = settings.libreTranslateURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawEndpoint.isEmpty else {
+            return .fail(.missingEndpoint)
+        }
+        let normalizedPath: String
+        if rawEndpoint.lowercased().hasSuffix("/translate") {
+            normalizedPath = rawEndpoint
+        } else if rawEndpoint.hasSuffix("/") {
+            normalizedPath = rawEndpoint + "translate"
+        } else {
+            normalizedPath = rawEndpoint + "/translate"
+        }
+        guard let url = URL(string: normalizedPath), url.scheme?.lowercased() == "https", url.host != nil else {
+            return .fail(.invalidEndpoint)
+        }
+        var payload: [String: String] = [
+            "q": text,
+            "source": "auto",
+            "target": targetLanguage,
+            "format": "text"
+        ]
+        let key = FullGramTranslationKeys.apiKey(for: .libreTranslate, accountId: accountId)
+        if !key.isEmpty {
+            payload["api_key"] = key
+        }
+        guard let body = try? JSONSerialization.data(withJSONObject: payload, options: []) else {
+            return .fail(.invalidResponse)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = body
+        return self.perform(request: request) { data in
+            guard let object = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
+                return .failure(.invalidResponse)
+            }
+            if let translated = object["translatedText"] as? String, !translated.isEmpty {
+                return .success(translated)
+            }
+            if let errorMessage = object["error"] as? String, !errorMessage.isEmpty {
+                return .failure(.serviceError(String(errorMessage.prefix(200))))
+            }
+            return .failure(.invalidResponse)
+        }
+    }
+
+    private static func translateDeepL(
+        text: String,
+        targetLanguage: String,
+        accountId: Int64
+    ) -> Signal<String, FullGramTranslationError> {
+        let apiKey = FullGramTranslationKeys.apiKey(for: .deepLFree, accountId: accountId)
+        guard !apiKey.isEmpty else {
+            return .fail(.missingApiKey)
+        }
+        let host = "api-free.deepl.com"
+        guard let url = URL(string: "https://\(host)/v2/translate") else {
+            return .fail(.invalidEndpoint)
+        }
+        let deepLCode: String
+        switch targetLanguage {
+        case "en":
+            deepLCode = "EN"
+        case "pt":
+            deepLCode = "PT-PT"
+        default:
+            deepLCode = targetLanguage.uppercased()
+        }
+        let payload: [String: Any] = [
+            "text": [text],
+            "target_lang": deepLCode
+        ]
+        guard let body = try? JSONSerialization.data(withJSONObject: payload, options: []) else {
+            return .fail(.invalidResponse)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("DeepL-Auth-Key \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = body
+        return self.perform(request: request) { data in
+            guard let object = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
+                return .failure(.invalidResponse)
+            }
+            if let translations = object["translations"] as? [[String: Any]],
+               let first = translations.first,
+               let result = first["text"] as? String,
+               !result.isEmpty {
+                return .success(result)
+            }
+            if let message = object["message"] as? String, !message.isEmpty {
+                return .failure(.serviceError(String(message.prefix(200))))
+            }
+            return .failure(.invalidResponse)
+        }
+    }
+
+    private static func perform(
+        request: URLRequest,
+        parse: @escaping (Data) -> Result<String, FullGramTranslationError>
+    ) -> Signal<String, FullGramTranslationError> {
+        return Signal { subscriber in
+            let task = self.session.dataTask(with: request) { data, response, error in
+                if let error = error {
+                    subscriber.putError(.networkFailure(String(error.localizedDescription.prefix(160))))
+                    return
+                }
+                guard let httpResponse = response as? HTTPURLResponse, let data = data, data.count <= 262_144 else {
+                    subscriber.putError(.invalidResponse)
+                    return
+                }
+                switch parse(data) {
+                case let .success(text):
+                    if (200 ..< 300).contains(httpResponse.statusCode) {
+                        subscriber.putNext(text)
+                        subscriber.putCompletion()
+                    } else {
+                        subscriber.putError(.serviceError("HTTP \(httpResponse.statusCode)"))
+                    }
+                case let .failure(parseError):
+                    if !(200 ..< 300).contains(httpResponse.statusCode) {
+                        if case .serviceError = parseError {
+                            subscriber.putError(parseError)
+                        } else {
+                            subscriber.putError(.serviceError("HTTP \(httpResponse.statusCode)"))
+                        }
+                    } else {
+                        subscriber.putError(parseError)
+                    }
+                }
+            }
+            task.resume()
+            return ActionDisposable {
+                task.cancel()
+            }
+        }
+    }
+}
+
+public extension TelegramEngine.Messages {
+    func fullGramTranslate(text: String, toLang: String? = nil) -> Signal<(String, [MessageTextEntity]), FullGramTranslationError> {
+        let settings = self.account.network.fullGramGhostMode.current.translation
+        let target = FullGramTranslationSettings.normalizeLanguageCode(toLang ?? settings.targetLanguage)
+        let trimmed = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(4096))
+        guard !trimmed.isEmpty else {
+            return .fail(.emptyText)
+        }
+        switch settings.provider {
+        case .telegram:
+            return self.translate(text: trimmed, toLang: target)
+            |> mapError { error -> FullGramTranslationError in
+                switch error {
+                case .limitExceeded:
+                    return .serviceError("Превышен лимит запросов Telegram")
+                case .invalidLanguage:
+                    return .serviceError("Неподдерживаемый язык")
+                case .translationFailed:
+                    return .serviceError("Не удалось перевести через Telegram")
+                case .generic:
+                    return .networkFailure("Ошибка соединения с Telegram")
+                }
+            }
+            |> mapToSignal { result -> Signal<(String, [MessageTextEntity]), FullGramTranslationError> in
+                guard let result = result else {
+                    return .fail(.invalidResponse)
+                }
+                return .single(result)
+            }
+        case .libreTranslate, .deepLFree:
+            let accountId = self.account.peerId.toInt64()
+            return FullGramTranslationRequest.translateExternal(
+                text: trimmed,
+                targetLanguage: target,
+                settings: settings,
+                accountId: accountId
+            )
+            |> map { ($0, []) }
+        }
+    }
+}
+
+public enum FullGramDisplayOptions {
+    private static let lock = NSLock()
+    private static var activePeerId: Int64?
+    private static var valuesByPeer: [Int64: (
+        hideStickerTime: Bool,
+        unlimitedRecentStickers: Bool,
+        hideFastShare: Bool,
+        reactionDisplay: FullGramReactionDisplaySettings
+    )] = [:]
+
+    public static func update(
+        peerId: Int64,
+        hideStickerTime: Bool,
+        unlimitedRecentStickers: Bool,
+        hideFastShare: Bool,
+        reactionDisplay: FullGramReactionDisplaySettings
+    ) {
+        self.lock.lock()
+        self.activePeerId = peerId
+        self.valuesByPeer[peerId] = (hideStickerTime, unlimitedRecentStickers, hideFastShare, reactionDisplay)
+        self.lock.unlock()
+    }
+
+    public static func activate(peerId: Int64) {
+        self.lock.lock()
+        self.activePeerId = peerId
+        self.lock.unlock()
+    }
+
+    private static var currentValues: (
+        hideStickerTime: Bool,
+        unlimitedRecentStickers: Bool,
+        hideFastShare: Bool,
+        reactionDisplay: FullGramReactionDisplaySettings
+    ) {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        if let peerId = self.activePeerId, let values = self.valuesByPeer[peerId] {
+            return values
+        }
+        return self.valuesByPeer.values.first ?? (false, false, false, FullGramReactionDisplaySettings())
+    }
+
+    public static var hideStickerTime: Bool {
+        return self.currentValues.hideStickerTime
+    }
+
+    public static var unlimitedRecentStickers: Bool {
+        return self.currentValues.unlimitedRecentStickers
+    }
+
+    public static var hideFastShare: Bool {
+        return self.currentValues.hideFastShare
+    }
+
+    public static var reactionDisplay: FullGramReactionDisplaySettings {
+        return self.currentValues.reactionDisplay
+    }
+
+    public static var recentStickersLimit: Int {
+        return self.unlimitedRecentStickers ? 200 : 20
+    }
+
+    public static var disableNumberRounding: Bool {
+        return FullGramExtras.shared.disableNumberRounding
+    }
+
+    public static func fullCountString(_ count: Int64) -> String {
+        let negative = count < 0
+        let digits = Array(String(count.magnitude))
+        var result = ""
+        for (index, digit) in digits.enumerated() {
+            if index > 0 && (digits.count - index) % 3 == 0 {
+                result.append(" ")
+            }
+            result.append(digit)
+        }
+        return negative ? "-" + result : result
+    }
+}
+
+public enum FullGramLocalPremium {
+    private struct State {
+        var local = false
+        var server = false
+    }
+
+    private static let lock = NSLock()
+    private static var states: [PeerId: State] = [:]
+
+    public static let emojiUrlPrefix = "tg://emoji?id="
+
+    public static func contains(_ peerId: PeerId) -> Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        if let state = self.states[peerId] {
+            return state.local
+        }
+        return FullGramExtras.shared.localPremium && self.states.keys.contains(peerId)
+    }
+
+    public static func update(peerId: PeerId, local: Bool? = nil, server: Bool? = nil) {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        var state = self.states[peerId] ?? State()
+        if let local { state.local = local }
+        if let server { state.server = server }
+        self.states[peerId] = state
+    }
+
+    public static func rewritesCustomEmoji(accountPeerId: PeerId) -> Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        guard let state = self.states[accountPeerId] else { return false }
+        return state.local && !state.server
+    }
+
+    public static func emojiFileId(url: String) -> Int64? {
+        guard url.hasPrefix(self.emojiUrlPrefix) else { return nil }
+        let digits = url.dropFirst(self.emojiUrlPrefix.count)
+        guard !digits.isEmpty, digits.count <= 19, digits.allSatisfy({ $0.isASCII && $0.isNumber }), let id = Int64(digits), id > 0 else { return nil }
+        return id
+    }
+
+    public static func displayEntities(text: String, entities: [MessageTextEntity]) -> [MessageTextEntity] {
+        guard entities.contains(where: { if case let .TextUrl(url) = $0.type { return url.hasPrefix(self.emojiUrlPrefix) } else { return false } }) else {
+            return entities
+        }
+        let nsText = text as NSString
+        return entities.map { entity in
+            guard case let .TextUrl(url) = entity.type, let fileId = self.emojiFileId(url: url) else { return entity }
+            let range = NSRange(location: entity.range.lowerBound, length: entity.range.upperBound - entity.range.lowerBound)
+            guard range.location >= 0, range.length > 0, range.upperBound <= nsText.length, self.isSingleEmoji(nsText.substring(with: range)) else { return entity }
+            return MessageTextEntity(range: entity.range, type: .CustomEmoji(stickerPack: nil, fileId: fileId))
+        }
+    }
+
+    static func outgoingEntities(_ entities: [MessageTextEntity], accountPeerId: PeerId, peerId: PeerId) -> [MessageTextEntity] {
+        guard peerId != accountPeerId, entities.contains(where: { if case .CustomEmoji = $0.type { return true } else { return false } }), self.rewritesCustomEmoji(accountPeerId: accountPeerId) else {
+            return entities
+        }
+        return entities.map { entity in
+            guard case let .CustomEmoji(_, fileId) = entity.type else { return entity }
+            return MessageTextEntity(range: entity.range, type: .TextUrl(url: self.emojiUrlPrefix + "\(fileId)"))
+        }
+    }
+
+    static func outgoingAttribute(_ attribute: TextEntitiesMessageAttribute, accountPeerId: PeerId, peerId: PeerId) -> TextEntitiesMessageAttribute {
+        let entities = self.outgoingEntities(attribute.entities, accountPeerId: accountPeerId, peerId: peerId)
+        return entities == attribute.entities ? attribute : TextEntitiesMessageAttribute(entities: entities)
+    }
+
+    private static func isSingleEmoji(_ string: String) -> Bool {
+        guard string.count == 1, let first = string.unicodeScalars.first else { return false }
+        return first.properties.isEmojiPresentation || (first.properties.isEmoji && string.unicodeScalars.count > 1)
+    }
+}
+
+public func fullGramManageLocalPremium(postbox: Postbox, network: Network, peerId: PeerId) -> Signal<Void, NoError> {
+    FullGramLocalPremium.update(peerId: peerId, local: FullGramExtras.shared.localPremium)
+    let localSignal = Signal<Bool, NoError> { subscriber in
+        subscriber.putNext(FullGramExtras.shared.localPremium)
+        let observer = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: nil) { _ in
+            subscriber.putNext(FullGramExtras.shared.localPremium)
+        }
+        return ActionDisposable {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+    |> distinctUntilChanged
+    |> map { value -> Void in
+        FullGramLocalPremium.update(peerId: peerId, local: value)
+    }
+    let server = postbox.peerView(id: peerId)
+    |> map { view -> Bool in view.peers[peerId]?.isServerPremium ?? false }
+    |> distinctUntilChanged
+    |> map { value -> Void in FullGramLocalPremium.update(peerId: peerId, server: value) }
+    return combineLatest(localSignal, server) |> map { _ in }
+}
+
+public enum FullGramActivityFilter {
+    public enum Kind: String, CaseIterable {
+        case typing
+        case recordingVoice
+        case choosingSticker
+        case uploadingFile
+        case uploadingPhoto
+        case uploadingVideo
+        case playingGame
+        case watchingEmoji
+        case recordingVideoMessage
+        case uploadingVideoMessage
+
+        public var titleRu: String {
+            switch self {
+            case .typing: return "печатает"
+            case .recordingVoice: return "записывает голосовое"
+            case .choosingSticker: return "выбирает стикер"
+            case .uploadingFile: return "отправляет файл"
+            case .uploadingPhoto: return "отправляет фото"
+            case .uploadingVideo: return "отправляет видео"
+            case .playingGame: return "играет"
+            case .watchingEmoji: return "смотрит анимацию эмодзи"
+            case .recordingVideoMessage: return "записывает кружок"
+            case .uploadingVideoMessage: return "отправляет кружок"
+            }
+        }
+    }
+
+    private static let key = "fullgram.activity.hidden"
+    private static let lock = NSLock()
+    private static var cache: Set<String>?
+
+    public static var hidden: Set<Kind> {
+        lock.lock()
+        defer { lock.unlock() }
+        if cache == nil {
+            cache = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+        }
+        return Set((cache ?? []).compactMap(Kind.init(rawValue:)))
+    }
+
+    public static func isHidden(_ kind: Kind) -> Bool {
+        return self.hidden.contains(kind)
+    }
+
+    public static func setHidden(_ kind: Kind, _ value: Bool) {
+        lock.lock()
+        var set = cache ?? Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+        if value {
+            set.insert(kind.rawValue)
+        } else {
+            set.remove(kind.rawValue)
+        }
+        cache = set
+        lock.unlock()
+        UserDefaults.standard.set(Array(set), forKey: key)
+        NotificationCenter.default.post(name: FullGramExtras.didChangeNotification, object: key)
+    }
+
+    static func kind(_ activity: PeerInputActivity) -> Kind? {
+        switch activity {
+        case .typingText: return .typing
+        case .recordingVoice: return .recordingVoice
+        case .choosingSticker: return .choosingSticker
+        case .uploadingFile: return .uploadingFile
+        case .uploadingPhoto: return .uploadingPhoto
+        case .uploadingVideo: return .uploadingVideo
+        case .playingGame: return .playingGame
+        case .seeingEmojiInteraction, .interactingWithEmoji: return .watchingEmoji
+        case .recordingInstantVideo: return .recordingVideoMessage
+        case .uploadingInstantVideo: return .uploadingVideoMessage
+        case .speakingInGroupCall: return nil
+        }
+    }
+
+    public static func isHidden(_ activity: PeerInputActivity) -> Bool {
+        guard let mapped = kind(activity) else { return false }
+        lock.lock()
+        defer { lock.unlock() }
+        if cache == nil {
+            cache = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+        }
+        guard let cache, !cache.isEmpty else { return false }
+        return cache.contains(mapped.rawValue)
+    }
+}
+
+public enum FullGramChatPrivacy {
+    public static let didChangeNotification = Notification.Name("FullGram.ChatPrivacyChanged")
+    private static let legacyEnabledKey = "fullgram.privacy.faceIdEnabled"
+    private static let legacyLockedKey = "fullgram.privacy.lockedChats"
+    private static let keychainService = "FullGram.ChatPrivacy"
+    private static let keychainEnabledAccount = "faceIdEnabled"
+    private static let keychainLockedAccount = "lockedChats"
+    private static let lock = NSLock()
+    private static var lockedCache: Set<Int64>?
+    private static var enabledCache: Bool?
+    private static var unlocked: Set<Int64> = []
+    private static var migrated = false
+
+    private static func keychainRead(account: String) -> Data? {
+        return FullGramCoreKeychain.read(service: keychainService, account: account)
+    }
+
+    private static func keychainWrite(_ data: Data, account: String) {
+        FullGramCoreKeychain.write(data, service: keychainService, account: account)
+    }
+
+    private static func migrateFromLegacyDefaultsIfNeededLocked() {
+        guard !migrated else { return }
+        migrated = true
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: legacyEnabledKey) != nil {
+            let val = defaults.bool(forKey: legacyEnabledKey)
+            keychainWrite(Data([val ? 1 : 0]), account: keychainEnabledAccount)
+            enabledCache = val
+            defaults.removeObject(forKey: legacyEnabledKey)
+        }
+        if let legacy = defaults.array(forKey: legacyLockedKey) as? [NSNumber] {
+            let ids = Set(legacy.map { $0.int64Value })
+            if let data = try? JSONEncoder().encode(Array(ids).sorted()) {
+                keychainWrite(data, account: keychainLockedAccount)
+            }
+            lockedCache = ids
+            defaults.removeObject(forKey: legacyLockedKey)
+        }
+    }
+
+    private static func loadLocked() -> Set<Int64> {
+        migrateFromLegacyDefaultsIfNeededLocked()
+        if let data = keychainRead(account: keychainLockedAccount),
+           let ids = try? JSONDecoder().decode([Int64].self, from: data) {
+            return Set(ids)
+        }
+        return []
+    }
+
+    private static func saveLocked(_ value: Set<Int64>) {
+        if let data = try? JSONEncoder().encode(value.sorted()) {
+            keychainWrite(data, account: keychainLockedAccount)
+        }
+    }
+
+    public static var isEnabled: Bool {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            migrateFromLegacyDefaultsIfNeededLocked()
+            if let cached = enabledCache { return cached }
+            if let data = keychainRead(account: keychainEnabledAccount), let first = data.first {
+                let val = first != 0
+                enabledCache = val
+                return val
+            }
+            enabledCache = true
+            return true
+        }
+        set {
+            lock.lock()
+            enabledCache = newValue
+            keychainWrite(Data([newValue ? 1 : 0]), account: keychainEnabledAccount)
+            lock.unlock()
+            NotificationCenter.default.post(name: didChangeNotification, object: nil)
+            NotificationCenter.default.post(name: FullGramExtras.didChangeNotification, object: legacyEnabledKey)
+        }
+    }
+
+    public static var locked: Set<Int64> {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = lockedCache { return cached }
+        let loaded = loadLocked()
+        lockedCache = loaded
+        return loaded
+    }
+
+    public static func isLocked(_ peerId: Int64) -> Bool {
+        guard isEnabled else { return false }
+        return locked.contains(peerId)
+    }
+
+    public static func setLocked(_ peerId: Int64, _ value: Bool) {
+        lock.lock()
+        var set = lockedCache ?? loadLocked()
+        if value {
+            set.insert(peerId)
+        } else {
+            set.remove(peerId)
+            unlocked.remove(peerId)
+        }
+        lockedCache = set
+        saveLocked(set)
+        lock.unlock()
+        NotificationCenter.default.post(name: didChangeNotification, object: nil)
+        NotificationCenter.default.post(name: FullGramExtras.didChangeNotification, object: legacyLockedKey)
+    }
+
+    public static func isUnlocked(_ peerId: Int64) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return unlocked.contains(peerId)
+    }
+
+    public static func markUnlocked(_ peerId: Int64) {
+        lock.lock()
+        unlocked.insert(peerId)
+        lock.unlock()
+    }
+
+    public static func relock() {
+        lock.lock()
+        unlocked.removeAll()
+        lock.unlock()
+    }
+}
+
+public enum FullGramPaidAds {
+    private static let results: NSCache<NSString, NSNumber> = {
+        let cache = NSCache<NSString, NSNumber>()
+        cache.countLimit = 4096
+        return cache
+    }()
+
+    public static func isAd(_ text: String, messageKey: String, version: UInt32) -> Bool {
+        let key = "\(messageKey):\(version):\(text.hashValue)" as NSString
+        if let value = results.object(forKey: key) { return value.boolValue }
+        let value = isAd(text)
+        results.setObject(NSNumber(value: value), forKey: key)
+        return value
+    }
+
+    private static let pattern = try? NSRegularExpression(
+        pattern: "(\\berid\\b|#реклама|\\bреклама\\b|на правах рекламы|\\bинн\\s*[:№]?\\s*\\d{10,12}|\\bооо\\s+[«\"]|\\bогрн|рекламодатель|#ad\\b|#sponsored|\\bsponsored\\b)",
+        options: [.caseInsensitive]
+    )
+
+    public static func isAd(_ text: String) -> Bool {
+        guard !text.isEmpty, let pattern else { return false }
+        return pattern.firstMatch(in: text, options: [], range: NSRange(location: 0, length: (text as NSString).length)) != nil
+    }
+}
+
+public func fullGramManageDisplayOptions(network: Network, peerId: PeerId) -> Signal<Void, NoError> {
+    let rawPeerId = peerId.toInt64()
+    return network.fullGramGhostMode.signal
+    |> map { settings in
+        FullGramDisplayOptions.update(
+            peerId: rawPeerId,
+            hideStickerTime: settings.interface.hideStickerTime,
+            unlimitedRecentStickers: settings.interface.unlimitedRecentStickers,
+            hideFastShare: settings.interface.hideFastShare,
+            reactionDisplay: settings.reactionDisplay
+        )
+    }
+}
+
+public struct FullGramGhostModeSettings: Codable, Equatable {
+    public enum SilentSendMode: String, Codable {
+        case never
+        case inGhostMode
+        case always
+    }
+
+    public var hideReadReceipts: Bool
+    public var hideOnline: Bool
+    public var hideTyping: Bool
+    public var hideUploadProgress: Bool
+    public var silentSendMode: SilentSendMode
+    public var markReadAfterSend: Bool
+    /// Chats where Ghost Mode never applies: read receipts, typing, and upload progress are sent normally.
+    public var exceptionPeerIds: [Int64]
+    public var interface: FullGramInterfaceSettings
+    public var reactionDisplay: FullGramReactionDisplaySettings
+    public var translation: FullGramTranslationSettings
+
+    private enum CodingKeys: String, CodingKey {
+        case hideReadReceipts
+        case hideOnline
+        case hideTyping
+        case hideUploadProgress
+        case silentSendMode
+        case markReadAfterSend
+        case exceptionPeerIds
+        case interface
+        case reactionDisplay
+        case translation
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.hideReadReceipts = try values.decodeIfPresent(Bool.self, forKey: .hideReadReceipts) ?? false
+        self.hideOnline = try values.decodeIfPresent(Bool.self, forKey: .hideOnline) ?? false
+        self.hideTyping = try values.decodeIfPresent(Bool.self, forKey: .hideTyping) ?? false
+        self.hideUploadProgress = try values.decodeIfPresent(Bool.self, forKey: .hideUploadProgress) ?? false
+        self.silentSendMode = (try? values.decode(SilentSendMode.self, forKey: .silentSendMode)) ?? .never
+        self.markReadAfterSend = try values.decodeIfPresent(Bool.self, forKey: .markReadAfterSend) ?? false
+        self.exceptionPeerIds = Array(Set((try? values.decodeIfPresent([Int64].self, forKey: .exceptionPeerIds)) ?? [])).sorted().prefix(2000).map { $0 }
+        self.interface = (try? values.decodeIfPresent(FullGramInterfaceSettings.self, forKey: .interface)) ?? FullGramInterfaceSettings()
+        self.reactionDisplay = (try? values.decodeIfPresent(FullGramReactionDisplaySettings.self, forKey: .reactionDisplay)) ?? FullGramReactionDisplaySettings()
+        self.translation = (try? values.decodeIfPresent(FullGramTranslationSettings.self, forKey: .translation)) ?? FullGramTranslationSettings()
+    }
+
+    public init(
+        hideReadReceipts: Bool = false,
+        hideOnline: Bool = false,
+        hideTyping: Bool = false,
+        hideUploadProgress: Bool = false,
+        silentSendMode: SilentSendMode = .never,
+        markReadAfterSend: Bool = false,
+        exceptionPeerIds: [Int64] = [],
+        interface: FullGramInterfaceSettings = FullGramInterfaceSettings(),
+        reactionDisplay: FullGramReactionDisplaySettings = FullGramReactionDisplaySettings(),
+        translation: FullGramTranslationSettings = FullGramTranslationSettings()
+    ) {
+        self.hideReadReceipts = hideReadReceipts
+        self.hideOnline = hideOnline
+        self.hideTyping = hideTyping
+        self.hideUploadProgress = hideUploadProgress
+        self.silentSendMode = silentSendMode
+        self.markReadAfterSend = markReadAfterSend
+        self.exceptionPeerIds = exceptionPeerIds
+        self.interface = interface
+        self.reactionDisplay = reactionDisplay
+        self.translation = translation
+    }
+
+    public var allEnabled: Bool {
+        return self.hideReadReceipts && self.hideOnline && self.hideTyping && self.hideUploadProgress
+    }
+
+    public var isActive: Bool {
+        return self.hideReadReceipts || self.hideOnline || self.hideTyping || self.hideUploadProgress
+    }
+
+    public var shouldSendSilently: Bool {
+        switch self.silentSendMode {
+        case .never:
+            return false
+        case .inGhostMode:
+            return self.isActive
+        case .always:
+            return true
+        }
+    }
+
+    public mutating func setAllEnabled(_ enabled: Bool) {
+        self.hideReadReceipts = enabled
+        self.hideOnline = enabled
+        self.hideTyping = enabled
+        self.hideUploadProgress = enabled
+    }
+
+    public func isExcepted(peerId: Int64) -> Bool {
+        return self.exceptionPeerIds.contains(peerId)
+    }
+
+    public mutating func setException(_ excepted: Bool, peerId: Int64) {
+        var set = Set(self.exceptionPeerIds)
+        if excepted {
+            set.insert(peerId)
+        } else {
+            set.remove(peerId)
+        }
+        self.exceptionPeerIds = Array(set).sorted().suffix(2000).map { $0 }
+    }
+
+    public func effective(forPeer peerId: Int64) -> FullGramGhostModeSettings {
+        var copy = self
+        if self.isExcepted(peerId: peerId) {
+            copy.hideReadReceipts = false
+            copy.hideTyping = false
+            copy.hideUploadProgress = false
+        }
+        return copy
+    }
+}
+
+public final class FullGramGhostModeStore {
+    private let lock = NSRecursiveLock()
+    private let fileURL: URL
+    private var value: FullGramGhostModeSettings
+    private var observers: [UUID: (FullGramGhostModeSettings) -> Void] = [:]
+    private let observationQueue = DispatchQueue(label: "FullGram.GhostModeNotifications")
+    public let hadLoadError: Bool
+
+    public init(accountPath: String) {
+        self.fileURL = URL(fileURLWithPath: accountPath).appendingPathComponent("fullgram-ghost-mode.json")
+        if FileManager.default.fileExists(atPath: self.fileURL.path) {
+            do {
+                self.value = try JSONDecoder().decode(FullGramGhostModeSettings.self, from: Data(contentsOf: self.fileURL))
+                self.hadLoadError = false
+            } catch {
+                self.value = FullGramGhostModeSettings()
+                self.hadLoadError = true
+            }
+        } else {
+            self.value = FullGramGhostModeSettings()
+            self.hadLoadError = false
+        }
+    }
+
+    public var current: FullGramGhostModeSettings {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.value
+    }
+
+    public func update(_ transform: (inout FullGramGhostModeSettings) throws -> Void) throws {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        var updated = self.value
+        try transform(&updated)
+        guard updated != self.value else { return }
+        let data = try JSONEncoder().encode(updated)
+        #if os(iOS)
+        try data.write(to: self.fileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        #else
+        try data.write(to: self.fileURL, options: .atomic)
+        #endif
+        self.value = updated
+        let observers = Array(self.observers.values)
+        let committed = updated
+        self.observationQueue.async {
+            for observer in observers {
+                observer(committed)
+            }
+        }
+    }
+
+    func observe(_ observer: @escaping (FullGramGhostModeSettings) -> Void) -> UUID {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        let id = UUID()
+        self.observers[id] = observer
+        let initial = self.value
+        self.observationQueue.async {
+            observer(initial)
+        }
+        return id
+    }
+
+    func removeObserver(_ id: UUID) {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        self.observers.removeValue(forKey: id)
+    }
+
+    public var signal: Signal<FullGramGhostModeSettings, NoError> {
+        return Signal { subscriber in
+            let id = self.observe { settings in
+                subscriber.putNext(settings)
+            }
+            return ActionDisposable {
+                self.removeObserver(id)
+            }
+        }
+        |> distinctUntilChanged
+    }
+}
+
+extension Network {
+    func fullGramReassertOfflineAfterSending() {
+        guard self.fullGramGhostMode.current.hideOnline else {
+            return
+        }
+        let _ = (deferred { () -> Signal<Api.Bool, MTRpcError> in
+            guard self.fullGramGhostMode.current.hideOnline else {
+                return .complete()
+            }
+            return self.request(Api.functions.account.updateStatus(offline: .boolTrue))
+        }
+        |> `catch` { _ -> Signal<Api.Bool, NoError> in
+            return .complete()
+        }).startStandalone()
+    }
+
+    func requestFullGramCloudRead<T>(_ data: (FunctionDescription, Buffer, DeserializeFunctionResponse<T>), peerId: Int64? = nil) -> Signal<T, MTRpcError> {
+        return deferred {
+            let settings = self.fullGramGhostMode.current
+            if (peerId.map { settings.effective(forPeer: $0) } ?? settings).hideReadReceipts {
+                return .complete()
+            }
+            return self.request(data)
+        }
+    }
+}
+
+func fullGramSuppressInputActivity(_ activity: PeerInputActivity, settings: FullGramGhostModeSettings) -> Bool {
+    if FullGramActivityFilter.isHidden(activity) {
+        return true
+    }
+    switch activity {
+    case .uploadingFile, .uploadingPhoto, .uploadingVideo, .uploadingInstantVideo:
+        return settings.hideUploadProgress
+    case .typingText, .recordingVoice, .recordingInstantVideo, .choosingSticker:
+        return settings.hideTyping
+    default:
+        return false
+    }
+}
+
+func fullGramMarkReadAfterSending(postbox: Postbox, network: Network, stateManager: AccountStateManager, messages: [Message]) {
+    guard network.fullGramGhostMode.current.markReadAfterSend,
+          let first = messages.first,
+          first.id.peerId.namespace != Namespaces.Peer.SecretChat,
+          messages.allSatisfy({ $0.id.peerId == first.id.peerId && $0.threadId == nil && !$0.attributes.contains(where: { $0 is OutgoingScheduleInfoMessageAttribute }) }) else {
+        return
+    }
+    let peerId = first.id.peerId
+    let _ = (postbox.transaction { transaction -> (Peer, MessageIndex)? in
+        guard let peer = transaction.getPeer(peerId),
+              !peer.isForumOrMonoForum,
+              peerKeepsReadState(peer),
+              let index = transaction.getTopPeerMessageIndex(peerId: peerId, namespace: Namespaces.Message.Cloud) else {
+            return nil
+        }
+        return (peer, index)
+    }
+    |> mapToSignal { value -> Signal<Void, NoError> in
+        guard let (peer, index) = value,
+              network.fullGramGhostMode.current.markReadAfterSend,
+              let input = apiInputPeer(peer) else {
+            return .complete()
+        }
+        let receipt: Signal<Bool, NoError>
+        if let channel = apiInputChannel(peer) {
+            receipt = network.request(Api.functions.channels.readHistory(channel: channel, maxId: index.id.id), automaticFloodWait: false)
+            |> map { _ in true }
+            |> `catch` { _ in .single(false) }
+        } else {
+            receipt = network.request(Api.functions.messages.readHistory(peer: input, maxId: index.id.id), automaticFloodWait: false)
+            |> map { result -> Bool in
+                switch result {
+                case let .affectedMessages(data):
+                    stateManager.addUpdateGroups([.updatePts(pts: data.pts, ptsCount: data.ptsCount)])
+                }
+                return true
+            }
+            |> `catch` { _ in .single(false) }
+        }
+        return receipt
+        |> mapToSignal { accepted -> Signal<Void, NoError> in
+            guard accepted else {
+                return .complete()
+            }
+            network.fullGramReassertOfflineAfterSending()
+            return _internal_applyMaxReadIndexInteractively(postbox: postbox, stateManager: stateManager, index: index)
+        }
+    }).startStandalone()
+}
+
+public final class FullGramExtras {
+    public static let shared = FullGramExtras()
+
+    private let defaults = UserDefaults.standard
+    private let prefix = "fullgram.extras."
+
+    private func bool(_ key: String, default fallback: Bool = false) -> Bool {
+        let full = prefix + key
+        if defaults.object(forKey: full) == nil { return fallback }
+        return defaults.bool(forKey: full)
+    }
+
+    private func setBool(_ key: String, _ value: Bool) {
+        defaults.set(value, forKey: prefix + key)
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: key)
+    }
+
+    private func int(_ key: String, default fallback: Int = 0) -> Int {
+        let full = prefix + key
+        if defaults.object(forKey: full) == nil { return fallback }
+        return defaults.integer(forKey: full)
+    }
+
+    private func setInt(_ key: String, _ value: Int) {
+        defaults.set(value, forKey: prefix + key)
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: key)
+    }
+
+    private func string(_ key: String, default fallback: String = "") -> String {
+        return defaults.string(forKey: prefix + key) ?? fallback
+    }
+
+    private func setString(_ key: String, _ value: String) {
+        defaults.set(value, forKey: prefix + key)
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: key)
+    }
+
+    public static let didChangeNotification = Notification.Name("FullGramExtrasDidChange")
+
+    // MARK: - Обход ограничений (Одноразовые фото/видео/кружки)
+
+    public var saveViewOnce: Bool {
+        get { bool("saveViewOnce", default: false) }
+        set { setBool("saveViewOnce", newValue) }
+    }
+
+    public var viewOnceMenuSave: Bool {
+        get { bool("viewOnceMenuSave", default: true) }
+        set { setBool("viewOnceMenuSave", newValue) }
+    }
+
+    public var viewOnceKeepInChat: Bool {
+        get { bool("viewOnceKeepInChat", default: false) }
+        set { setBool("viewOnceKeepInChat", newValue) }
+    }
+
+    public var viewOnceReview: Bool {
+        get { bool("viewOnceReview", default: false) }
+        set { setBool("viewOnceReview", newValue) }
+    }
+
+    // MARK: - Сообщение (бывшее «Отправка»)
+
+    public var antiCaps: Bool {
+        get { bool("antiCaps", default: false) }
+        set { setBool("antiCaps", newValue) }
+    }
+
+    public var translateBeforeSend: Bool {
+        get { bool("translateBeforeSend", default: false) }
+        set { setBool("translateBeforeSend", newValue) }
+    }
+
+    public var translateTo: String {
+        get { string("translateTo", default: "en") }
+        set { setString("translateTo", newValue) }
+    }
+
+    public var cleanLinks: Bool {
+        get { bool("cleanLinks", default: true) }
+        set { setBool("cleanLinks", newValue) }
+    }
+
+    public var undoSendSeconds: Int {
+        get { int("undoSendSeconds", default: 0) }
+        set { setInt("undoSendSeconds", max(0, min(3600, newValue))) }
+    }
+
+    public var quickFormattingBar: Bool {
+        get { bool("quickFormattingBar", default: true) }
+        set { setBool("quickFormattingBar", newValue) }
+    }
+
+    // MARK: - Приватность → Деятельность и следы (1.2, 1.4, 1.5)
+
+    public var alwaysOnline: Bool {
+        get { bool("alwaysOnline", default: false) }
+        set { setBool("alwaysOnline", newValue) }
+    }
+
+    public var confirmCalls: Bool {
+        get { bool("confirmCalls", default: false) }
+        set { setBool("confirmCalls", newValue) }
+    }
+
+    public var removePhotoMetadata: Bool {
+        get {
+            if defaults.object(forKey: prefix + "removePhotoMetadata") != nil {
+                return bool("removePhotoMetadata", default: false)
+            }
+            return bool("spoofPhotoMetadata", default: false)
+        }
+        set {
+            defaults.set(newValue, forKey: prefix + "spoofPhotoMetadata")
+            setBool("removePhotoMetadata", newValue)
+        }
+    }
+
+    public var randomFileNames: Bool {
+        get { bool("randomFileNames", default: false) }
+        set { setBool("randomFileNames", newValue) }
+    }
+
+    // MARK: - Безопасность (3.1, 3.2, 3.3)
+
+    public var hidePhoneNumber: Bool {
+        get { bool("hidePhoneNumber", default: false) }
+        set { setBool("hidePhoneNumber", newValue) }
+    }
+
+    public var blurInAppSwitcher: Bool {
+        get { bool("blurInAppSwitcher", default: false) }
+        set { setBool("blurInAppSwitcher", newValue) }
+    }
+
+    // MARK: - Прочее (4.1, 4.2, 4.3)
+
+    public var localPremium: Bool {
+        get { bool("localPremium", default: false) }
+        set { setBool("localPremium", newValue) }
+    }
+
+    public var disableNumberRounding: Bool {
+        get { bool("disableNumberRounding", default: false) }
+        set { setBool("disableNumberRounding", newValue) }
+    }
+
+    public var showMessageSeconds: Bool {
+        get { bool("showMessageSeconds", default: false) }
+        set { setBool("showMessageSeconds", newValue) }
+    }
+
+    public var showPeerIds: Bool {
+        get { bool("showPeerIds", default: false) }
+        set { setBool("showPeerIds", newValue) }
+    }
+
+    public var hidePaidAds: Bool {
+        get { bool("hidePaidAds", default: false) }
+        set { setBool("hidePaidAds", newValue) }
+    }
+
+    public var dimRepliesToMe: Bool {
+        get { bool("dimRepliesToMe", default: false) }
+        set { setBool("dimRepliesToMe", newValue) }
+    }
+
+    public var trackOnLockScreen: Bool {
+        get { bool("trackOnLockScreen", default: true) }
+        set { setBool("trackOnLockScreen", newValue) }
+    }
+
+    public var noAutoplayNextVoice: Bool {
+        get { bool("noAutoplayNextVoice", default: false) }
+        set { setBool("noAutoplayNextVoice", newValue) }
+    }
+
+    public var keepScreenOnInPlayer: Bool {
+        get { bool("keepScreenOnInPlayer", default: false) }
+        set { setBool("keepScreenOnInPlayer", newValue) }
+    }
+
+    public var keepScreenOnInVoice: Bool {
+        get { bool("keepScreenOnInVoice", default: false) }
+        set { setBool("keepScreenOnInVoice", newValue) }
+    }
+
+    public var downloadBoost: Bool {
+        get {
+            if defaults.object(forKey: prefix + "downloadBoost") != nil {
+                return bool("downloadBoost", default: false)
+            }
+            return bool("downloadSpeedBoost", default: false)
+        }
+        set { setBool("downloadBoost", newValue) }
+    }
+
+    public var localFreeTranscription: Bool {
+        get { bool("localFreeTranscription", default: true) }
+        set { setBool("localFreeTranscription", newValue) }
+    }
+
+    // MARK: - Оформление → Дизайн / Темы / Иконки (2.2, 2.3, 2.4)
+
+    public var oledMode: Bool {
+        get { bool("oledMode", default: false) }
+        set { setBool("oledMode", newValue) }
+    }
+
+    public var classicDesign: Bool {
+        get { bool("classicDesign", default: false) }
+        set { setBool("classicDesign", newValue) }
+    }
+
+    public var glowingReactions: Bool {
+        get { bool("glowingReactions", default: true) }
+        set { setBool("glowingReactions", newValue) }
+    }
+
+    public var monochromeAppIcons: Bool {
+        get { bool("monochromeAppIcons", default: false) }
+        set { setBool("monochromeAppIcons", newValue) }
+    }
+
+    // MARK: - Helpers for 1.4 (Удаление метаданных) and 1.5 (Случайные имена файлов)
+
+    public func outgoingFileName(_ name: String) -> String {
+        guard self.randomFileNames else { return name }
+        let ext = (name as NSString).pathExtension.lowercased()
+        let chars = Array("abcdefghijklmnopqrstuvwxyz0123456789")
+        let stem = String((0 ..< 10).map { _ in chars.randomElement()! })
+        return ext.isEmpty ? stem : "\(stem).\(ext)"
+    }
+
+    /// Strips all EXIF, GPS, TIFF, IPTC, MakerApple, XMP and ICC metadata by re-rendering the bitmap
+    /// in standard sRGB (baking pixel orientation) and normalizing container header fields.
+    public static func strippedImageData(_ data: Data) -> Data? {
+        let thumbOpts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let type = CGImageSourceGetType(source),
+              CGImageSourceGetCount(source) > 0 else {
+            return nil
+        }
+        if let utType = UTType(type as String), !utType.conforms(to: .image) || utType.conforms(to: .gif) {
+            return nil
+        }
+        guard let orientedImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOpts as CFDictionary) ?? CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            return nil
+        }
+        let width = orientedImage.width
+        let height = orientedImage.height
+        guard width > 0, height > 0 else { return nil }
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+        let cleanImage: CGImage
+        if let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace, bitmapInfo: bitmapInfo) {
+            ctx.draw(orientedImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+            cleanImage = ctx.makeImage() ?? orientedImage
+        } else {
+            cleanImage = orientedImage
+        }
+        let output = NSMutableData()
+        let destType = UTType.jpeg.identifier as CFString
+        guard let destination = CGImageDestinationCreateWithData(output as CFMutableData, destType, 1, nil) else {
+            return nil
+        }
+        // Explicitly remove metadata dictionaries and normalize technical container fields (orientation=1, 72 DPI)
+        let cleanProperties: [CFString: Any] = [
+            kCGImageDestinationLossyCompressionQuality: 0.94,
+            kCGImagePropertyOrientation: 1,
+            kCGImagePropertyDPIWidth: 72,
+            kCGImagePropertyDPIHeight: 72,
+            kCGImagePropertyExifDictionary: kCFNull,
+            kCGImagePropertyGPSDictionary: kCFNull,
+            kCGImagePropertyTIFFDictionary: kCFNull,
+            kCGImagePropertyIPTCDictionary: kCFNull,
+            kCGImagePropertyExifAuxDictionary: kCFNull,
+            kCGImagePropertyMakerAppleDictionary: kCFNull,
+            kCGImageProperty8BIMDictionary: kCFNull,
+            kCGImagePropertyCIFFDictionary: kCFNull,
+            kCGImagePropertyJFIFDictionary: [
+                kCGImagePropertyJFIFDensityUnit: 1,
+                kCGImagePropertyJFIFXDensity: 72,
+                kCGImagePropertyJFIFYDensity: 72,
+                kCGImagePropertyJFIFVersion: [1, 1]
+            ] as [CFString: Any]
+        ]
+        CGImageDestinationAddImage(destination, cleanImage, cleanProperties as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else {
+            return nil
+        }
+        return output as Data
+    }
+}
+
+public enum FullGramLinkCleaner {
+    private static let trackingParams: Set<String> = [
+        "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_id", "utm_name",
+        "fbclid", "gclid", "dclid", "msclkid", "yclid", "ymclid", "twclid", "ttclid", "igshid",
+        "mc_cid", "mc_eid", "ref_src", "ref_url", "_hsenc", "_hsmi", "mkt_tok", "si", "feature", "spm"
+    ]
+
+    public static func clean(_ text: String) -> String {
+        guard !text.isEmpty, text.contains("://") else { return text }
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return text }
+        let nsText = text as NSString
+        let matches = detector.matches(in: text, options: [], range: NSRange(location: 0, length: nsText.length))
+        guard !matches.isEmpty else { return text }
+        let mutable = NSMutableString(string: text)
+        for match in matches.reversed() {
+            let raw = nsText.substring(with: match.range)
+            if let cleaned = cleanSingleURL(raw), cleaned != raw {
+                mutable.replaceCharacters(in: match.range, with: cleaned)
+            }
+        }
+        return mutable as String
+    }
+
+    private static func cleanSingleURL(_ raw: String) -> String? {
+        guard var components = URLComponents(string: raw), let items = components.queryItems, !items.isEmpty else {
+            return nil
+        }
+        let filtered = items.filter { item in
+            let lower = item.name.lowercased()
+            return !trackingParams.contains(lower) && !lower.hasPrefix("utm_")
+        }
+        guard filtered.count != items.count else { return nil }
+        components.queryItems = filtered.isEmpty ? nil : filtered
+        return components.string
+    }
+
+    public static func cleanOutgoing(_ message: EnqueueMessage) -> EnqueueMessage {
+        switch message {
+        case let .message(text, attributes, inlineStickers, mediaReference, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets):
+            var newText = text
+            var newAttributes = attributes
+            var newMediaReference = mediaReference
+            if FullGramExtras.shared.cleanLinks {
+                let cleaned = Self.clean(newText)
+                if cleaned != newText {
+                    newText = cleaned
+                    newAttributes = newAttributes.map { attr in
+                        guard let entitiesAttr = attr as? TextEntitiesMessageAttribute else { return attr }
+                        let filtered = entitiesAttr.entities.filter { entity in
+                            switch entity.type {
+                            case .Url: return false
+                            default: return entity.range.upperBound <= (newText as NSString).length
+                            }
+                        }
+                        return TextEntitiesMessageAttribute(entities: filtered)
+                    }
+                }
+            }
+            if let file = newMediaReference?.media as? TelegramMediaFile {
+                var updatedAttributes = file.attributes
+                var updatedResource = file.resource
+                var updatedSize = file.size
+                var modified = false
+                if FullGramExtras.shared.randomFileNames {
+                    updatedAttributes = updatedAttributes.map { attr in
+                        if case let .FileName(fileName) = attr {
+                            modified = true
+                            return .FileName(fileName: FullGramExtras.shared.outgoingFileName(fileName))
+                        }
+                        return attr
+                    }
+                }
+                if FullGramExtras.shared.removePhotoMetadata, file.mimeType.hasPrefix("image/"), let localRef = updatedResource as? LocalFileReferenceMediaResource {
+                    if let rawData = try? Data(contentsOf: URL(fileURLWithPath: localRef.localFilePath)),
+                       let stripped = FullGramExtras.strippedImageData(rawData) {
+                        let cleanPath = NSTemporaryDirectory() + "fg-clean-\(Int64.random(in: 1 ... Int64.max)).jpg"
+                        if (try? stripped.write(to: URL(fileURLWithPath: cleanPath), options: .atomic)) != nil {
+                            var randomId: Int64 = 0
+                            arc4random_buf(&randomId, 8)
+                            updatedResource = LocalFileReferenceMediaResource(localFilePath: cleanPath, randomId: randomId)
+                            updatedSize = Int64(stripped.count)
+                            modified = true
+                        }
+                    }
+                }
+                if modified {
+                    let newFile = TelegramMediaFile(
+                        fileId: file.fileId,
+                        partialReference: file.partialReference,
+                        resource: updatedResource,
+                        previewRepresentations: file.previewRepresentations,
+                        videoThumbnails: file.videoThumbnails,
+                        immediateThumbnailData: file.immediateThumbnailData,
+                        mimeType: file.mimeType,
+                        size: updatedSize,
+                        attributes: updatedAttributes,
+                        alternativeRepresentations: file.alternativeRepresentations
+                    )
+                    newMediaReference = .standalone(media: newFile)
+                }
+            } else if FullGramExtras.shared.removePhotoMetadata, let image = newMediaReference?.media as? TelegramMediaImage {
+                var updatedReps: [TelegramMediaImageRepresentation] = []
+                var modified = false
+                for rep in image.representations {
+                    if let localRef = rep.resource as? LocalFileReferenceMediaResource,
+                       let rawData = try? Data(contentsOf: URL(fileURLWithPath: localRef.localFilePath)),
+                       let stripped = FullGramExtras.strippedImageData(rawData) {
+                        let cleanPath = NSTemporaryDirectory() + "fg-clean-img-\(Int64.random(in: 1 ... Int64.max)).jpg"
+                        if (try? stripped.write(to: URL(fileURLWithPath: cleanPath), options: .atomic)) != nil {
+                            var randomId: Int64 = 0
+                            arc4random_buf(&randomId, 8)
+                            let newRes = LocalFileReferenceMediaResource(localFilePath: cleanPath, randomId: randomId)
+                            updatedReps.append(TelegramMediaImageRepresentation(dimensions: rep.dimensions, resource: newRes, progressiveSizes: rep.progressiveSizes, immediateThumbnailData: rep.immediateThumbnailData, hasVideo: rep.hasVideo, isPersonal: rep.isPersonal))
+                            modified = true
+                            continue
+                        }
+                    }
+                    updatedReps.append(rep)
+                }
+                if modified {
+                    let newImage = TelegramMediaImage(
+                        imageId: image.imageId,
+                        representations: updatedReps,
+                        immediateThumbnailData: image.immediateThumbnailData,
+                        reference: image.reference,
+                        partialReference: image.partialReference,
+                        flags: image.flags
+                    )
+                    newMediaReference = .standalone(media: newImage)
+                }
+            }
+            return .message(
+                text: newText,
+                attributes: newAttributes,
+                inlineStickers: inlineStickers,
+                mediaReference: newMediaReference,
+                threadId: threadId,
+                replyToMessageId: replyToMessageId,
+                replyToStoryId: replyToStoryId,
+                localGroupingKey: localGroupingKey,
+                correlationId: correlationId,
+                bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets
+            )
+        case .forward:
+            return message
+        }
+    }
+}
+

@@ -42,7 +42,9 @@ public func makeDefaultPresentationTheme(reference: PresentationBuiltinThemeRefe
         case .night:
             theme = makeDefaultDarkPresentationTheme(extendingThemeReference: extendingThemeReference, preview: preview)
         case .nightAccent:
-            theme = makeDefaultDarkTintedPresentationTheme(extendingThemeReference: extendingThemeReference, preview: preview)
+            theme = FullGramExtras.shared.oledMode
+                ? makeDefaultDarkPresentationTheme(extendingThemeReference: extendingThemeReference, preview: preview)
+                : makeDefaultDarkTintedPresentationTheme(extendingThemeReference: extendingThemeReference, preview: preview)
         case .neutral:
             theme = makeDefaultNeutralPresentationTheme(dark: false, extendingThemeReference: extendingThemeReference, serviceBackgroundColor: serviceBackgroundColor, preview: preview)
         case .neutralNight:

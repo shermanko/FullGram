@@ -872,7 +872,7 @@ public class ChatMessageInteractiveInstantVideoNode: ASDisplayNode {
                     var displayTranscribe = false
                     if item.message.id.peerId.namespace != Namespaces.Peer.SecretChat && statusDisplayType == .free && !isViewOnceMessage && !item.presentationData.isPreview {
                         let premiumConfiguration = PremiumConfiguration.with(appConfiguration: item.context.currentAppConfiguration.with { $0 })
-                        if item.associatedData.isPremium || item.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost {
+                        if item.associatedData.isPremium || item.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost || FullGramExtras.shared.localFreeTranscription {
                             displayTranscribe = true
                         } else if premiumConfiguration.audioTransciptionTrialCount > 0 {
                             if incoming {
@@ -1874,7 +1874,7 @@ public class ChatMessageInteractiveInstantVideoNode: ASDisplayNode {
             return
         }
         
-        if !item.context.isPremium, case .inProgress = self.audioTranscriptionState {
+        if !item.context.isPremium && !FullGramExtras.shared.localFreeTranscription, case .inProgress = self.audioTranscriptionState {
             return
         }
         
@@ -1882,7 +1882,7 @@ public class ChatMessageInteractiveInstantVideoNode: ASDisplayNode {
         let premiumConfiguration = PremiumConfiguration.with(appConfiguration: item.context.currentAppConfiguration.with { $0 })
         
         let transcriptionText = transcribedText(message: EngineMessage(item.message))
-        if transcriptionText == nil && !item.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost {
+        if transcriptionText == nil && !item.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost && !FullGramExtras.shared.localFreeTranscription {
             if premiumConfiguration.audioTransciptionTrialCount > 0 {
                 if !item.associatedData.isPremium {
                     if self.presentAudioTranscriptionTooltip(finished: false) {
@@ -1942,20 +1942,55 @@ public class ChatMessageInteractiveInstantVideoNode: ASDisplayNode {
                 self.audioTranscriptionState = .inProgress
                 self.requestUpdateLayout(true)
                 
-                self.transcribeDisposable = (item.context.engine.messages.transcribeAudio(messageId: item.message.id)
-                |> deliverOnMainQueue).startStrict(next: { [weak self] result in
-                    guard let strongSelf = self else {
-                        return
+                if FullGramExtras.shared.localFreeTranscription && !item.associatedData.isPremium,
+                   let videoFile = item.message.media.first(where: { $0 is TelegramMediaFile }) as? TelegramMediaFile {
+                    let appLocale = presentationData.strings.baseLanguageCode
+                    let fetchDisposable = MetaDisposable()
+                    fetchDisposable.set(messageMediaFileInteractiveFetched(context: item.context, message: item.message, file: videoFile, userInitiated: true).startStrict())
+                    let localSignal: Signal<String?, NoError> = item.context.engine.resources.data(id: EngineMediaResource.Id(videoFile.resource.id))
+                    |> filter { $0.isComplete }
+                    |> take(1)
+                    |> mapToSignal { data -> Signal<String?, NoError> in
+                        return Signal { subscriber in
+                            FullGramSpeechBleep.transcribeMediaFile(at: data.path, preferredLanguage: appLocale, defaultExtension: "mp4") { text in
+                                subscriber.putNext(text)
+                                subscriber.putCompletion()
+                            }
+                            return EmptyDisposable
+                        }
                     }
-                    strongSelf.transcribeDisposable?.dispose()
-                    strongSelf.transcribeDisposable = nil
-                    
-                    if let item = strongSelf.item, !item.associatedData.isPremium && !item.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost {
-                        Queue.mainQueue().after(0.1, {
-                            let _ = strongSelf.presentAudioTranscriptionTooltip(finished: true)
-                        })
+                    |> afterDisposed {
+                        fetchDisposable.dispose()
                     }
-                })
+                    self.transcribeDisposable = (localSignal
+                    |> deliverOnMainQueue).startStrict(next: { [weak self] text in
+                        guard let strongSelf = self, let item = strongSelf.item else { return }
+                        if let text, !text.isEmpty {
+                            let _ = item.context.engine.messages.storeLocallyTranscribedAudio(messageId: item.message.id, text: text, isFinal: true, error: nil).startStandalone()
+                        } else {
+                            strongSelf.audioTranscriptionState = .collapsed
+                            strongSelf.requestUpdateLayout(true)
+                        }
+                    }, completed: { [weak self] in
+                        self?.transcribeDisposable?.dispose()
+                        self?.transcribeDisposable = nil
+                    })
+                } else {
+                    self.transcribeDisposable = (item.context.engine.messages.transcribeAudio(messageId: item.message.id)
+                    |> deliverOnMainQueue).startStrict(next: { [weak self] result in
+                        guard let strongSelf = self else {
+                            return
+                        }
+                        strongSelf.transcribeDisposable?.dispose()
+                        strongSelf.transcribeDisposable = nil
+                        
+                        if let item = strongSelf.item, !item.associatedData.isPremium && !item.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost {
+                            Queue.mainQueue().after(0.1, {
+                                let _ = strongSelf.presentAudioTranscriptionTooltip(finished: true)
+                            })
+                        }
+                    })
+                }
             }
         }
         

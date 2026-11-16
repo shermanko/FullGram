@@ -372,6 +372,47 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
         context.sharedContext.presentGlobalController(controller, nil)
         return
     }
+    if let otcText = FullGramAntiScam.shared.inspectOTCUrl(url) {
+        FullGramAntiScam.shared.recordDetection()
+        let alert = textAlertController(
+            context: context,
+            title: "Анти-OTC",
+            text: otcText,
+            actions: [
+                TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_Cancel, action: {}),
+                TextAlertAction(type: .destructiveAction, title: "Продолжить", action: {
+                    openCheckedExternalUrl(context: context, urlContext: urlContext, url: url, forceExternal: forceExternal, presentationData: presentationData, navigationController: navigationController, dismissInput: dismissInput)
+                })
+            ]
+        )
+        context.sharedContext.presentGlobalController(alert, nil)
+        return
+    }
+    if let verdict = FullGramAntiScam.shared.inspectURL(url) {
+        FullGramAntiScam.shared.recordDetection()
+        let reasonText = verdict.reasons.map { "• " + $0 }.joined(separator: "\n")
+        let hostLine = verdict.host.map { "\nДомен: \($0)\n" } ?? "\n"
+        var actions: [TextAlertAction] = [
+            TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_Cancel, action: {}),
+            TextAlertAction(type: .destructiveAction, title: "Открыть один раз", action: {
+                openCheckedExternalUrl(context: context, urlContext: urlContext, url: url, forceExternal: forceExternal, presentationData: presentationData, navigationController: navigationController, dismissInput: dismissInput)
+            })
+        ]
+        if let host = verdict.host {
+            actions.append(TextAlertAction(type: .genericAction, title: "Доверять домену", action: {
+                FullGramAntiScam.shared.addWhitelistedDomain(host)
+                openCheckedExternalUrl(context: context, urlContext: urlContext, url: url, forceExternal: forceExternal, presentationData: presentationData, navigationController: navigationController, dismissInput: dismissInput)
+            }))
+        }
+        let alert = textAlertController(
+            context: context,
+            title: verdict.severity == .high ? "Анти-скам: опасная ссылка" : "Анти-скам: проверьте ссылку",
+            text: "\(verdict.summary)\(hostLine)\n\(reasonText)",
+            actions: actions
+        )
+        context.sharedContext.presentGlobalController(alert, nil)
+        return
+    }
     openCheckedExternalUrl(context: context, urlContext: urlContext, url: url, forceExternal: forceExternal, presentationData: presentationData, navigationController: navigationController, dismissInput: dismissInput)
 }
 

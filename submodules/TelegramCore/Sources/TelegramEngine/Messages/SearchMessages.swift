@@ -1164,3 +1164,9 @@ func _internal_refreshGlobalPostSearchState(account: Account) -> Signal<Never, N
         |> ignoreValues
     }
 }
+
+public extension TelegramEngine.Messages {
+    func fullGramCanUseSearchAuthor(peer: EnginePeer) -> Bool {
+        return apiInputPeer(peer._asPeer()) != nil
+    }
+}

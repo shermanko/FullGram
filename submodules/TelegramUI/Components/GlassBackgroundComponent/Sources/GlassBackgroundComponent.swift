@@ -588,6 +588,7 @@ public class GlassBackgroundView: UIView {
     public private(set) var params: Params?
 
     public static var useCustomGlassImpl: Bool = false
+    public static var flatMode: Bool = false
 
     /// The backdrop luminance native glass sees (`EffectSettingsContainerView`'s limits, applied to every luma UIKit
     /// reports by the `backdropLayer:didChangeLuma:` override in UIKitRuntimeUtils): the whole range on the theme's
@@ -661,6 +662,10 @@ public class GlassBackgroundView: UIView {
         }
         if let nativeParamsView = self.nativeParamsView {
             self.addSubview(nativeParamsView)
+        }
+        if GlassBackgroundView.flatMode {
+            self.legacyView?.isHidden = true
+            self.shadowView?.isHidden = true
         }
         if let legacyView = self.legacyView {
             self.addSubview(legacyView)
@@ -850,11 +855,31 @@ public class GlassBackgroundView: UIView {
                         borderWidthFactor = 1.0
                     }
                 }
-                switch shape {
-                case let .roundedRect(cornerRadius):
-                    foregroundView.image = GlassBackgroundView.generateLegacyGlassImage(size: CGSize(width: cornerRadius * 2.0, height: cornerRadius * 2.0), inset: shadowInset, borderWidthFactor: borderWidthFactor, isDark: isDark, fillColor: fillColor)
-                case let .customRoundedRect(cornerRadii):
-                    foregroundView.image = GlassBackgroundView.generateLegacyGlassImage(cornerRadii: GlassBackgroundView.clampedCornerRadii(size: size, cornerRadii: cornerRadii), inset: shadowInset, borderWidthFactor: borderWidthFactor, isDark: isDark, fillColor: fillColor)
+                if GlassBackgroundView.flatMode {
+                    let flatColor: UIColor
+                    switch tintColor.kind {
+                    case .panel, .untinted:
+                        flatColor = isDark ? UIColor(rgb: 0x1c1c1d) : UIColor(rgb: 0xf7f7f7)
+                    case .clear:
+                        flatColor = UIColor(white: 0.0, alpha: isDark ? 0.45 : 0.25)
+                    case let .custom(_, color):
+                        flatColor = color.cgColor.alpha < 0.01 ? UIColor(white: 0.0, alpha: 0.25) : color.withAlphaComponent(1.0)
+                    }
+                    let radii: CornerRadii
+                    switch shape {
+                    case let .roundedRect(cornerRadius):
+                        radii = CornerRadii(radius: cornerRadius)
+                    case let .customRoundedRect(cornerRadii):
+                        radii = GlassBackgroundView.clampedCornerRadii(size: size, cornerRadii: cornerRadii)
+                    }
+                    foregroundView.image = GlassBackgroundView.generateFlatImage(cornerRadii: radii, inset: shadowInset, fillColor: flatColor)
+                } else {
+                    switch shape {
+                    case let .roundedRect(cornerRadius):
+                        foregroundView.image = GlassBackgroundView.generateLegacyGlassImage(size: CGSize(width: cornerRadius * 2.0, height: cornerRadius * 2.0), inset: shadowInset, borderWidthFactor: borderWidthFactor, isDark: isDark, fillColor: fillColor)
+                    case let .customRoundedRect(cornerRadii):
+                        foregroundView.image = GlassBackgroundView.generateLegacyGlassImage(cornerRadii: GlassBackgroundView.clampedCornerRadii(size: size, cornerRadii: cornerRadii), inset: shadowInset, borderWidthFactor: borderWidthFactor, isDark: isDark, fillColor: fillColor)
+                    }
                 }
                 #if DEBUG
                 //foregroundView.image = nil
@@ -1003,6 +1028,10 @@ public final class GlassBackgroundContainerView: UIView {
         
         if let nativeParamsView = self.nativeParamsView {
             self.addSubview(nativeParamsView)
+        }
+        if GlassBackgroundView.flatMode {
+            self.legacyView?.isHidden = true
+            self.shadowView?.isHidden = true
         } else if let legacyView = self.legacyView {
             self.addSubview(legacyView)
         }
@@ -1450,6 +1479,17 @@ public extension GlassBackgroundView {
         }.stretchableImage(withLeftCapWidth: Int(size.width * 0.5), topCapHeight: Int(size.height * 0.5))
     }
     
+    static func generateFlatImage(cornerRadii: CornerRadii, inset: CGFloat, fillColor: UIColor) -> UIImage {
+        let metrics = legacyResizableImageMetrics(cornerRadii: cornerRadii, inset: inset)
+        return UIGraphicsImageRenderer(size: metrics.imageSize).image { ctx in
+            let context = ctx.cgContext
+            context.clear(CGRect(origin: CGPoint(), size: metrics.imageSize))
+            context.setFillColor(fillColor.cgColor)
+            context.addPath(GlassBackgroundView.generateRoundedRectPath(rect: metrics.innerRect, cornerRadii: cornerRadii))
+            context.fillPath()
+        }.stretchableImage(withLeftCapWidth: metrics.leftCapWidth, topCapHeight: metrics.topCapHeight)
+    }
+
     static func generateLegacyGlassImage(cornerRadii: CornerRadii, inset: CGFloat, borderWidthFactor: CGFloat = 1.0, isDark: Bool, fillColor: UIColor) -> UIImage {
         let metrics = legacyResizableImageMetrics(cornerRadii: cornerRadii, inset: inset)
         let size = metrics.imageSize

@@ -1009,6 +1009,28 @@ public final class AccountContextImpl: AccountContext {
     }
     
     public func requestCall(peerId: EnginePeer.Id, isVideo: Bool, completion: @escaping () -> Void) {
+        guard FullGramExtras.shared.confirmCalls else {
+            self.fullGramPerformRequestCall(peerId: peerId, isVideo: isVideo, completion: completion)
+            return
+        }
+        let presentationData = self.sharedContext.currentPresentationData.with { $0 }
+        let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+        let _ = (self.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
+        |> deliverOnMainQueue).start(next: { [weak self] peer in
+            guard let self else { return }
+            let name = peer?.compactDisplayTitle ?? ""
+            let title = isVideo ? (ru ? "Видеозвонок" : "Video call") : (ru ? "Звонок" : "Call")
+            let text = ru ? "Позвонить \(name)?" : "Call \(name)?"
+            self.sharedContext.mainWindow?.present(textAlertController(context: self, title: title, text: text, actions: [
+                TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {}),
+                TextAlertAction(type: .defaultAction, title: ru ? "Позвонить" : "Call", action: { [weak self] in
+                    self?.fullGramPerformRequestCall(peerId: peerId, isVideo: isVideo, completion: completion)
+                })
+            ]), on: .root)
+        })
+    }
+
+    private func fullGramPerformRequestCall(peerId: EnginePeer.Id, isVideo: Bool, completion: @escaping () -> Void) {
         guard let callResult = self.sharedContext.callManager?.requestCall(context: self, peerId: peerId, isVideo: isVideo, endCurrentIfAny: false) else {
             return
         }

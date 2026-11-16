@@ -27,6 +27,7 @@ import StoryContainerScreen
 import WallpaperGalleryScreen
 import BrowserUI
 import PeerMessagesMediaPlaylist
+import PhotoResources
 
 func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
     var story: TelegramMediaStory?
@@ -278,9 +279,49 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                             presentDocumentPreviewController(rootController: rootController, theme: presentationData.theme, strings: presentationData.strings, postbox: params.context.account.postbox, file: file, canShare: canShare)
                         }
                     }
-                    if file.mimeType.contains("image/svg") {
+                    let lowerExt = (file.fileName as NSString?)?.pathExtension.lowercased() ?? ""
+                    if lowerExt == "lua" || lowerExt == "py" {
+                        let pluginName = ((file.fileName ?? "plugin") as NSString).deletingPathExtension
+                        let language: FullGramPluginLanguage = lowerExt == "py" ? .python : .lua
+                        params.present(textAlertController(context: params.context, title: "Плагин FullGram [\(language.displayName)]", text: "Установить «\(file.fileName ?? pluginName)» в систему плагинов?", actions: [
+                            TextAlertAction(type: .defaultAction, title: "Установить", action: {
+                                let _ = messageMediaFileInteractiveFetched(context: params.context, message: params.message, file: file, userInitiated: true).startStandalone()
+                                let _ = (params.context.engine.resources.data(id: EngineMediaResource.Id(file.resource.id))
+                                |> filter { $0.isComplete }
+                                |> take(1)
+                                |> deliverOnMainQueue).startStandalone(next: { data in
+                                    guard let code = try? String(contentsOfFile: data.path, encoding: .utf8) else { return }
+                                    let saved = FullGramPluginManager.shared.savePlugin(name: pluginName, language: language, code: code, enabled: false)
+                                    params.present(UndoOverlayController(presentationData: presentationData, content: .succeed(text: "Плагин «\(saved.name)» добавлен (выкл.)", timeout: nil, customUndoText: nil), elevatedLayout: false, action: { _ in return false }), nil, .window(.root))
+                                })
+                            }),
+                            TextAlertAction(type: .genericAction, title: "Открыть файл", action: { proceed() }),
+                            TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {})
+                        ]), nil, .window(.root))
+                    } else if lowerExt == "fullgram" {
+                        params.present(textAlertController(context: params.context, title: "Бэкап FullGram", text: "Импортировать настройки из «\(file.fileName ?? "backup.fullgram")»? Плагины из файла будут отключены до ручного включения, а белый список Анти-скама сохранён текущим.", actions: [
+                            TextAlertAction(type: .defaultAction, title: "Восстановить", action: {
+                                let _ = messageMediaFileInteractiveFetched(context: params.context, message: params.message, file: file, userInitiated: true).startStandalone()
+                                let _ = (params.context.engine.resources.data(id: EngineMediaResource.Id(file.resource.id))
+                                |> filter { $0.isComplete }
+                                |> take(1)
+                                |> deliverOnMainQueue).startStandalone(next: { data in
+                                    if let res = try? FullGramBackup.importFromFile(url: URL(fileURLWithPath: data.path), allowAntiScamWhitelist: false) {
+                                        params.present(UndoOverlayController(presentationData: presentationData, content: .succeed(text: "Восстановлено: \(res.settingsCount) настроек, \(res.pluginsCount) плагинов (выкл.)", timeout: nil, customUndoText: nil), elevatedLayout: false, action: { _ in return false }), nil, .window(.root))
+                                    }
+                                })
+                            }),
+                            TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {})
+                        ]), nil, .window(.root))
+                    } else if file.mimeType.contains("image/svg") {
                         let presentationData = params.context.sharedContext.currentPresentationData.with { $0 }
                         params.present(textAlertController(context: params.context, title: nil, text: presentationData.strings.OpenFile_PotentiallyDangerousContentAlert, actions: [TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {}), TextAlertAction(type: .defaultAction, title: presentationData.strings.OpenFile_Proceed, action: { proceed() })] ), nil, .window(.root))
+                    } else if let dangerReason = FullGramAntiScam.shared.inspectFileName(file.fileName) {
+                        FullGramAntiScam.shared.recordDetection()
+                        params.present(textAlertController(context: params.context, title: "Анти-скам: опасный файл", text: dangerReason, actions: [
+                            TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_Cancel, action: {}),
+                            TextAlertAction(type: .destructiveAction, title: "Всё равно открыть", action: { proceed() })
+                        ]), nil, .window(.root))
                     } else {
                         proceed()
                     }

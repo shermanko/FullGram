@@ -202,6 +202,8 @@ extension PeerInfoScreenNode {
             self.openFaq()
         case .tips:
             self.openTips()
+        case .fullgram:
+            push(fullGramSettingsController(context: self.context))
         case .phoneNumber:
             guard let controller = self.controller, !controller.presentAccountFrozenInfoIfNeeded() else {
                 return

@@ -160,6 +160,7 @@ private var declaredEncodables: Void = {
     declareEncodable(CloudChatClearHistoryOperation.self, f: { CloudChatClearHistoryOperation(decoder: $0) })
     declareEncodable(OutgoingContentInfoMessageAttribute.self, f: { OutgoingContentInfoMessageAttribute(decoder: $0) })
     declareEncodable(ConsumableContentMessageAttribute.self, f: { ConsumableContentMessageAttribute(decoder: $0) })
+    declareEncodable(FullGramDeletedMessageAttribute.self, f: { FullGramDeletedMessageAttribute(decoder: $0) })
     declareEncodable(TelegramMediaGame.self, f: { TelegramMediaGame(decoder: $0) })
     declareEncodable(TelegramMediaInvoice.self, f: { TelegramMediaInvoice(decoder: $0) })
     declareEncodable(TelegramMediaWebFile.self, f: { TelegramMediaWebFile(decoder: $0) })
@@ -330,6 +331,7 @@ public func currentAccount(allocateIfNotExists: Bool, networkArguments: NetworkI
                             postbox = account.postbox
                             initialKind = .unauthorized
                         case let .authorized(account):
+                            FullGramDisplayOptions.activate(peerId: account.peerId.toInt64())
                             postbox = account.postbox
                             initialKind = .authorized
                     }

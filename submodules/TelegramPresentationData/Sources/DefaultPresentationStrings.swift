@@ -134,6 +134,9 @@ private func compactDataSizeString(_ size: Int64, formatting: DataSizeStringForm
 }
 
 public func countString(_ count: Int64, forceDecimal: Bool = false) -> String {
+    if FullGramDisplayOptions.disableNumberRounding {
+        return FullGramDisplayOptions.fullCountString(count)
+    }
     let decimalSeparator = "."
     if count >= 1000 * 1000 * 1000 {
         let remainder = Int64((Double(count % (1000 * 1000 * 1000)) / (1000 * 1000 * 100.0)).rounded(.down))

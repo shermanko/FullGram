@@ -113,6 +113,15 @@ private let fastDownloadSmallPartSize: Int64 = 128 * 1024
 private let fastDownloadLargePartSize: Int64 = 512 * 1024
 private let fastDownloadLargePartThroughput: Double = 4.0 * 1024.0 * 1024.0
 private let fastDownloadSmallPartThroughput: Double = 1.5 * 1024.0 * 1024.0
+
+private let boostedMasterPendingParts = 24
+private let boostedCdnPendingParts = 40
+private let boostedInitialWindow = 10
+private let boostedMinWindow = 4
+private let boostedFastPartLatency = 1.25
+private let boostedSlowPartLatency = 3.0
+private let boostedMaxPartSize: Int64 = 1024 * 1024
+private let boostedLargePartThroughput: Double = 2.5 * 1024.0 * 1024.0
 private let maxCdnFailuresBeforeFallback = 4
 private let maxCdnReuploadsPerBlock = 3
 private let maxCdnTokenRefreshes = 3
@@ -328,6 +337,7 @@ private final class FetchImpl {
             partAlignment: Int64,
             partDivision: Int64,
             maxPendingParts: Int,
+            initialWindow: Int = fastDownloadInitialWindow,
             decryptionState: DecryptionState?
         ) {
             self.fetchLocation = fetchLocation
@@ -337,6 +347,7 @@ private final class FetchImpl {
             self.partAlignment = partAlignment
             self.partDivision = partDivision
             self.maxPendingParts = maxPendingParts
+            self.window = initialWindow
             self.decryptionState = decryptionState
         }
         
@@ -432,6 +443,7 @@ private final class FetchImpl {
         
         private let defaultPartSize: Int64
         private let cdnPartSize: Int64
+        private let boostDownloads: Bool
         private let fastDownloads: Bool
         private let masterPendingParts: Int
         private let cdnPendingParts: Int
@@ -502,15 +514,23 @@ private final class FetchImpl {
                 }
             }
             
-            self.fastDownloads = network.engineKind == .rust
+            self.boostDownloads = FullGramExtras.shared.downloadBoost
+            self.fastDownloads = network.engineKind == .rust || self.boostDownloads
             if isStory {
+                self.defaultPartSize = 512 * 1024
+            } else if self.boostDownloads, let size, size > 2 * 1024 * 1024 {
                 self.defaultPartSize = 512 * 1024
             } else {
                 self.defaultPartSize = 128 * 1024
             }
             self.cdnPartSize = 128 * 1024
-            self.masterPendingParts = self.fastDownloads ? fastDownloadMasterPendingParts : 6
-            self.cdnPendingParts = self.fastDownloads ? fastDownloadCdnPendingParts : 6
+            if self.boostDownloads {
+                self.masterPendingParts = boostedMasterPendingParts
+                self.cdnPendingParts = boostedCdnPendingParts
+            } else {
+                self.masterPendingParts = self.fastDownloads ? fastDownloadMasterPendingParts : 6
+                self.cdnPendingParts = self.fastDownloads ? fastDownloadCdnPendingParts : 6
+            }
             
             // The resource id tells concurrent downloads apart; an Api value prints only its constructor name.
             self.loggingIdentifier = resource.id.stringRepresentation
@@ -552,6 +572,7 @@ private final class FetchImpl {
                     partAlignment: 4 * 1024,
                     partDivision: 1 * 1024 * 1024,
                     maxPendingParts: self.masterPendingParts,
+                    initialWindow: self.boostDownloads ? boostedInitialWindow : fastDownloadInitialWindow,
                     decryptionState: decryptionState
                 ))
             }
@@ -655,6 +676,17 @@ private final class FetchImpl {
                     //TODO:check if already have hashes
                     if state.decryptionState == nil {
                         requiredHashRanges.formUnion(RangeSet<Int64>(pendingReadyPart.fetchRange))
+                    }
+                }
+                if self.boostDownloads, case .cdn = state.fetchLocation, state.decryptionState == nil {
+                    // Prefetch 1 MB CDN hash clusters while parts are in flight to avoid a 1-RTT stall on arrival
+                    let hashBlockSize: Int64 = 1 * 1024 * 1024
+                    for pendingPart in state.pendingParts {
+                        let clusterStart = (pendingPart.fetchRange.lowerBound / hashBlockSize) * hashBlockSize
+                        let clusterEnd = min(self.knownSize ?? (clusterStart + hashBlockSize), clusterStart + hashBlockSize)
+                        if clusterEnd > clusterStart {
+                            requiredHashRanges.formUnion(RangeSet<Int64>(clusterStart ..< clusterEnd))
+                        }
                     }
                 }
                 requiredHashRanges.subtract(state.completedHashRanges)
@@ -784,12 +816,13 @@ private final class FetchImpl {
                         }
                         self.state = .fetching(FetchImpl.FetchingState(
                             fetchLocation: .cdn(cdnData),
-                            partSize: self.cdnPartSize,
+                            partSize: self.boostDownloads ? min(512 * 1024, self.cdnPartSize * 2) : self.cdnPartSize,
                             minPartSize: self.cdnPartSize,
-                            maxPartSize: self.cdnPartSize * 2,
+                            maxPartSize: self.boostDownloads ? 512 * 1024 : self.cdnPartSize * 2,
                             partAlignment: self.cdnPartSize,
                             partDivision: 1 * 1024 * 1024,
                             maxPendingParts: self.cdnPendingParts,
+                            initialWindow: self.boostDownloads ? boostedInitialWindow : fastDownloadInitialWindow,
                             decryptionState: nil
                         ))
                         self.update()
@@ -846,10 +879,11 @@ private final class FetchImpl {
                                 fetchLocation: fetchLocation,
                                 partSize: self.defaultPartSize,
                                 minPartSize: 4 * 1024,
-                                maxPartSize: self.defaultPartSize,
+                                maxPartSize: 1 * 1024 * 1024,
                                 partAlignment: 4 * 1024,
                                 partDivision: 1 * 1024 * 1024,
                                 maxPendingParts: self.masterPendingParts,
+                                initialWindow: self.boostDownloads ? boostedInitialWindow : fastDownloadInitialWindow,
                                 decryptionState: nil
                             ))
                             
@@ -1076,12 +1110,13 @@ private final class FetchImpl {
                         self.cdnReuploadGenerations.removeAll()
                         let cdnState = FetchImpl.FetchingState(
                             fetchLocation: .cdn(cdnData),
-                            partSize: self.cdnPartSize,
+                            partSize: self.boostDownloads ? min(512 * 1024, self.cdnPartSize * 2) : self.cdnPartSize,
                             minPartSize: self.cdnPartSize,
-                            maxPartSize: self.cdnPartSize * 2,
+                            maxPartSize: self.boostDownloads ? 512 * 1024 : self.cdnPartSize * 2,
                             partAlignment: self.cdnPartSize,
                             partDivision: 1 * 1024 * 1024,
                             maxPendingParts: self.cdnPendingParts,
+                            initialWindow: self.boostDownloads ? boostedInitialWindow : fastDownloadInitialWindow,
                             decryptionState: nil
                         )
                         if self.fastDownloads {
@@ -1215,24 +1250,34 @@ private final class FetchImpl {
         
         private func adaptWindow(state: FetchingState, latency: Double, bytes: Int64) {
             let now = CFAbsoluteTimeGetCurrent()
-            if latency > fastDownloadSlowPartLatency {
+            let slowLatency = self.boostDownloads ? boostedSlowPartLatency : fastDownloadSlowPartLatency
+            let fastLatency = self.boostDownloads ? boostedFastPartLatency : fastDownloadFastPartLatency
+            let minWin = self.boostDownloads ? boostedMinWindow : fastDownloadMinWindow
+            if latency > slowLatency {
                 if now - state.lastWindowDecrease > latency {
-                    state.window = max(fastDownloadMinWindow, state.window / 2)
+                    state.window = self.boostDownloads ? max(minWin, (state.window * 3) / 4) : max(minWin, state.window / 2)
                     state.lastWindowDecrease = now
                 }
-            } else if latency < fastDownloadFastPartLatency {
-                state.window = min(state.maxPendingParts, state.window + 1)
+            } else if latency < fastLatency {
+                let step = self.boostDownloads ? 2 : 1
+                state.window = min(state.maxPendingParts, state.window + step)
             }
             
             state.recentParts.append((now, bytes))
             state.recentParts.removeAll(where: { now - $0.time > 2.0 })
-            guard case .datacenter = state.fetchLocation, state.recentParts.count >= 4 else {
+            if !self.boostDownloads {
+                guard case .datacenter = state.fetchLocation, state.recentParts.count >= 4 else {
+                    return
+                }
+            } else if state.recentParts.count < 3 {
                 return
             }
             let span = max(0.25, now - state.recentParts[0].time)
             let throughput = Double(state.recentParts.reduce(Int64(0), { $0 + $1.bytes })) / span
-            if throughput >= fastDownloadLargePartThroughput {
-                state.partSize = min(state.maxPartSize, fastDownloadLargePartSize)
+            let largeThroughput = self.boostDownloads ? boostedLargePartThroughput : fastDownloadLargePartThroughput
+            let largePart = self.boostDownloads ? boostedMaxPartSize : fastDownloadLargePartSize
+            if throughput >= largeThroughput {
+                state.partSize = min(state.maxPartSize, largePart)
             } else if throughput < fastDownloadSmallPartThroughput {
                 state.partSize = max(state.minPartSize, fastDownloadSmallPartSize)
             }
@@ -1320,6 +1365,7 @@ private final class FetchImpl {
                 partAlignment: 4 * 1024,
                 partDivision: 1 * 1024 * 1024,
                 maxPendingParts: self.masterPendingParts,
+                initialWindow: self.boostDownloads ? boostedInitialWindow : fastDownloadInitialWindow,
                 decryptionState: nil
             )
             if case let .fetching(previous) = self.state {

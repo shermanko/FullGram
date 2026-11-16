@@ -32,6 +32,7 @@ import ChatSendMessageActionUI
 import ChatControllerInteraction
 import LottieComponent
 import GlassBackgroundComponent
+import CoreMotion
 
 private func storeUneditedVideoMessage(
     path: String,
@@ -492,6 +493,31 @@ private final class VideoMessageCameraScreenComponent: CombinedComponent {
             controller.lastActionTimestamp = currentTimestamp
             
             self.resultDisposable.set((camera.stopRecording()
+            |> mapToSignal { result -> Signal<Camera.RecordingResult, NoError> in
+                guard case let .finished(mainResult, secondaryResult, duration, a, b) = result, FullGramBleepSound.current.isEnabled else {
+                    return .single(result)
+                }
+                let sound = FullGramBleepSound.current
+                let inputURL = URL(fileURLWithPath: mainResult.path)
+                let outputPath = mainResult.path + "_bleep.mp4"
+                let outputURL = URL(fileURLWithPath: outputPath)
+                return Signal { subscriber in
+                    FullGramSpeechBleep.processAudioOrVideoFile(inputURL: inputURL, outputURL: outputURL, sound: sound) { replaced in
+                        if replaced {
+                            let updated = Camera.RecordingResult.Video(
+                                path: outputPath,
+                                dimensions: mainResult.dimensions,
+                                thumbnail: mainResult.thumbnail
+                            )
+                            subscriber.putNext(.finished(updated, secondaryResult, duration, a, b))
+                        } else {
+                            subscriber.putNext(result)
+                        }
+                        subscriber.putCompletion()
+                    }
+                    return EmptyDisposable
+                }
+            }
             |> deliverOnMainQueue).startStrict(next: { [weak self] result in
                 if let self, let controller = self.getController(), case let .finished(mainResult, _, duration, _, _) = result {
                     self.completion.invoke(
@@ -924,6 +950,7 @@ public class VideoMessageCameraScreen: ViewController {
         private var resultPreviewView: ResultPreviewView?
         
         private var cameraStateDisposable: Disposable?
+        private var fullGramMotionManager: CMMotionManager?
                 
         private let idleTimerExtensionDisposable = MetaDisposable()
         
@@ -934,6 +961,7 @@ public class VideoMessageCameraScreen: ViewController {
                 } else {
                     self.idleTimerExtensionDisposable.set(nil)
                 }
+                self.updateFullGramHorizonLock()
             }
         }
         
@@ -1084,9 +1112,37 @@ public class VideoMessageCameraScreen: ViewController {
         }
         
         deinit {
+            self.fullGramMotionManager?.stopDeviceMotionUpdates()
             self.cameraStateDisposable?.dispose()
             self.idleTimerExtensionDisposable.dispose()
             self.backgroundView.removeFromSuperview()
+        }
+        
+        private func updateFullGramHorizonLock() {
+            let enabled = self.cameraIsActive && self.context.account.network.fullGramGhostMode.current.interface.horizonLockVideoMessages
+            if enabled {
+                let manager: CMMotionManager
+                if let existing = self.fullGramMotionManager {
+                    manager = existing
+                } else {
+                    let created = CMMotionManager()
+                    created.deviceMotionUpdateInterval = 1.0 / 60.0
+                    self.fullGramMotionManager = created
+                    manager = created
+                }
+                if manager.isDeviceMotionAvailable && !manager.isDeviceMotionActive {
+                    manager.startDeviceMotionUpdates(to: .main) { [weak self] motion, _ in
+                        guard let self, let motion else {
+                            return
+                        }
+                        let angle = atan2(motion.gravity.x, -motion.gravity.y)
+                        self.previewContainerContentView.transform = CGAffineTransform(rotationAngle: CGFloat(-angle))
+                    }
+                }
+            } else {
+                self.fullGramMotionManager?.stopDeviceMotionUpdates()
+                self.previewContainerContentView.transform = .identity
+            }
         }
         
         func withReadyCamera(isFirstTime: Bool = false, _ f: @escaping () -> Void) {
@@ -1166,6 +1222,7 @@ public class VideoMessageCameraScreen: ViewController {
             camera.startCapture()
             
             self.camera = camera
+            self.updateFullGramHorizonLock()
             
             Queue.mainQueue().justDispatch {
                 self.startRecording.invoke(Void())
@@ -1224,6 +1281,8 @@ public class VideoMessageCameraScreen: ViewController {
         }
 
         func animateOut(completion: @escaping () -> Void) {
+            self.fullGramMotionManager?.stopDeviceMotionUpdates()
+            self.previewContainerContentView.transform = .identity
             self.camera?.stopCapture(invalidate: true)
                                     
             UIView.animate(withDuration: 0.25, animations: {

@@ -56,7 +56,7 @@ public func _internal_deleteMessages(transaction: Transaction, mediaBox: MediaBo
     for id in ids {
         if id.peerId.namespace == Namespaces.Peer.CloudChannel && id.namespace == Namespaces.Message.Cloud {
             if let message = transaction.getMessage(id) {
-                if let threadId = message.threadId {
+                if let threadId = message.threadId, !message.attributes.contains(where: { $0 is FullGramDeletedMessageAttribute }) {
                     let messageThreadKey = MessageThreadKey(peerId: message.id.peerId, threadId: threadId)
                     if id.peerId.namespace == Namespaces.Peer.CloudChannel {
                         if let manualAddMessageThreadStatsDifference = manualAddMessageThreadStatsDifference {

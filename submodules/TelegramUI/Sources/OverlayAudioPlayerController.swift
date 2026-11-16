@@ -27,6 +27,7 @@ final class OverlayAudioPlayerControllerImpl: ViewController, OverlayAudioPlayer
     }
     
     private var accountInUseDisposable: Disposable?
+    private var fullGramIdleTimerDisposable: Disposable?
     
     init(
         context: AccountContext,
@@ -61,6 +62,7 @@ final class OverlayAudioPlayerControllerImpl: ViewController, OverlayAudioPlayer
     
     deinit {
         self.accountInUseDisposable?.dispose()
+        self.fullGramIdleTimerDisposable?.dispose()
     }
     
     override public func loadDisplayNode() {
@@ -251,11 +253,20 @@ final class OverlayAudioPlayerControllerImpl: ViewController, OverlayAudioPlayer
     
     override public func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        if FullGramExtras.shared.keepScreenOnInPlayer, self.fullGramIdleTimerDisposable == nil {
+            self.fullGramIdleTimerDisposable = self.context.sharedContext.applicationBindings.pushIdleTimerExtension()
+        }
         
         if !self.animatedIn {
             self.animatedIn = true
             self.controllerNode.animateIn()
         }
+    }
+
+    override public func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        self.fullGramIdleTimerDisposable?.dispose()
+        self.fullGramIdleTimerDisposable = nil
     }
     
     override public func dismiss(completion: (() -> Void)? = nil) {

@@ -2,6 +2,9 @@
 #import <Foundation/Foundation.h>
 
 double animationDurationFactorImpl();
+/// FullGram «Замедление анимаций»: множитель длительности (1 = выкл, до 20).
+void fullGramSetAnimationSlowMotionFactor(double factor);
+double fullGramAnimationSlowMotionFactor(void);
 
 CABasicAnimation * _Nonnull makeSpringAnimationImpl(NSString * _Nonnull keyPath, double duration);
 CABasicAnimation * _Nonnull make26SpringAnimationImpl(NSString * _Nonnull keyPath, double duration);

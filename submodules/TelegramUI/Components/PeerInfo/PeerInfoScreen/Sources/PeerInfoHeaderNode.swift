@@ -579,6 +579,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
         case fake
         case scam
         case emojiStatus(PeerEmojiStatus)
+        case fullGram(FullGramBadge)
     }
     
     private var currentCredibilityIcon: CredibilityIcon?
@@ -724,6 +725,10 @@ final class PeerInfoHeaderNode: ASDisplayNode {
             }
             if peer.isVerified {
                 credibilityIcon = .verified
+            }
+            if !peer.isFake && !peer.isScam && (credibilityIcon == .none || credibilityIcon == .premium),
+               let badge = FullGramBadges.shared.badge(forPeerId: peer.id.toInt64(), username: peer.addressName) {
+                credibilityIcon = .fullGram(badge)
             }
             if let verificationIconFileId = peer.verificationIconFileId {
                 verifiedIcon = .emojiStatus(PeerEmojiStatus(content: .emoji(fileId: verificationIconFileId), expirationDate: nil))
@@ -1025,6 +1030,9 @@ final class PeerInfoHeaderNode: ASDisplayNode {
                 currentEmojiStatus = emojiStatus
                 emojiRegularStatusContent = .animation(content: .customEmoji(fileId: emojiStatus.fileId), size: CGSize(width: 80.0, height: 80.0), placeholderColor: presentationData.theme.list.mediaPlaceholderColor, themeColor: navigationContentsAccentColor, loopMode: .forever)
                 emojiExpandedStatusContent = .animation(content: .customEmoji(fileId: emojiStatus.fileId), size: CGSize(width: 80.0, height: 80.0), placeholderColor: navigationContentsAccentColor, themeColor: navigationContentsAccentColor, loopMode: .forever)
+            case let .fullGram(badge):
+                emojiRegularStatusContent = .text(color: badge.uiColor, string: badge.chipText)
+                emojiExpandedStatusContent = emojiRegularStatusContent
             }
             
             let iconSize = self.titleCredibilityIconView.update(
@@ -1312,8 +1320,13 @@ final class PeerInfoHeaderNode: ASDisplayNode {
             
             if self.isSettings, case let .user(user) = peer {
                 var subtitle = formatPhoneNumber(context: self.context, number: user.phone ?? "")
-                
-                if let mainUsername = user.addressName, !mainUsername.isEmpty {
+                if FullGramExtras.shared.hidePhoneNumber {
+                    if let mainUsername = user.addressName, !mainUsername.isEmpty {
+                        subtitle = "@\(mainUsername)"
+                    } else {
+                        subtitle = presentationData.strings.baseLanguageCode.hasPrefix("ru") ? "Номер скрыт" : "Phone hidden"
+                    }
+                } else if let mainUsername = user.addressName, !mainUsername.isEmpty {
                     subtitle = "\(subtitle) • @\(mainUsername)"
                 }
                 subtitleStringText = subtitle

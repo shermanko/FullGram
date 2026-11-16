@@ -572,10 +572,11 @@ private final class MultipartFetchManager {
             }
         }
         
+        let boosted = FullGramExtras.shared.downloadBoost
         if isStory {
             self.defaultPartSize = 512 * 1024
             if let size = size, size > self.defaultPartSize {
-                self.parallelParts = 4
+                self.parallelParts = boosted ? 8 : 4
             } else {
                 self.parallelParts = 1
             }
@@ -585,7 +586,7 @@ private final class MultipartFetchManager {
                 self.parallelParts = 4 * 4
             } else {
                 self.defaultPartSize = 512 * 1024
-                self.parallelParts = 8
+                self.parallelParts = boosted ? 16 : 8
             }
         } else {
             self.parallelParts = 1

@@ -5747,6 +5747,9 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
                 }
             }
         }
+        if FullGramExtras.shared.antiCaps {
+            cleanText = Self.fullGramDecapitalized(cleanText)
+        }
         
         let string = NSMutableAttributedString(attributedString: richTextInputNode.attributedText ?? NSAttributedString())
         var textColor: UIColor = .black
@@ -5785,6 +5788,19 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
             return false
         }
         return true
+    }
+
+    private static func fullGramDecapitalized(_ text: String) -> String {
+        let letters = text.unicodeScalars.filter { CharacterSet.letters.contains($0) }
+        guard letters.count >= 3 else { return text }
+        let upperCount = letters.filter { CharacterSet.uppercaseLetters.contains($0) }.count
+        guard Double(upperCount) / Double(letters.count) >= 0.75 else { return text }
+        let lower = text.lowercased()
+        guard let firstLetterRange = lower.rangeOfCharacter(from: .letters) else { return lower }
+        var result = lower
+        let firstChar = String(result[firstLetterRange]).uppercased()
+        result.replaceSubrange(firstLetterRange, with: firstChar)
+        return result
     }
     
     /// Backspace with the caret at the very start of a quote / code block removes the block from

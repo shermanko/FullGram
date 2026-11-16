@@ -7811,6 +7811,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
     
     override public func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        self.fullGramApplyChatLock()
         self.forwardSideListAppearance(.willAppear, animated: animated)
 
         self.walletTransferAnimationsVisible = true
@@ -11386,7 +11387,8 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
         guard let contentData = self.contentData else {
             return
         }
-        self.chatDisplayNode.historyNode.offerNextChannelToRead = contentData.state.offerNextChannelToRead && self.presentationInterfaceState.interfaceState.selectionState == nil
+        let disableNextChannel = self.context.account.network.fullGramGhostMode.current.interface.disableJumpToNextChannel
+        self.chatDisplayNode.historyNode.offerNextChannelToRead = !disableNextChannel && contentData.state.offerNextChannelToRead && self.presentationInterfaceState.interfaceState.selectionState == nil
     }
     
     func displayGiveawayStatusInfo(messageId: EngineMessage.Id, giveawayInfo: PremiumGiveawayInfo) {

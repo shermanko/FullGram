@@ -159,7 +159,15 @@ public struct Font {
 
     private static let cache = Cache()
     
+    private static func fullGramCustomFont(_ size: CGFloat) -> UIFont? {
+        guard let name = FullGramFonts.launchFontName else { return nil }
+        return UIFont(name: name, size: size)
+    }
+
     public static func with(size: CGFloat, design: Design = .regular, weight: Weight = .regular, width: Width = .standard, traits: Traits = []) -> UIFont {
+        if case .regular = design, traits.isEmpty, let custom = Font.fullGramCustomFont(size) {
+            return custom
+        }
         let key = "\(size)_\(design.key)_\(weight.key)_\(width.key)_\(traits.rawValue)"
         
         if let cachedFont = self.cache.get(key) {
@@ -289,18 +297,22 @@ public struct Font {
     }
     
     public static func regular(_ size: CGFloat) -> UIFont {
+        if let custom = Font.fullGramCustomFont(size) { return custom }
         return UIFont.systemFont(ofSize: size)
     }
     
     public static func medium(_ size: CGFloat) -> UIFont {
+        if let custom = Font.fullGramCustomFont(size) { return custom }
         return UIFont.systemFont(ofSize: size, weight: UIFont.Weight.medium)
     }
     
     public static func semibold(_ size: CGFloat) -> UIFont {
+        if let custom = Font.fullGramCustomFont(size) { return custom }
         return UIFont.systemFont(ofSize: size, weight: UIFont.Weight.semibold)
     }
     
     public static func bold(_ size: CGFloat) -> UIFont {
+        if let custom = Font.fullGramCustomFont(size) { return custom }
         if #available(iOS 8.2, *) {
             return UIFont.boldSystemFont(ofSize: size)
         } else {

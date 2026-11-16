@@ -2209,6 +2209,9 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
         if bubbleStyle.isBubbleless && !isAd {
             needsShareButton = false
         }
+        if FullGramDisplayOptions.hideFastShare && !isAd {
+            needsShareButton = false
+        }
 
         var tmpWidth: CGFloat
         if allowFullWidth {
@@ -2653,8 +2656,21 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
         var bottomNodeMergeStatus: ChatMessageBubbleMergeStatus = mergedBottom.merged ? (incoming ? .Left : .Right) : .None(incoming ? .Incoming : .Outgoing)
         
         let bubbleReactions: ReactionsMessageAttribute
-        if needReactions || forceReactionsOutside {
-            bubbleReactions = mergedMessageReactions(attributes: item.message.attributes, isTags: item.message.areReactionsTags(accountPeerId: item.context.account.peerId)) ?? ReactionsMessageAttribute(canViewList: false, isTags: false, reactions: [], recentPeers: [], topPeers: [])
+        let fullGramReactionDisplay = FullGramDisplayOptions.reactionDisplay
+        if !fullGramReactionDisplay.enabled {
+            bubbleReactions = ReactionsMessageAttribute(canViewList: false, isTags: false, reactions: [], recentPeers: [], topPeers: [])
+        } else if needReactions || forceReactionsOutside {
+            let merged = mergedMessageReactions(attributes: item.message.attributes, isTags: item.message.areReactionsTags(accountPeerId: item.context.account.peerId)) ?? ReactionsMessageAttribute(canViewList: false, isTags: false, reactions: [], recentPeers: [], topPeers: [])
+            let limit = max(1, min(16, Int(fullGramReactionDisplay.maxVisibleCount)))
+            var updatedReactions = Array(merged.reactions.prefix(limit))
+            if !fullGramReactionDisplay.showCounts {
+                updatedReactions = updatedReactions.map { reaction in
+                    MessageReaction(value: reaction.value, count: reaction.isSelected ? 1 : 0, chosenOrder: reaction.chosenOrder)
+                }
+            }
+            let allowedValues = Set(updatedReactions.map(\.value))
+            let filteredPeers = merged.recentPeers.filter { allowedValues.contains($0.value) }
+            bubbleReactions = ReactionsMessageAttribute(canViewList: merged.canViewList, isTags: merged.isTags, reactions: updatedReactions, recentPeers: filteredPeers, topPeers: merged.topPeers)
         } else {
             bubbleReactions = ReactionsMessageAttribute(canViewList: false, isTags: false, reactions: [], recentPeers: [], topPeers: [])
         }
@@ -2810,6 +2826,15 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
                     currentCredibilityIcon = (.verified(fillColor: item.presentationData.theme.theme.list.itemCheckColors.fillColor, foregroundColor: item.presentationData.theme.theme.list.itemCheckColors.foregroundColor, sizeType: .compact), nil)
                 } else if effectiveAuthor.isPremium {
                     currentCredibilityIcon = (.premium(color: color.withMultipliedAlpha(0.4)), nil)
+                }
+                var isChannelSelfPost = false
+                if case let .peer(chatPeerId) = item.chatLocation, chatPeerId == effectiveAuthor.id, effectiveAuthor is TelegramChannel {
+                    isChannelSelfPost = true
+                }
+                if !isChannelSelfPost,
+                   !effectiveAuthor.isScam && !effectiveAuthor.isFake && !effectiveAuthor.isVerified && effectiveAuthor.emojiStatus == nil,
+                   let fullGramBadge = FullGramBadges.shared.badge(forPeerId: effectiveAuthor.id.toInt64(), username: effectiveAuthor.addressName) {
+                    currentCredibilityIcon = (.text(color: fullGramBadge.uiColor, string: fullGramBadge.chipText), nil)
                 }
             }
             if let rawAuthorNameColor = authorNameColor {
@@ -4423,6 +4448,18 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
         strongSelf.contentContainersWrapperNode.frame = CGRect(origin: CGPoint(), size: layout.contentSize)
         
         strongSelf.appliedItem = item
+        var fgAlpha: CGFloat = 1.0
+        if FullGramExtras.shared.dimRepliesToMe, item.content.firstMessage.flags.contains(.Incoming) {
+            for attribute in item.content.firstMessage.attributes {
+                if let reply = attribute as? ReplyMessageAttribute, let replied = item.content.firstMessage.associatedMessages[reply.messageId], replied.author?.id == item.context.account.peerId {
+                    fgAlpha = 0.55
+                    break
+                }
+            }
+        }
+        if strongSelf.mainContainerNode.alpha != fgAlpha {
+            strongSelf.mainContainerNode.alpha = fgAlpha
+        }
         strongSelf.appliedForwardInfo = ChatMessageAppliedForwardInfo(messageId: item.content.firstMessage.id, source: forwardSource, authorSignature: forwardAuthorSignature)
         strongSelf.updateAccessibilityData(accessibilityData)
         strongSelf.disablesComments = disablesComments

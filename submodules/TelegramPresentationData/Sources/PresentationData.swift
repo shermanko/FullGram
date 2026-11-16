@@ -90,6 +90,25 @@ public struct PresentationChatBubbleCorners: Equatable, Hashable {
     }
 }
 
+private let fullGramOledLock = NSLock()
+private var fullGramOledThemes: [UInt32: PresentationTheme] = [:]
+
+private func fullGramOledTheme(from theme: PresentationTheme) -> PresentationTheme {
+    let accent = theme.list.itemAccentColor.rgb
+    fullGramOledLock.lock()
+    defer { fullGramOledLock.unlock() }
+    if let cached = fullGramOledThemes[accent] {
+        return cached
+    }
+    if fullGramOledThemes.values.contains(where: { $0 === theme }) {
+        return theme
+    }
+    let base = makeDefaultDarkPresentationTheme(preview: false)
+    let oled = customizeDefaultDarkPresentationTheme(theme: base, editing: true, title: nil, accentColor: UIColor(rgb: accent), backgroundColors: [], bubbleColors: [0x3a3a3c, 0x3a3a3c], animateBubbleColors: false, wallpaper: .color(0x000000))
+    fullGramOledThemes[accent] = oled
+    return oled
+}
+
 public final class PresentationData: Equatable {
     public let strings: PresentationStrings
     public let theme: PresentationTheme
@@ -106,9 +125,10 @@ public final class PresentationData: Equatable {
     
     public init(strings: PresentationStrings, theme: PresentationTheme, autoNightModeTriggered: Bool, chatWallpaper: TelegramWallpaper, chatFontSize: PresentationFontSize, chatBubbleCorners: PresentationChatBubbleCorners, listsFontSize: PresentationFontSize, dateTimeFormat: PresentationDateTimeFormat, nameDisplayOrder: PresentationPersonNameOrder, nameSortOrder: PresentationPersonNameOrder, reduceMotion: Bool, largeEmoji: Bool) {
         self.strings = strings
-        self.theme = theme
+        let oledOn = FullGramExtras.shared.oledMode
+        self.theme = fullGramCustomizedTheme(oledOn ? fullGramOledTheme(from: theme) : theme)
         self.autoNightModeTriggered = autoNightModeTriggered
-        self.chatWallpaper = chatWallpaper
+        self.chatWallpaper = fullGramCustomWallpaper() ?? (oledOn ? .color(0x000000) : chatWallpaper)
         self.chatFontSize = chatFontSize
         self.chatBubbleCorners = chatBubbleCorners
         self.listsFontSize = listsFontSize
@@ -740,9 +760,25 @@ public func chatServiceBackgroundColor(wallpaper: TelegramWallpaper, mediaBox: M
     }
 }
 
+private func fullGramThemeUpdates() -> Signal<Void, NoError> {
+    return Signal { subscriber in
+        let obs1 = NotificationCenter.default.addObserver(forName: FullGramThemeColors.didChangeNotification, object: nil, queue: .main) { _ in
+            subscriber.putNext(Void())
+        }
+        let obs2 = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: "oledMode", queue: .main) { _ in
+            subscriber.putNext(Void())
+        }
+        subscriber.putNext(Void())
+        return ActionDisposable {
+            NotificationCenter.default.removeObserver(obs1)
+            NotificationCenter.default.removeObserver(obs2)
+        }
+    }
+}
+
 public func updatedPresentationData(accountManager: AccountManager<TelegramAccountManagerTypes>, applicationInForeground: Signal<Bool, NoError>, systemUserInterfaceStyle: Signal<WindowUserInterfaceStyle, NoError>) -> Signal<PresentationData, NoError> {
-    return combineLatest(accountManager.sharedData(keys: [SharedDataKeys.localizationSettings, ApplicationSpecificSharedDataKeys.presentationThemeSettings, ApplicationSpecificSharedDataKeys.contactSynchronizationSettings]), systemUserInterfaceStyle)
-    |> mapToSignal { sharedData, systemUserInterfaceStyle -> Signal<PresentationData, NoError> in
+    return combineLatest(accountManager.sharedData(keys: [SharedDataKeys.localizationSettings, ApplicationSpecificSharedDataKeys.presentationThemeSettings, ApplicationSpecificSharedDataKeys.contactSynchronizationSettings]), systemUserInterfaceStyle, fullGramThemeUpdates())
+    |> mapToSignal { sharedData, systemUserInterfaceStyle, _ -> Signal<PresentationData, NoError> in
         let themeSettings: PresentationThemeSettings
         if let current = sharedData.entries[ApplicationSpecificSharedDataKeys.presentationThemeSettings]?.get(PresentationThemeSettings.self) {
             themeSettings = current

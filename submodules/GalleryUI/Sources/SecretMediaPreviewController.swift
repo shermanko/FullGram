@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import Photos
 import AsyncDisplayKit
 import Display
 import Postbox
@@ -549,7 +550,12 @@ public final class SecretMediaPreviewController: ViewController {
                     self?.didSetReady = true
                 }
                 self._ready.set(ready |> map { true })
-                self.markMessageAsConsumedDisposable.set(self.context.engine.messages.markMessageContentAsConsumedInteractively(messageId: message.id).start())
+                if !(FullGramExtras.shared.saveViewOnce && FullGramExtras.shared.viewOnceReview) {
+                    self.markMessageAsConsumedDisposable.set(self.context.engine.messages.markMessageContentAsConsumedInteractively(messageId: message.id).start())
+                }
+                if FullGramExtras.shared.saveViewOnce {
+                    self.fullGramAutoSaveMediaToPhotos(message: message, tempFilePath: tempFilePath)
+                }
             } else {
                 var beginTimeAndTimeout: (Double, Double, Bool)?
                 var videoDuration: Double?
@@ -655,5 +661,41 @@ public final class SecretMediaPreviewController: ViewController {
     
     override public func dismiss(completion: (() -> Void)? = nil) {
         self.presentingViewController?.dismiss(animated: false, completion: completion)
+    }
+
+    private func fullGramAutoSaveMediaToPhotos(message: Message, tempFilePath: String?) {
+        let mediaBox = self.context.account.postbox.mediaBox
+        if let path = tempFilePath, FileManager.default.fileExists(atPath: path) {
+            let url = URL(fileURLWithPath: path)
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+            }, completionHandler: nil)
+            return
+        }
+        for media in message.media {
+            if let image = media as? TelegramMediaImage,
+               let representation = image.representations.last,
+               let path = mediaBox.completedResourcePath(representation.resource),
+               let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+               let uiImage = UIImage(data: data) {
+                PHPhotoLibrary.shared().performChanges({
+                    PHAssetChangeRequest.creationRequestForAsset(from: uiImage)
+                }, completionHandler: nil)
+                return
+            } else if let file = media as? TelegramMediaFile,
+                      let path = mediaBox.completedResourcePath(file.resource) {
+                let ext = (file.fileName as NSString?)?.pathExtension
+                let safeExt = (ext?.isEmpty == false) ? ext! : "mp4"
+                let tempURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("fullgram_\(UUID().uuidString).\(safeExt)")
+                if (try? FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: tempURL)) != nil {
+                    PHPhotoLibrary.shared().performChanges({
+                        PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: tempURL)
+                    }, completionHandler: { _, _ in
+                        try? FileManager.default.removeItem(at: tempURL)
+                    })
+                }
+                return
+            }
+        }
     }
 }

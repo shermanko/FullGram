@@ -1051,96 +1051,253 @@ extension ChatControllerImpl {
                     }
                 }
                 
+                if FullGramAIStore.shared.isEnabled, messages.count == 1,
+                   case let .message(rawText, _, _, mediaReference, _, _, _, _, _, _) = messages[0],
+                   mediaReference == nil {
+                    let trimmedAI = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let lowerAI = trimmedAI.lowercased()
+                    if lowerAI == ".ai" || lowerAI.hasPrefix(".ai ") || lowerAI.hasPrefix(".ai\n") {
+                        let query = String(trimmedAI.dropFirst(3)).trimmingCharacters(in: .whitespacesAndNewlines)
+                        NotificationCenter.default.post(
+                            name: FullGramAINotifications.openWindow,
+                            object: nil,
+                            userInfo: [
+                                "peerId": peerId.toInt64(),
+                                "prompt": query,
+                                "autoSend": !query.isEmpty
+                            ]
+                        )
+                        return
+                    }
+                }
+
                 let effectiveSilentPosting = silentPosting ?? strongSelf.presentationInterfaceState.interfaceState.silentPosting
                 let transformedMessages = strongSelf.transformEnqueueMessages(messages, silentPosting: effectiveSilentPosting, scheduleTime: scheduleTime, repeatPeriod: repeatPeriod, postpone: postpone)
                 
-                var forwardedMessages: [[EnqueueMessage]] = []
-                var forwardSourcePeerIds = Set<EnginePeer.Id>()
-                for message in transformedMessages {
-                    if case let .forward(source, _, _, _, _) = message {
-                        forwardSourcePeerIds.insert(source.peerId)
-                        
-                        var added = false
-                        if var last = forwardedMessages.last {
-                            if let currentMessage = last.first, case let .forward(currentSource, _, _, _, _) = currentMessage, currentSource.peerId == source.peerId {
-                                last.append(message)
-                                added = true
+                let pluginSignal: Signal<[EnqueueMessage], NoError>
+                if FullGramPluginManager.shared.isSystemEnabled {
+                    let renderedPeer = strongSelf.presentationInterfaceState.renderedPeer?.peer
+                    let isGroup = renderedPeer is TelegramGroup || (renderedPeer as? TelegramChannel).map { if case .group = $0.info { return true }; return false } ?? false
+                    let isChannel = (renderedPeer as? TelegramChannel).map { if case .broadcast = $0.info { return true }; return false } ?? false
+                    let targetPeerId = peerId.toInt64()
+                    let chatTitle = renderedPeer.map { EnginePeer($0).compactDisplayTitle } ?? "Чат"
+                    let initialMessages = transformedMessages
+
+                    let needsChatStats = initialMessages.contains { msg in
+                        if case let .message(text, _, _, _, _, _, _, _, _, _) = msg {
+                            let lower = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                            return lower.hasPrefix(".plug") || lower.hasPrefix(".info-chat")
+                        }
+                        return false
+                    }
+
+                    let chatStatsSignal: Signal<[String: FullGramPluginValue]?, NoError>
+                    if needsChatStats {
+                        chatStatsSignal = fullGramBuildChatStatsSignal(context: strongSelf.context, peerId: peerId, chatTitle: chatTitle)
+                    } else {
+                        chatStatsSignal = .single(nil)
+                    }
+
+                    pluginSignal = chatStatsSignal
+                    |> mapToSignal { chatStats -> Signal<[EnqueueMessage], NoError> in
+                        return Signal { subscriber in
+                            Queue.concurrentDefaultQueue().async {
+                                var pluginFiltered: [EnqueueMessage] = []
+                                for msg in initialMessages {
+                                    if case let .message(text, attributes, inlineStickers, mediaReference, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets) = msg, !text.isEmpty {
+                                        let decision = FullGramPluginManager.shared.processOutgoingMessage(
+                                            text: text,
+                                            peerId: targetPeerId,
+                                            isGroup: isGroup,
+                                            isChannel: isChannel,
+                                            chatStats: chatStats
+                                        )
+                                        switch decision {
+                                        case .pass:
+                                            pluginFiltered.append(msg)
+                                        case let .replaceText(updatedText):
+                                            var updatedAttributes = attributes.filter { !($0 is TextEntitiesMessageAttribute) }
+                                            let entities = generateTextEntities(updatedText, enabledTypes: .all)
+                                            if !entities.isEmpty {
+                                                updatedAttributes.append(TextEntitiesMessageAttribute(entities: entities))
+                                            }
+                                            pluginFiltered.append(.message(text: updatedText, attributes: updatedAttributes, inlineStickers: inlineStickers, mediaReference: mediaReference, threadId: threadId, replyToMessageId: replyToMessageId, replyToStoryId: replyToStoryId, localGroupingKey: localGroupingKey, correlationId: correlationId, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets))
+                                        case let .cancel(toast):
+                                            if let toast, !toast.isEmpty {
+                                                Queue.mainQueue().async {
+                                                    guard let strongSelf else { return }
+                                                    strongSelf.present(UndoOverlayController(presentationData: strongSelf.presentationData, content: .succeed(text: toast, timeout: nil, customUndoText: nil), elevatedLayout: false, action: { _ in return false }), in: .current)
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        pluginFiltered.append(msg)
+                                    }
+                                }
+                                subscriber.putNext(pluginFiltered)
+                                subscriber.putCompletion()
+                            }
+                            return EmptyDisposable
+                        }
+                    }
+                } else {
+                    pluginSignal = .single(transformedMessages)
+                }
+
+                let translateSignal: Signal<[EnqueueMessage], NoError> = pluginSignal
+                |> mapToSignal { pluginMessages -> Signal<[EnqueueMessage], NoError> in
+                    guard !pluginMessages.isEmpty else {
+                        return .single([])
+                    }
+                    if FullGramExtras.shared.translateBeforeSend {
+                        let targetLang = FullGramExtras.shared.translateTo
+                        let messageSignals: [Signal<EnqueueMessage, NoError>] = pluginMessages.map { msg in
+                            if case let .message(text, attributes, inlineStickers, mediaReference, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets) = msg, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                return strongSelf.context.engine.messages.fullGramTranslate(text: text, toLang: targetLang)
+                                |> map { translated in
+                                    return EnqueueMessage.message(text: translated, attributes: attributes, inlineStickers: inlineStickers, mediaReference: mediaReference, threadId: threadId, replyToMessageId: replyToMessageId, replyToStoryId: replyToStoryId, localGroupingKey: localGroupingKey, correlationId: correlationId, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets)
+                                }
+                                |> `catch` { _ -> Signal<EnqueueMessage, NoError> in
+                                    return .single(msg)
+                                }
+                            } else {
+                                return .single(msg)
                             }
                         }
-                        if !added {
-                            forwardedMessages.append([message])
-                        }
+                        return combineLatest(messageSignals)
+                    } else {
+                        return .single(pluginMessages)
                     }
                 }
                 
-                let _ = (strongSelf.shouldDivertMessagesToScheduled(messages: transformedMessages)
-                |> deliverOnMainQueue).start(next: { shouldDivert in
-                    let signal: Signal<[EngineMessage.Id?], NoError>
-                    var shouldOpenScheduledMessages = false
-                    if forwardSourcePeerIds.count > 1 {
-                        var forwardedMessages = forwardedMessages
-                        if shouldDivert {
-                            forwardedMessages = forwardedMessages.map { messageGroup -> [EnqueueMessage] in
-                                return messageGroup.map { message -> EnqueueMessage in
-                                    return message.withUpdatedAttributes { attributes in
-                                        var attributes = attributes
-                                        attributes.removeAll(where: { $0 is OutgoingScheduleInfoMessageAttribute })
-                                        attributes.append(OutgoingScheduleInfoMessageAttribute(scheduleTime: Int32(Date().timeIntervalSince1970) + 10 * 24 * 60 * 60, repeatPeriod: nil))
-                                        return attributes
-                                    }
+                let _ = (translateSignal
+                |> deliverOnMainQueue).start(next: { [weak self] transformedMessages in
+                    guard let strongSelf = self, !transformedMessages.isEmpty else {
+                        return
+                    }
+                    var forwardedMessages: [[EnqueueMessage]] = []
+                    var forwardSourcePeerIds = Set<EnginePeer.Id>()
+                    for message in transformedMessages {
+                        if case let .forward(source, _, _, _, _) = message {
+                            forwardSourcePeerIds.insert(source.peerId)
+                            
+                            var added = false
+                            if var last = forwardedMessages.last {
+                                if let currentMessage = last.first, case let .forward(currentSource, _, _, _, _) = currentMessage, currentSource.peerId == source.peerId {
+                                    last.append(message)
+                                    added = true
                                 }
                             }
-                            shouldOpenScheduledMessages = true
-                        }
-                        
-                        var signals: [Signal<[EngineMessage.Id?], NoError>] = []
-                        for messagesGroup in forwardedMessages {
-                            signals.append(enqueueMessages(account: strongSelf.context.account, peerId: peerId, messages: messagesGroup))
-                        }
-                        signal = combineLatest(signals)
-                        |> map { results in
-                            var ids: [EngineMessage.Id?] = []
-                            for result in results {
-                                ids.append(contentsOf: result)
+                            if !added {
+                                forwardedMessages.append([message])
                             }
-                            return ids
                         }
-                    } else {
-                        var transformedMessages = transformedMessages
-                        if shouldDivert {
-                            transformedMessages = transformedMessages.map { message -> EnqueueMessage in
-                                return message.withUpdatedAttributes { attributes in
-                                    var attributes = attributes
-                                    attributes.removeAll(where: { $0 is OutgoingScheduleInfoMessageAttribute })
-                                    attributes.append(OutgoingScheduleInfoMessageAttribute(scheduleTime: Int32(Date().timeIntervalSince1970) + 10 * 24 * 60 * 60, repeatPeriod: nil))
-                                    return attributes
-                                }
-                            }
-                            shouldOpenScheduledMessages = true
-                        }
-                        
-                        signal = enqueueMessages(account: strongSelf.context.account, peerId: peerId, messages: transformedMessages)
                     }
                     
-                    let _ = (signal
-                    |> deliverOnMainQueue).startStandalone(next: { messageIds in
-                        guard let strongSelf = self else {
-                            return
-                        }
-                        if case .scheduledMessages = strongSelf.presentationInterfaceState.subject {
-                        } else {
-                            strongSelf.chatDisplayNode.historyNode.scrollToEndOfHistory()
-                            
-                            if shouldOpenScheduledMessages {
-                                if let layoutActionOnViewTransitionAction = strongSelf.layoutActionOnViewTransitionAction {
-                                    strongSelf.layoutActionOnViewTransitionAction = nil
-                                    layoutActionOnViewTransitionAction()
-                                }
+                    let _ = (strongSelf.shouldDivertMessagesToScheduled(messages: transformedMessages)
+                    |> deliverOnMainQueue).start(next: { shouldDivert in
+                        let performEnqueue = { [weak self] in
+                            guard let strongSelf = self else {
+                                return
                             }
+                            let signal: Signal<[EngineMessage.Id?], NoError>
+                            var shouldOpenScheduledMessages = false
+                            if forwardSourcePeerIds.count > 1 {
+                                var forwardedMessages = forwardedMessages
+                                if shouldDivert {
+                                    forwardedMessages = forwardedMessages.map { messageGroup -> [EnqueueMessage] in
+                                        return messageGroup.map { message -> EnqueueMessage in
+                                            return message.withUpdatedAttributes { attributes in
+                                                var attributes = attributes
+                                                attributes.removeAll(where: { $0 is OutgoingScheduleInfoMessageAttribute })
+                                                attributes.append(OutgoingScheduleInfoMessageAttribute(scheduleTime: Int32(Date().timeIntervalSince1970) + 10 * 24 * 60 * 60, repeatPeriod: nil))
+                                                return attributes
+                                            }
+                                        }
+                                    }
+                                    shouldOpenScheduledMessages = true
+                                }
+                                
+                                var signals: [Signal<[EngineMessage.Id?], NoError>] = []
+                                for messagesGroup in forwardedMessages {
+                                    signals.append(enqueueMessages(account: strongSelf.context.account, peerId: peerId, messages: messagesGroup))
+                                }
+                                signal = combineLatest(signals)
+                                |> map { results in
+                                    var ids: [EngineMessage.Id?] = []
+                                    for result in results {
+                                        ids.append(contentsOf: result)
+                                    }
+                                    return ids
+                                }
+                            } else {
+                                var transformedMessages = transformedMessages
+                                if shouldDivert {
+                                    transformedMessages = transformedMessages.map { message -> EnqueueMessage in
+                                        return message.withUpdatedAttributes { attributes in
+                                            var attributes = attributes
+                                            attributes.removeAll(where: { $0 is OutgoingScheduleInfoMessageAttribute })
+                                            attributes.append(OutgoingScheduleInfoMessageAttribute(scheduleTime: Int32(Date().timeIntervalSince1970) + 10 * 24 * 60 * 60, repeatPeriod: nil))
+                                            return attributes
+                                        }
+                                    }
+                                    shouldOpenScheduledMessages = true
+                                }
+                                
+                                signal = enqueueMessages(account: strongSelf.context.account, peerId: peerId, messages: transformedMessages)
+                            }
+                            
+                            let _ = (signal
+                            |> deliverOnMainQueue).startStandalone(next: { messageIds in
+                                guard let strongSelf = self else {
+                                    return
+                                }
+                                if case .scheduledMessages = strongSelf.presentationInterfaceState.subject {
+                                } else {
+                                    strongSelf.chatDisplayNode.historyNode.scrollToEndOfHistory()
+                                    
+                                    if shouldOpenScheduledMessages {
+                                        if let layoutActionOnViewTransitionAction = strongSelf.layoutActionOnViewTransitionAction {
+                                            strongSelf.layoutActionOnViewTransitionAction = nil
+                                            layoutActionOnViewTransitionAction()
+                                        }
+                                    }
+                                }
+                            })
+                            
+                            donateSendMessageIntent(account: strongSelf.context.account, sharedContext: strongSelf.context.sharedContext, intentContext: .chat, peerIds: [peerId])
+                        }
+                        
+                        let undoSeconds = FullGramExtras.shared.undoSendSeconds
+                        if undoSeconds > 0 && scheduleTime == nil && !shouldDivert {
+                            var isCancelled = false
+                            let presentationData = strongSelf.context.sharedContext.currentPresentationData.with { $0 }
+                            let undoController = UndoOverlayController(
+                                presentationData: presentationData,
+                                content: .Action(
+                                    text: "Отправка через \(undoSeconds) сек...",
+                                    undoText: presentationData.strings.Undo_Undo,
+                                    timeout: Double(undoSeconds)
+                                ),
+                                elevatedLayout: false,
+                                animateInAsReplacement: true,
+                                action: { action in
+                                    if case .undo = action {
+                                        isCancelled = true
+                                        return true
+                                    }
+                                    if !isCancelled {
+                                        isCancelled = true
+                                        performEnqueue()
+                                    }
+                                    return true
+                                }
+                            )
+                            strongSelf.present(undoController, in: .current)
+                        } else {
+                            performEnqueue()
                         }
                     })
-                    
-                    donateSendMessageIntent(account: strongSelf.context.account, sharedContext: strongSelf.context.sharedContext, intentContext: .chat, peerIds: [peerId])
                 })
             } else if case let .customChatContents(customChatContents) = strongSelf.subject {
                 switch customChatContents.kind {
@@ -5599,7 +5756,7 @@ extension ChatControllerImpl {
             guard let self else {
                 return
             }
-            if self.presentationInterfaceState.search != nil && self.presentationInterfaceState.historyFilter != nil {
+            if (self.presentationInterfaceState.search != nil && self.presentationInterfaceState.historyFilter != nil) || self.context.account.network.fullGramGhostMode.current.interface.hideKeyboardOnScroll {
                 self.chatDisplayNode.historyNode.addAfterTransactionsCompleted { [weak self] in
                     guard let self else {
                         return

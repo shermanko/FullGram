@@ -153,10 +153,11 @@ final class MultipartUploadManager {
         arc4random_buf(&fileId, 8)
         self.fileId = fileId
         
+        let boosted = FullGramExtras.shared.downloadBoost
         if increaseParallelParts {
             self.parallelParts = 30
         } else {
-            self.parallelParts = 3
+            self.parallelParts = boosted ? 16 : 3
         }
         
         self.forceNoBigParts = forceNoBigParts
@@ -176,7 +177,7 @@ final class MultipartUploadManager {
             self.headerPartState = .notStarted
         }
         
-        if let hintFileSize = hintFileSize, hintFileSize > 10 * 1024 * 1024, !forceNoBigParts {
+        if let hintFileSize = hintFileSize, hintFileSize > (boosted ? 2 * 1024 * 1024 : 10 * 1024 * 1024), !forceNoBigParts {
             self.defaultPartSize = 512 * 1024
             self.bigTotalParts = Int((hintFileSize / self.defaultPartSize) + (hintFileSize % self.defaultPartSize == 0 ? 0 : 1))
             self.bigParts = true

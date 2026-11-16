@@ -5,8 +5,15 @@ import CoreMedia
 import CoreVideo
 import DeviceModel
 import Camera
+import Display
 
-let roundVideoCaptureFrameRate: Double = 30.0
+var roundVideoCaptureFrameRate: Double {
+    if let override = fullGramRoundVideoFrameRateOverride {
+        return override
+    }
+    return Double(FullGramRoundVideoSettings.fps)
+}
+var fullGramRoundVideoFrameRateOverride: Double?
 
 enum RoundVideoCaptureProfile: Int, CaseIterable {
     // Budget tiers: rear uses 16:9, front uses 4:3 to retain its field of view.
@@ -39,14 +46,22 @@ private func selectRoundVideoCaptureFormat(
     preferMediumProfile: Bool,
     maximumProfile: RoundVideoCaptureProfile = .high
 ) -> Int? {
-    let eligible = candidates.indices.filter { index in
-        let candidate = candidates[index]
-        guard let profile = candidate.profile, profile.rawValue >= maximumProfile.rawValue else {
-            return false
+    fullGramRoundVideoFrameRateOverride = nil
+    func eligibleIndices() -> [Int] {
+        return candidates.indices.filter { index in
+            let candidate = candidates[index]
+            guard let profile = candidate.profile, profile.rawValue >= maximumProfile.rawValue else {
+                return false
+            }
+            return candidate.isNV12
+                && (!requiresMultiCam || candidate.supportsMultiCam)
+                && candidate.frameRateRanges.contains(where: { $0.contains(roundVideoCaptureFrameRate) })
         }
-        return candidate.isNV12
-            && (!requiresMultiCam || candidate.supportsMultiCam)
-            && candidate.frameRateRanges.contains(where: { $0.contains(roundVideoCaptureFrameRate) })
+    }
+    var eligible = eligibleIndices()
+    if eligible.isEmpty, roundVideoCaptureFrameRate > 30.0 {
+        fullGramRoundVideoFrameRateOverride = 30.0
+        eligible = eligibleIndices()
     }
     return eligible.min { lhsIndex, rhsIndex in
         let lhs = candidates[lhsIndex]

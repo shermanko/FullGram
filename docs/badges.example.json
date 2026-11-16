@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "roles": {
+    "creator": {
+      "label": "Создатель FullGram",
+      "shortLabel": "CREATOR",
+      "emoji": "👑",
+      "color": "#FF9500"
+    },
+    "official": {
+      "label": "Официальный ресурс FullGram",
+      "shortLabel": "FULLGRAM",
+      "emoji": "🛡",
+      "color": "#007AFF"
+    },
+    "premium": {
+      "label": "FullGram+",
+      "shortLabel": "FG+",
+      "emoji": "💎",
+      "color": "#AF52DE"
+    },
+    "dev": {
+      "label": "Разработчик",
+      "shortLabel": "DEV",
+      "emoji": "⚡",
+      "color": "#34C759"
+    }
+  },
+  "users": {
+    "123456789": "premium"
+  },
+  "usernames": {
+    "shermanko": "creator",
+    "fullgram_mod": "official",
+    "fullgramgroup": "official"
+  }
+}

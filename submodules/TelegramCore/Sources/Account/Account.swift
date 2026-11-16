@@ -1502,6 +1502,9 @@ public class Account {
         self.managedOperationsDisposable.add(postbox.unsentMessageIdsView().start(next: { [weak pendingMessageManager] view in
             pendingMessageManager?.updatePendingMessageIds(view.ids)
         }))
+        self.managedOperationsDisposable.add(fullGramManageArchiveFiles(postbox: self.postbox).start())
+        self.managedOperationsDisposable.add(fullGramManageDisplayOptions(network: self.network, peerId: peerId).start())
+        self.managedOperationsDisposable.add(fullGramManageLocalPremium(postbox: self.postbox, network: self.network, peerId: peerId).start())
         
         self.managedOperationsDisposable.add(managedSecretChatOutgoingOperations(auxiliaryMethods: auxiliaryMethods, postbox: self.postbox, network: self.network, accountPeerId: peerId, mode: .all).start())
         self.managedOperationsDisposable.add(managedCloudChatRemoveMessagesOperations(postbox: self.postbox, network: self.network, stateManager: self.stateManager).start())

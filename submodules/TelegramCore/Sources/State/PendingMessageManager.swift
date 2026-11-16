@@ -1226,6 +1226,7 @@ public final class PendingMessageManager {
                 var suggestedPost: Api.SuggestedPost?
                 
                 var flags: Int32 = 0
+                if network.fullGramGhostMode.current.shouldSendSilently { flags |= Int32(1 << 5) }
                 
                 for attribute in messages[0].0.attributes {
                     if let replyAttribute = attribute as? ReplyMessageAttribute {
@@ -1510,6 +1511,8 @@ public final class PendingMessageManager {
                 return sendMessageRequest
                 |> deliverOn(queue)
                 |> mapToSignal { result -> Signal<Void, MTRpcError> in
+                    network.fullGramReassertOfflineAfterSending()
+                    fullGramMarkReadAfterSending(postbox: postbox, network: network, stateManager: stateManager, messages: messages.map { $0.0 })
                     if let strongSelf = self {
                         return strongSelf.applySentGroupMessages(postbox: postbox, stateManager: stateManager, messages: messages.map { $0.0 }, result: result)
                         |> mapError { _ -> MTRpcError in
@@ -1728,6 +1731,7 @@ public final class PendingMessageManager {
                 var suggestedPost: Api.SuggestedPost?
                 
                 var flags: Int32 = 0
+                if network.fullGramGhostMode.current.shouldSendSilently { flags |= Int32(1 << 5) }
                 
                 var topMsgId: Int32?
                 var monoforumPeerId: Api.InputPeer?
@@ -2132,6 +2136,8 @@ public final class PendingMessageManager {
                             |> mapError { _ -> MTRpcError in
                             }
                         case let .result(result):
+                            network.fullGramReassertOfflineAfterSending()
+                            fullGramMarkReadAfterSending(postbox: postbox, network: network, stateManager: stateManager, messages: [message])
                             return strongSelf.applySentMessage(postbox: postbox, stateManager: stateManager, message: message, content: content, result: result)
                             |> mapError { _ -> MTRpcError in
                             }

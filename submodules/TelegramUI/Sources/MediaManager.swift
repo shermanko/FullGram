@@ -244,7 +244,7 @@ public final class MediaManagerImpl: NSObject, MediaManager {
                 }
             }
             
-            if let (account, stateOrLoading, type) = stateAndType, type == .music, case let .state(state) = stateOrLoading, let displayData = state.item.displayData {
+            if FullGramExtras.shared.trackOnLockScreen, let (account, stateOrLoading, type) = stateAndType, type == .music, case let .state(state) = stateOrLoading, let displayData = state.item.displayData {
                 if previousDisplayData != displayData {
                     previousDisplayData = displayData
                     

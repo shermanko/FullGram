@@ -207,10 +207,14 @@ private final class MultiplexedRequestManagerContext {
     }
     
     private func limits(_ target: MultiplexedRequestTarget) -> (requestsPerWorker: Int, workersPerTarget: Int) {
+        let boosted = FullGramExtras.shared.downloadBoost
         switch target {
         case .main:
-            return (3, 4)
+            return boosted ? (5, 8) : (3, 4)
         case .cdn:
+            if boosted {
+                return (max(self.cdnMaxRequestsPerWorker, 6), max(self.cdnMaxWorkersPerTarget, 10))
+            }
             return (self.cdnMaxRequestsPerWorker, self.cdnMaxWorkersPerTarget)
         }
     }
@@ -287,14 +291,13 @@ private final class MultiplexedRequestManagerContext {
                 self.targetContexts[targetKey] = []
             }
             var selectedContext: RequestTargetContext?
-            for targetContext in self.targetContexts[targetKey]! {
-                if targetContext.requests.count < maxRequestsPerWorker {
-                    selectedContext = targetContext
-                    break
-                }
-            }
-            if selectedContext == nil {
-                if self.targetContexts[targetKey]!.count < maxWorkersPerTarget {
+            if FullGramExtras.shared.downloadBoost {
+                // Least-loaded worker distribution + eager worker spawning up to maxWorkersPerTarget
+                let existing = self.targetContexts[targetKey]!
+                let leastLoaded = existing.filter { $0.requests.count < maxRequestsPerWorker }.min { $0.requests.count < $1.requests.count }
+                if let candidate = leastLoaded, candidate.requests.isEmpty || existing.count >= maxWorkersPerTarget {
+                    selectedContext = candidate
+                } else if existing.count < maxWorkersPerTarget {
                     if let worker = self.takeWorker(request.target, request.tag, request.continueInBackground) {
                         let contextId = self.nextId
                         self.nextId += 1
@@ -302,10 +305,32 @@ private final class MultiplexedRequestManagerContext {
                         self.targetContexts[targetKey]!.append(targetContext)
                         selectedContext = targetContext
                     } else {
-                        Logger.shared.log("MultiplexedRequestManager", "couldn't take worker")
+                        selectedContext = leastLoaded
                     }
                 } else {
                     saturatedTargets.insert(targetKey)
+                }
+            } else {
+                for targetContext in self.targetContexts[targetKey]! {
+                    if targetContext.requests.count < maxRequestsPerWorker {
+                        selectedContext = targetContext
+                        break
+                    }
+                }
+                if selectedContext == nil {
+                    if self.targetContexts[targetKey]!.count < maxWorkersPerTarget {
+                        if let worker = self.takeWorker(request.target, request.tag, request.continueInBackground) {
+                            let contextId = self.nextId
+                            self.nextId += 1
+                            let targetContext = RequestTargetContext(id: contextId, worker: worker)
+                            self.targetContexts[targetKey]!.append(targetContext)
+                            selectedContext = targetContext
+                        } else {
+                            Logger.shared.log("MultiplexedRequestManager", "couldn't take worker")
+                        }
+                    } else {
+                        saturatedTargets.insert(targetKey)
+                    }
                 }
             }
             if let selectedContext = selectedContext {

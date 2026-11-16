@@ -1469,14 +1469,105 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
                     showTranslateIfTopical = true
                 }
                 
-                var (canTranslate, _) = canTranslateText(context: context, text: messageText, showTranslate: translationSettings.showTranslate, showTranslateIfTopical: showTranslateIfTopical, ignoredLanguages: translationSettings.ignoredLanguages)
+                let fullGramGhostSettings = context.account.network.fullGramGhostMode.current
+                let fullGramShowTranslate = fullGramGhostSettings.interface.showTranslate
+                let fullGramCustomProvider = fullGramGhostSettings.translation.provider != .telegram
+                var (canTranslate, _) = canTranslateText(context: context, text: messageText, showTranslate: translationSettings.showTranslate || fullGramCustomProvider, showTranslateIfTopical: showTranslateIfTopical, ignoredLanguages: translationSettings.ignoredLanguages)
                 if let peerId = chatPresentationInterfaceState.chatLocation.peerId, peerId.namespace == Namespaces.Peer.SecretChat {
                     canTranslate = false
                 }
-                if canTranslate {
+                if FullGramPluginManager.shared.isSystemEnabled {
+                    if let docFile = message.media.first(where: { $0 is TelegramMediaFile }) as? TelegramMediaFile,
+                       let fileName = docFile.fileName {
+                        let ext = (fileName as NSString).pathExtension.lowercased()
+                        if ext == "lua" || ext == "py" {
+                            actions.append(.action(ContextMenuActionItem(text: "Установить плагин FullGram", icon: { theme in
+                                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Download"), color: theme.actionSheet.primaryTextColor)
+                            }, action: { _, f in
+                                let _ = (context.engine.resources.data(id: EngineMediaResource.Id(docFile.resource.id))
+                                |> filter { $0.isComplete }
+                                |> take(1)
+                                |> deliverOnMainQueue).startStandalone(next: { data in
+                                    if let code = try? String(contentsOfFile: data.path, encoding: .utf8) {
+                                        let lang: FullGramPluginLanguage = ext == "py" ? .python : .lua
+                                        let name = (fileName as NSString).deletingPathExtension
+                                        let saved = FullGramPluginManager.shared.savePlugin(name: name, language: lang, code: code, enabled: true)
+                                        controllerInteraction.presentController(textAlertController(context: context, title: "Плагин установлен", text: "«\(saved.name)» [\(lang.displayName)] добавлен и включён.", actions: [
+                                            TextAlertAction(type: .defaultAction, title: "OK", action: {})
+                                        ]), nil)
+                                    }
+                                })
+                                f(.default)
+                            })))
+                        }
+                    }
+                    if FullGramPluginManager.shared.hasMessageActionPlugins(), !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        actions.append(.action(ContextMenuActionItem(text: "Обработать плагином", icon: { theme in
+                            return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Copy"), color: theme.actionSheet.primaryTextColor)
+                        }, action: { _, f in
+                            if let output = FullGramPluginManager.shared.runMessageAction(text: messageText, peerId: message.id.peerId.toInt64()) {
+                                controllerInteraction.presentController(textAlertController(
+                                    context: context,
+                                    title: "Результат плагина",
+                                    text: output,
+                                    actions: [
+                                        TextAlertAction(type: .genericAction, title: chatPresentationInterfaceState.strings.Conversation_ContextMenuCopy, action: {
+                                            UIPasteboard.general.string = output
+                                        }),
+                                        TextAlertAction(type: .defaultAction, title: chatPresentationInterfaceState.strings.Common_OK, action: {})
+                                    ]
+                                ), nil)
+                            }
+                            f(.default)
+                        })))
+                    }
+                }
+                if fullGramShowTranslate && (canTranslate || (fullGramCustomProvider && !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)) {
                     actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_ContextMenuTranslate, icon: { theme in
                         return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Translate"), color: theme.actionSheet.primaryTextColor)
                     }, action: { _, f in
+                        if fullGramCustomProvider {
+                            let _ = (context.engine.messages.fullGramTranslate(text: messageText)
+                            |> deliverOnMainQueue).startStandalone(next: { translatedText in
+                                let alertController = textAlertController(
+                                    context: context,
+                                    title: "Перевод (\(fullGramGhostSettings.translation.provider.title))",
+                                    text: translatedText,
+                                    actions: [
+                                        TextAlertAction(type: .genericAction, title: chatPresentationInterfaceState.strings.Conversation_ContextMenuCopy, action: {
+                                            UIPasteboard.general.string = translatedText
+                                        }),
+                                        TextAlertAction(type: .defaultAction, title: chatPresentationInterfaceState.strings.Common_OK, action: {})
+                                    ]
+                                )
+                                controllerInteraction.presentController(alertController, nil)
+                            }, error: { error in
+                                let errorMessage: String
+                                switch error {
+                                case .emptyText:
+                                    errorMessage = "Пустой текст для перевода."
+                                case .missingApiKey:
+                                    errorMessage = "Укажите API-ключ в настройках FullGram → Чаты → Перевод."
+                                case .invalidEndpoint:
+                                    errorMessage = "Некорректный адрес сервера перевода."
+                                case .networkError:
+                                    errorMessage = "Ошибка сети при обращении к сервису перевода."
+                                case let .responseError(details):
+                                    errorMessage = details
+                                }
+                                let alertController = textAlertController(
+                                    context: context,
+                                    title: "Ошибка перевода",
+                                    text: errorMessage,
+                                    actions: [
+                                        TextAlertAction(type: .defaultAction, title: chatPresentationInterfaceState.strings.Common_OK, action: {})
+                                    ]
+                                )
+                                controllerInteraction.presentController(alertController, nil)
+                            })
+                            f(.default)
+                            return
+                        }
                         var messageEntities: [MessageTextEntity]?
                         for attribute in message.attributes {
                             if let attribute = attribute as? TextEntitiesMessageAttribute {
@@ -1513,6 +1604,33 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
         }
         
         if resourceAvailable, !message.containsSecretMedia && !isCopyProtected {
+            var mediaReference: AnyMediaReference?
+            var isVideo = false
+            for media in message.effectiveMedia {
+                if let image = media as? TelegramMediaImage, let _ = largestImageRepresentation(image.representations) {
+                    mediaReference = ImageMediaReference.standalone(media: image).abstract
+                    break
+                } else if let file = media as? TelegramMediaFile, file.isVideo {
+                    mediaReference = FileMediaReference.standalone(media: file).abstract
+                    isVideo = true
+                    break
+                }
+            }
+            if let mediaReference = mediaReference {
+                actions.append(.action(ContextMenuActionItem(text: isVideo ? chatPresentationInterfaceState.strings.Gallery_SaveVideo : chatPresentationInterfaceState.strings.Gallery_SaveImage, icon: { theme in
+                    return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Save"), color: theme.actionSheet.primaryTextColor)
+                }, action: { _, f in
+                    let _ = (saveToCameraRoll(context: context, userLocation: .peer(message.id.peerId), mediaReference: mediaReference)
+                             |> deliverOnMainQueue).startStandalone(completed: {
+                        Queue.mainQueue().after(0.2) {
+                            let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+                            controllerInteraction.presentControllerInCurrent(UndoOverlayController(presentationData: presentationData, content: .mediaSaved(text: isVideo ? presentationData.strings.Gallery_VideoSaved : presentationData.strings.Gallery_ImageSaved), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return true }), nil)
+                        }
+                    })
+                    f(.default)
+                })))
+            }
+        } else if resourceAvailable, message.containsSecretMedia, FullGramExtras.shared.saveViewOnce && FullGramExtras.shared.viewOnceMenuSave {
             var mediaReference: AnyMediaReference?
             var isVideo = false
             for media in message.effectiveMedia {
@@ -2172,6 +2290,25 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
             }
         }
         
+        let fullGramInterface = context.account.network.fullGramGhostMode.current.interface
+        if fullGramInterface.showAuthorSearch, messages.count == 1, let peer = chatPresentationInterfaceState.renderedPeer?.peer, fullGramCanUseSearchAuthor(peer: EnginePeer(peer)), let author = message.effectiveAuthor ?? message.author {
+            actions.append(.action(ContextMenuActionItem(text: "Сообщения автора", icon: { theme in
+                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Search"), color: theme.actionSheet.primaryTextColor)
+            }, action: { _, f in
+                interfaceInteraction.beginMessageSearch(.member(author), "")
+                f(.default)
+            })))
+        }
+        if fullGramInterface.showCopyMessageIds, messages.count == 1 {
+            actions.append(.action(ContextMenuActionItem(text: "Скопировать ID (\(message.id.id))", icon: { theme in
+                return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Copy"), color: theme.actionSheet.primaryTextColor)
+            }, action: { _, f in
+                UIPasteboard.general.string = "\(message.id.id)"
+                controllerInteraction.displayUndo(.copy(text: "ID сообщения скопирован: \(message.id.id)"))
+                f(.default)
+            })))
+        }
+
         var canViewStats = false
         var canViewAuthor = false
         if let channel = chatPresentationInterfaceState.renderedPeer?.peer as? TelegramChannel, channel.isMonoForum, let associatedPeerId = channel.associatedPeerId {
@@ -2212,7 +2349,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
             }), false), at: 0)
         }
         
-        if let peer = message.peers[message.id.peerId], (canViewStats || reactionCount != 0) {
+        if fullGramInterface.showReadSummary, let peer = message.peers[message.id.peerId], (canViewStats || reactionCount != 0) {
             var hasReadReports = false
             if let channel = peer as? TelegramChannel {
                 if case .group = channel.info {
@@ -2350,7 +2487,7 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
         }
         let showsBubblelessInfoRows = !chatPresentationInterfaceState.bubbleCorners.bubbleMode && chatMessageBubblelessMenuShowsInfoRows(bubbleMode: false, isMessageOptions: isMessageOptions, incoming: message.effectivelyIncoming(context.account.peerId), isAd: message.adAttribute != nil, isService: chatMessageMediaKind(message) == .service)
         
-        if isEdited {
+        if isEdited && fullGramInterface.showEditedInfo {
             if !actions.isEmpty {
                 actions.insert(.separator, at: 0)
             }

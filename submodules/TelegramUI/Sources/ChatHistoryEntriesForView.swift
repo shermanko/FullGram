@@ -168,9 +168,13 @@ func chatHistoryEntriesForView(
         }
     }
     
+    let fgHidePaidAds = FullGramExtras.shared.hidePaidAds
     var count = 0
     loop: for entry in view.entries {
         var message = entry.message.withAppliedEphemeralReplacementMessage()
+        if fgHidePaidAds, message.id.peerId.namespace == Namespaces.Peer.CloudChannel, FullGramPaidAds.isAd(message.text, messageKey: "\(message.id.peerId.toInt64()):\(message.id.namespace):\(message.id.id)", version: message.stableVersion) {
+            continue
+        }
         var isRead = entry.isRead
         
         var pinToTop = false

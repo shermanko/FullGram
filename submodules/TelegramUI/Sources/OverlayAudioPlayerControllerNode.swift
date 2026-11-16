@@ -82,6 +82,15 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
     private var peer: EnginePeer?
     
     private var copyProtectionEnabled = false
+    private var lyricsOverlayView: FullGramLyricsOverlayView?
+    private var lyricsButton: UIButton?
+    private var mixerOverlayView: FullGramPlayerMixerOverlayView?
+    private var mixerButton: UIButton?
+    private var sleepTimerButton: UIButton?
+    private var sleepTimerObserver: NSObjectProtocol?
+    private var sleepTimerFiredObserver: NSObjectProtocol?
+    private var lyricsStateDisposable: Disposable?
+    private var currentTrackInfo: (title: String, artist: String?, duration: Double)?
         
     init(
         context: AccountContext,
@@ -495,6 +504,67 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
         self.historyFrameNode.addSubnode(self.historyFrameTopMaskNode)
         self.historyFrameNode.addSubnode(self.collapseNode)
         
+        let lyricsBtn = UIButton(type: .system)
+        lyricsBtn.setImage(UIImage(systemName: "quote.bubble"), for: .normal)
+        lyricsBtn.tintColor = self.presentationData.theme.list.itemAccentColor
+        lyricsBtn.backgroundColor = self.presentationData.theme.list.itemBlocksBackgroundColor.withAlphaComponent(0.75)
+        lyricsBtn.layer.cornerRadius = 15.0
+        lyricsBtn.addTarget(self, action: #selector(self.toggleLyricsOverlay), for: .touchUpInside)
+        self.historyFrameNode.view.addSubview(lyricsBtn)
+        self.lyricsButton = lyricsBtn
+        
+        let mixerBtn = UIButton(type: .system)
+        mixerBtn.setImage(UIImage(systemName: "slider.vertical.3"), for: .normal)
+        mixerBtn.tintColor = self.presentationData.theme.list.itemAccentColor
+        mixerBtn.backgroundColor = self.presentationData.theme.list.itemBlocksBackgroundColor.withAlphaComponent(0.75)
+        mixerBtn.layer.cornerRadius = 15.0
+        mixerBtn.addTarget(self, action: #selector(self.toggleMixerOverlay), for: .touchUpInside)
+        self.historyFrameNode.view.addSubview(mixerBtn)
+        self.mixerButton = mixerBtn
+        
+        let sleepBtn = UIButton(type: .system)
+        sleepBtn.setImage(UIImage(systemName: "moon.zzz"), for: .normal)
+        sleepBtn.tintColor = self.presentationData.theme.list.itemAccentColor
+        sleepBtn.backgroundColor = self.presentationData.theme.list.itemBlocksBackgroundColor.withAlphaComponent(0.75)
+        sleepBtn.layer.cornerRadius = 15.0
+        sleepBtn.titleLabel?.font = .systemFont(ofSize: 11.0, weight: .semibold)
+        sleepBtn.addTarget(self, action: #selector(self.openSleepTimerMenu), for: .touchUpInside)
+        self.historyFrameNode.view.addSubview(sleepBtn)
+        self.sleepTimerButton = sleepBtn
+        self.updateSleepTimerButtonAppearance()
+        
+        self.sleepTimerObserver = NotificationCenter.default.addObserver(forName: FullGramSleepTimer.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.updateSleepTimerButtonAppearance()
+        }
+        self.sleepTimerFiredObserver = NotificationCenter.default.addObserver(forName: FullGramSleepTimer.didFireNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.controlsNode.control?(.playback(.pause))
+        }
+        
+        self.lyricsStateDisposable = (context.sharedContext.mediaManager.musicMediaPlayerState
+        |> deliverOnMainQueue).startStrict(next: { [weak self] state in
+            guard let self else { return }
+            if case let .item(itemState) = state, let item = itemState.item as? SharedMediaPlaylistItem {
+                if let file = item.playbackData?.source as? TelegramMediaFile {
+                    for attr in file.attributes {
+                        if case let .Audio(_, duration, title, performer, _) = attr {
+                            let trackTitle = title ?? file.fileName ?? ""
+                            let hadTrack = self.currentTrackInfo != nil
+                            let changed = self.currentTrackInfo?.title != trackTitle || self.currentTrackInfo?.artist != performer
+                            self.currentTrackInfo = (trackTitle, performer, Double(duration))
+                            if changed && hadTrack {
+                                FullGramSleepTimer.shared.handleTrackChanged()
+                            }
+                            if changed, let overlay = self.lyricsOverlayView, overlay.superview != nil {
+                                overlay.load(title: trackTitle, artist: performer, duration: Double(duration))
+                            }
+                            break
+                        }
+                    }
+                }
+                self.lyricsOverlayView?.updatePlayback(time: itemState.status.timestamp)
+            }
+        })
+        
         self.historyNode.beganInteractiveDragging = { [weak self] _ in
             self?.controlsNode.collapse()
         }
@@ -610,6 +680,89 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
         self.replacementHistoryNodeReadyDisposable.dispose()
         self.dataDisposable?.dispose()
         self.saveMediaDisposable?.dispose()
+        self.lyricsStateDisposable?.dispose()
+        if let observer = self.sleepTimerObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = self.sleepTimerFiredObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+    
+    private func updateSleepTimerButtonAppearance() {
+        guard let btn = self.sleepTimerButton else { return }
+        if let label = FullGramSleepTimer.shared.shortLabel {
+            btn.setImage(nil, for: .normal)
+            btn.setTitle(label, for: .normal)
+            btn.backgroundColor = self.presentationData.theme.list.itemAccentColor
+            btn.tintColor = .white
+            btn.setTitleColor(.white, for: .normal)
+        } else {
+            btn.setTitle(nil, for: .normal)
+            btn.setImage(UIImage(systemName: "moon.zzz"), for: .normal)
+            btn.backgroundColor = self.presentationData.theme.list.itemBlocksBackgroundColor.withAlphaComponent(0.75)
+            btn.tintColor = self.presentationData.theme.list.itemAccentColor
+        }
+    }
+    
+    @objc private func toggleMixerOverlay() {
+        if let existing = self.mixerOverlayView, existing.superview != nil {
+            UIView.animate(withDuration: 0.22, animations: {
+                existing.alpha = 0.0
+            }, completion: { _ in
+                existing.removeFromSuperview()
+            })
+            return
+        }
+        let overlay = self.mixerOverlayView ?? FullGramPlayerMixerOverlayView(frame: self.bounds)
+        overlay.onClose = { [weak self] in
+            self?.toggleMixerOverlay()
+        }
+        overlay.frame = self.bounds
+        overlay.alpha = 0.0
+        self.view.addSubview(overlay)
+        self.mixerOverlayView = overlay
+        UIView.animate(withDuration: 0.22) {
+            overlay.alpha = 1.0
+        }
+    }
+    
+    @objc private func openSleepTimerMenu() {
+        let alert = UIAlertController(title: "Таймер сна", message: "Остановить музыку автоматически через:", preferredStyle: .actionSheet)
+        alert.addAction(UIAlertAction(title: "15 минут", style: .default) { _ in FullGramSleepTimer.shared.set(mode: .minutes(15)) })
+        alert.addAction(UIAlertAction(title: "30 минут", style: .default) { _ in FullGramSleepTimer.shared.set(mode: .minutes(30)) })
+        alert.addAction(UIAlertAction(title: "60 минут", style: .default) { _ in FullGramSleepTimer.shared.set(mode: .minutes(60)) })
+        alert.addAction(UIAlertAction(title: "В конце трека", style: .default) { _ in FullGramSleepTimer.shared.set(mode: .endOfTrack) })
+        if FullGramSleepTimer.shared.isActive {
+            alert.addAction(UIAlertAction(title: "Выключить таймер", style: .destructive) { _ in FullGramSleepTimer.shared.set(mode: .off) })
+        }
+        alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+        self.getParentController()?.present(alert, animated: true)
+    }
+    
+    @objc private func toggleLyricsOverlay() {
+        if let existing = self.lyricsOverlayView, existing.superview != nil {
+            UIView.animate(withDuration: 0.22, animations: {
+                existing.alpha = 0.0
+            }, completion: { _ in
+                existing.removeFromSuperview()
+            })
+            return
+        }
+        let overlay = self.lyricsOverlayView ?? FullGramLyricsOverlayView(frame: self.bounds)
+        overlay.onClose = { [weak self] in
+            self?.toggleLyricsOverlay()
+        }
+        overlay.frame = self.bounds
+        overlay.alpha = 0.0
+        self.view.addSubview(overlay)
+        self.lyricsOverlayView = overlay
+        if let info = self.currentTrackInfo {
+            overlay.load(title: info.title, artist: info.artist, duration: info.duration)
+        }
+        UIView.animate(withDuration: 0.22) {
+            overlay.alpha = 1.0
+        }
     }
     
     override func didLoad() {
@@ -977,6 +1130,23 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
 
         let listTopInset = layoutTopInset + headerHeight
         let listNodeSize = CGSize(width: layout.size.width, height: layout.size.height - listTopInset - controlsHeight)
+        
+        if let lyricsButton = self.lyricsButton {
+            lyricsButton.frame = CGRect(x: layout.size.width - listSideMargins.right - 34.0, y: layoutTopInset + 4.0, width: 30.0, height: 30.0)
+        }
+        if let mixerButton = self.mixerButton {
+            mixerButton.frame = CGRect(x: layout.size.width - listSideMargins.right - 70.0, y: layoutTopInset + 4.0, width: 30.0, height: 30.0)
+        }
+        if let sleepTimerButton = self.sleepTimerButton {
+            let width: CGFloat = FullGramSleepTimer.shared.isActive ? 48.0 : 30.0
+            sleepTimerButton.frame = CGRect(x: layout.size.width - listSideMargins.right - 76.0 - width, y: layoutTopInset + 4.0, width: width, height: 30.0)
+        }
+        if let lyricsOverlayView = self.lyricsOverlayView, lyricsOverlayView.superview != nil {
+            lyricsOverlayView.frame = CGRect(origin: .zero, size: layout.size)
+        }
+        if let mixerOverlayView = self.mixerOverlayView, mixerOverlayView.superview != nil {
+            mixerOverlayView.frame = CGRect(origin: .zero, size: layout.size)
+        }
         
         insets.top = max(0.0, listNodeSize.height - floor(62.0 * 3.5))
         

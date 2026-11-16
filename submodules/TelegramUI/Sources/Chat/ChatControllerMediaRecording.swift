@@ -288,6 +288,10 @@ extension ChatControllerImpl {
                 var resource: LocalFileMediaResource?
                 self.recorderDataDisposable.set(
                     (audioRecorderValue.takenRecordedData()
+                     |> mapToSignal { data -> Signal<RecordedAudioData?, NoError> in
+                         guard let data else { return .single(nil) }
+                         return FullGramProfanityBleep.process(data)
+                     }
                      |> deliverOnMainQueue).startStrict(
                         next: { [weak self] data in
                             if let strongSelf = self, let data = data {
@@ -343,6 +347,10 @@ extension ChatControllerImpl {
             case let .send(viewOnce):
                 self.chatDisplayNode.updateRecordedMediaDeleted(false)
                 self.recorderDataDisposable.set((audioRecorderValue.takenRecordedData()
+                |> mapToSignal { data -> Signal<RecordedAudioData?, NoError> in
+                    guard let data else { return .single(nil) }
+                    return FullGramProfanityBleep.process(data)
+                }
                 |> deliverOnMainQueue).startStrict(next: { [weak self] data in
                     if let strongSelf = self, let data = data {
                         if data.duration < 0.5 {

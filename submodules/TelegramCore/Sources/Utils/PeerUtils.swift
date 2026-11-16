@@ -245,6 +245,16 @@ public extension Peer {
     var isPremium: Bool {
         switch self {
         case let user as TelegramUser:
+            return user.flags.contains(.isPremium) || FullGramLocalPremium.contains(user.id)
+        default:
+            return false
+        }
+    }
+
+    /// The subscription the server knows about; limits and server-enforced checks use this.
+    var isServerPremium: Bool {
+        switch self {
+        case let user as TelegramUser:
             return user.flags.contains(.isPremium)
         default:
             return false

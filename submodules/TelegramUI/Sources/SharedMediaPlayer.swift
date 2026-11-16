@@ -250,6 +250,7 @@ final class SharedMediaPlayer {
                     }
                     if let playbackItem = strongSelf.playbackItem {
                         playbackItem.setForceAudioToSpeaker(strongSelf.forceAudioToSpeaker)
+                        let fgStopsAtEnd = strongSelf.type == .voice && FullGramExtras.shared.noAutoplayNextVoice
                         playbackItem.setActionAtEnd({
                             Queue.mainQueue().async {
                                 if let strongSelf = self {
@@ -258,6 +259,10 @@ final class SharedMediaPlayer {
                                             strongSelf.playbackItem?.seek(0.0)
                                             strongSelf.playbackItem?.play()
                                         default:
+                                            if fgStopsAtEnd {
+                                                strongSelf.mediaManager?.setPlaylist(nil, type: .voice, control: .playback(.pause))
+                                                return
+                                            }
                                             strongSelf.scheduledPlaybackAction = .play
                                             strongSelf.control(.next)
                                     }
@@ -369,7 +374,7 @@ final class SharedMediaPlayer {
             self?._playbackStateValue = value
         })
         
-        if controlPlaybackWithProximity {
+        if controlPlaybackWithProximity && !FullGramExtras.shared.keepScreenOnInVoice {
             self.proximityManagerIndex = DeviceProximityManager.shared().add { [weak self] value in
                 let forceAudioToSpeaker = !value
                 if let strongSelf = self, strongSelf.forceAudioToSpeaker != forceAudioToSpeaker {

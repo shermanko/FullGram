@@ -274,20 +274,49 @@ extension ReplayContext {
     }
     
     func applyDeleteMessagesWithGlobalIds(_ ids: [Int32]) {
+        var idsToDelete: [Int32] = []
+        var retainedMessageIds: [MessageId] = []
+        for globalId in ids {
+            if let messageId = transaction.messageIdForGloballyUniqueMessageId(globalId), let message = transaction.getMessage(messageId) {
+                if fullGramRetainDeletedMessage(transaction: transaction, mediaBox: mediaBox, message: message) {
+                    retainedMessageIds.append(messageId)
+                    continue
+                }
+            }
+            idsToDelete.append(globalId)
+        }
         var resourceIds: [MediaResourceId] = []
-        transaction.deleteMessagesWithGlobalIds(ids, forEachMedia: { media in
-            addMessageMediaResourceIdsToRemove(media: media, resourceIds: &resourceIds)
-        })
+        if !idsToDelete.isEmpty {
+            transaction.deleteMessagesWithGlobalIds(idsToDelete, forEachMedia: { media in
+                addMessageMediaResourceIdsToRemove(media: media, resourceIds: &resourceIds)
+            })
+        }
         if !resourceIds.isEmpty {
             let _ = mediaBox.removeCachedResources(Array(Set(resourceIds)), force: true).start()
         }
-        deletedMessageIds.append(contentsOf: ids.map { .global($0) })
+        deletedMessageIds.append(contentsOf: idsToDelete.map { .global($0) })
+        deletedMessageIds.append(contentsOf: retainedMessageIds.map { .messageId($0) })
     }
     
     func applyDeleteMessages(_ ids: [MessageId]) {
-        _internal_deleteMessages(transaction: transaction, mediaBox: mediaBox, ids: ids, manualAddMessageThreadStatsDifference: { id, add, remove in
-            self.addMessageThreadStatsDifference(threadKey: id, remove: remove, addedMessagePeer: nil, addedMessageId: nil, isOutgoing: false)
-        })
+        var idsToDelete: [MessageId] = []
+        for id in ids {
+            if let message = transaction.getMessage(id) {
+                if fullGramRetainDeletedMessage(transaction: transaction, mediaBox: mediaBox, message: message) {
+                    if id.peerId.namespace == Namespaces.Peer.CloudChannel && id.namespace == Namespaces.Message.Cloud, let threadId = message.threadId {
+                        let messageThreadKey = MessageThreadKey(peerId: message.id.peerId, threadId: threadId)
+                        self.addMessageThreadStatsDifference(threadKey: messageThreadKey, remove: 1, addedMessagePeer: nil, addedMessageId: nil, isOutgoing: false)
+                    }
+                    continue
+                }
+            }
+            idsToDelete.append(id)
+        }
+        if !idsToDelete.isEmpty {
+            _internal_deleteMessages(transaction: transaction, mediaBox: mediaBox, ids: idsToDelete, manualAddMessageThreadStatsDifference: { id, add, remove in
+                self.addMessageThreadStatsDifference(threadKey: id, remove: remove, addedMessagePeer: nil, addedMessageId: nil, isOutgoing: false)
+            })
+        }
         deletedMessageIds.append(contentsOf: ids.map { .messageId($0) })
     }
     
@@ -305,6 +334,9 @@ extension ReplayContext {
     }
     
     func applyEditMessage(_ id: MessageId, _ message: StoreMessage) {
+        if let previous = transaction.getMessage(id) {
+            fullGramArchiveMessage(transaction: transaction, mediaBox: mediaBox, message: previous, kind: .edited, updated: message)
+        }
         var generatedEvent: (reactionAuthor: Peer, reaction: MessageReaction.Reaction, message: Message, timestamp: Int32)?
         transaction.updateMessage(id, update: { previousMessage in
             let peers: [PeerId:Peer] = previousMessage.peers.reduce([:], { current, value in

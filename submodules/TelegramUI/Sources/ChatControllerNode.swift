@@ -300,6 +300,8 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
     private var disappearingNode: ChatInputNode?
     
     private(set) var textInputPanelNode: ChatTextInputPanelNode?
+    private var fullGramPluginCommandBar: FullGramPluginCommandBarView?
+    private var fullGramFormattingBar: FullGramFormattingBarView?
     
     private var inputMediaNodeData: ChatEntityKeyboardInputNode.InputData?
     private var inputMediaNodeDataPromise = Promise<ChatEntityKeyboardInputNode.InputData>()
@@ -2863,6 +2865,15 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
         transition.updateBounds(node: self.inputPanelOverlayNode, bounds: CGRect(origin: CGPoint(x: 0.0, y: apparentInputBackgroundFrame.origin.y), size: layout.size), beginWithCurrentState: true)
         transition.updateFrame(node: self.inputPanelBackgroundNode, frame: apparentInputBackgroundFrame, beginWithCurrentState: true)
         
+        if let commandBar = self.fullGramPluginCommandBar {
+            commandBar.frame = CGRect(
+                x: layout.safeInsets.left + 8.0,
+                y: max(insets.top + 8.0, apparentInputBackgroundFrame.minY - 46.0),
+                width: max(120.0, layout.size.width - layout.safeInsets.left - layout.safeInsets.right - 16.0),
+                height: 40.0
+            )
+        }
+        
         if let headerPanelsComponentView = self.headerPanelsView?.view, let headerPanelsSize {
             sidePanelTopInset += 8.0
             let headerPanelsFrame = CGRect(origin: CGPoint(x: layout.safeInsets.left, y: sidePanelTopInset), size: headerPanelsSize)
@@ -3912,6 +3923,95 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                 self.overrideUpdateTextInputHeightTransition = transition
                 textInputPanelNode.updateInputTextState(chatPresentationInterfaceState.interfaceState.effectiveInputState, keepSendButtonEnabled: keepSendButtonEnabled, extendedSearchLayout: extendedSearchLayout, accessoryItems: chatPresentationInterfaceState.inputTextPanelState.accessoryItems, animated: transition.isAnimated)
                 self.overrideUpdateTextInputHeightTransition = previous
+                
+                let plainText = chatPresentationInterfaceState.interfaceState.effectiveInputState.inputText.string
+                if self.fullGramPluginCommandBar == nil && plainText.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(".") {
+                    let bar = FullGramPluginCommandBarView(frame: CGRect(x: 8.0, y: 0.0, width: max(120.0, self.bounds.width - 16.0), height: 40.0))
+                    bar.onSelectCommand = { [weak self] cmd in
+                        self?.controller?.updateChatPresentationInterfaceState(animated: false, interactive: true, {
+                            $0.updatedInterfaceState { $0.withUpdatedComposeInputState(ChatTextInputState(inputText: NSAttributedString(string: cmd), selectionRange: cmd.count ..< cmd.count)) }
+                        })
+                    }
+                    self.view.addSubview(bar)
+                    self.fullGramPluginCommandBar = bar
+                }
+                var commandBarVisible = false
+                if let bar = self.fullGramPluginCommandBar {
+                    let visible = bar.update(query: plainText, accentColor: chatPresentationInterfaceState.theme.chat.inputPanel.actionControlFillColor)
+                    commandBarVisible = visible
+                    if visible {
+                        let y = max(44.0, self.inputPanelBackgroundNode.frame.minY - 46.0)
+                        bar.frame = CGRect(x: 8.0, y: y, width: max(120.0, self.bounds.width - 16.0), height: 40.0)
+                        self.view.bringSubviewToFront(bar)
+                    }
+                }
+
+                let shouldShowFormattingBar = FullGramExtras.shared.quickFormattingBar
+                    && !commandBarVisible
+                    && !plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    && self.overlayContextPanelNode == nil
+                    && chatPresentationInterfaceState.inputMode == .text
+                if self.fullGramFormattingBar == nil && shouldShowFormattingBar {
+                    let fmtBar = FullGramFormattingBarView(frame: CGRect(x: 8.0, y: 0.0, width: max(120.0, self.bounds.width - 16.0), height: 34.0))
+                    fmtBar.onSelectAction = { [weak self] action in
+                        guard let self, let panel = self.textInputPanelNode else { return }
+                        if action == .ai {
+                            var info: [AnyHashable: Any] = [:]
+                            if let pid = self.chatLocation.peerId?.toInt64() {
+                                info["peerId"] = pid
+                            }
+                            NotificationCenter.default.post(name: FullGramAINotifications.openWindow, object: nil, userInfo: info)
+                            return
+                        }
+                        if action == .clear {
+                            if panel.performNativeFormatShortcut(.clearFormatting) { return }
+                            if panel.performLegacyFormatShortcut({ chatTextInputClearFormattingAttributes($0) }) { return }
+                            self.interfaceInteraction?.updateTextInputStateAndMode { (chatTextInputClearFormattingAttributes($0), $1) }
+                            return
+                        }
+                        let nativeRan: Bool
+                        let attr: NSAttributedString.Key
+                        switch action {
+                        case .bold:
+                            nativeRan = panel.performNativeFormatShortcut(.bold)
+                            attr = ChatTextInputAttributes.bold
+                        case .italic:
+                            nativeRan = panel.performNativeFormatShortcut(.italic)
+                            attr = ChatTextInputAttributes.italic
+                        case .underline:
+                            nativeRan = panel.performNativeFormatShortcut(.underline)
+                            attr = ChatTextInputAttributes.underline
+                        case .strikethrough:
+                            nativeRan = panel.performNativeFormatShortcut(.strikethrough)
+                            attr = ChatTextInputAttributes.strikethrough
+                        case .monospace:
+                            nativeRan = panel.performNativeFormatShortcut(.monospace)
+                            attr = ChatTextInputAttributes.monospace
+                        case .spoiler:
+                            nativeRan = panel.performNativeFormatShortcut(.spoiler)
+                            attr = ChatTextInputAttributes.spoiler
+                        case .ai, .clear:
+                            return
+                        }
+                        if nativeRan { return }
+                        if panel.performLegacyFormatShortcut({ chatTextInputAddFormattingAttribute($0, attribute: attr, value: nil) }) { return }
+                        self.interfaceInteraction?.updateTextInputStateAndMode { (chatTextInputAddFormattingAttribute($0, attribute: attr, value: nil), $1) }
+                    }
+                    self.view.addSubview(fmtBar)
+                    self.fullGramFormattingBar = fmtBar
+                }
+                if let fmtBar = self.fullGramFormattingBar {
+                    fmtBar.update(
+                        visible: shouldShowFormattingBar,
+                        accentColor: chatPresentationInterfaceState.theme.chat.inputPanel.actionControlFillColor,
+                        isDark: chatPresentationInterfaceState.theme.overallDarkAppearance
+                    )
+                    if shouldShowFormattingBar {
+                        let y = max(44.0, self.inputPanelBackgroundNode.frame.minY - 40.0)
+                        fmtBar.frame = CGRect(x: 8.0, y: y, width: max(120.0, self.bounds.width - 16.0), height: 34.0)
+                        self.view.bringSubviewToFront(fmtBar)
+                    }
+                }
             } else {
                 self.textInputPanelNode?.updateKeepSendButtonEnabled(keepSendButtonEnabled: keepSendButtonEnabled, extendedSearchLayout: extendedSearchLayout, animated: transition.isAnimated)
             }

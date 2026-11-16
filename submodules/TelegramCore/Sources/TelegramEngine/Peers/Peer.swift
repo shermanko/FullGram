@@ -517,6 +517,10 @@ public extension EnginePeer {
         return self._asPeer().isPremium
     }
     
+    var isServerPremium: Bool {
+        return self._asPeer().isServerPremium
+    }
+
     var isSubscription: Bool {
         return self._asPeer().isSubscription
     }

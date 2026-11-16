@@ -367,7 +367,7 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
             return
         }
         
-        if !context.isPremium, case .inProgress = self.audioTranscriptionState {
+        if !context.isPremium && !FullGramExtras.shared.localFreeTranscription, case .inProgress = self.audioTranscriptionState {
             return
         }
         
@@ -375,7 +375,7 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
         let premiumConfiguration = PremiumConfiguration.with(appConfiguration: arguments.context.currentAppConfiguration.with { $0 })
         
         let transcriptionText = self.forcedAudioTranscriptionText ?? transcribedText(message: EngineMessage(message))
-        if transcriptionText == nil && !arguments.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost {
+        if transcriptionText == nil && !arguments.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost && !FullGramExtras.shared.localFreeTranscription {
             if premiumConfiguration.audioTransciptionTrialCount > 0 {
                 if !arguments.associatedData.isPremium {
                     if self.presentAudioTranscriptionTooltip(finished: false) {
@@ -434,25 +434,20 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
                 self.audioTranscriptionState = .inProgress
                 self.requestUpdateLayout(true)
                 
-                if context.sharedContext.immediateExperimentalUISettings.localTranscription {
+                if context.sharedContext.immediateExperimentalUISettings.localTranscription || (FullGramExtras.shared.localFreeTranscription && !arguments.associatedData.isPremium) {
                     let appLocale = presentationData.strings.baseLanguageCode
-                    
+                    let fetchDisposable = MetaDisposable()
                     let signal: Signal<LocallyTranscribedAudio?, NoError> = context.engine.data.get(TelegramEngine.EngineData.Item.Messages.Message(id: message.id))
-                    |> mapToSignal { message -> Signal<String?, NoError> in
-                        guard let message = message else {
+                    |> mapToSignal { loadedMessage -> Signal<String?, NoError> in
+                        guard let loadedMessage = loadedMessage,
+                              let file = loadedMessage.media.first(where: { $0 is TelegramMediaFile }) as? TelegramMediaFile else {
                             return .single(nil)
                         }
-                        guard let file = message.media.first(where: { $0 is TelegramMediaFile }) as? TelegramMediaFile else {
-                            return .single(nil)
-                        }
+                        fetchDisposable.set(messageMediaFileInteractiveFetched(context: context, message: loadedMessage._asMessage(), file: file, userInitiated: true).startStrict())
                         return context.engine.resources.data(id: EngineMediaResource.Id(file.resource.id))
+                        |> filter { $0.isComplete }
                         |> take(1)
-                        |> mapToSignal { data -> Signal<String?, NoError> in
-                            if !data.isComplete {
-                                return .single(nil)
-                            }
-                            return .single(data.path)
-                        }
+                        |> map { $0.path }
                     }
                     |> mapToSignal { result -> Signal<String?, NoError> in
                         guard let result = result else {
@@ -466,7 +461,23 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
                         guard let result = result else {
                             return .single(nil)
                         }
-                        return transcribeAudio(path: result, appLocale: appLocale)
+                        if context.sharedContext.immediateExperimentalUISettings.localTranscription {
+                            return transcribeAudio(path: result, appLocale: appLocale)
+                        }
+                        return Signal { subscriber in
+                            FullGramSpeechBleep.transcribeMediaFile(at: result, preferredLanguage: appLocale, defaultExtension: "m4a") { text in
+                                if let text, !text.isEmpty {
+                                    subscriber.putNext(LocallyTranscribedAudio(text: text, isFinal: true))
+                                } else {
+                                    subscriber.putNext(nil)
+                                }
+                                subscriber.putCompletion()
+                            }
+                            return EmptyDisposable
+                        }
+                    }
+                    |> afterDisposed {
+                        fetchDisposable.dispose()
                     }
                     
                     self.transcribeDisposable = (signal
@@ -789,7 +800,7 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
                     displayTranscribe = false
                 } else if arguments.message.id.peerId.namespace != Namespaces.Peer.SecretChat && !isViewOnceMessage && !arguments.presentationData.isPreview {
                     let premiumConfiguration = PremiumConfiguration.with(appConfiguration: arguments.context.currentAppConfiguration.with { $0 })
-                    if arguments.associatedData.isPremium || arguments.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost {
+                    if arguments.associatedData.isPremium || arguments.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost || FullGramExtras.shared.localFreeTranscription {
                         displayTranscribe = true
                     } else if premiumConfiguration.audioTransciptionTrialCount > 0 {
                         if arguments.incoming {
