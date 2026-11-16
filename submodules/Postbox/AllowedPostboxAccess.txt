@@ -1,16 +1,14 @@
-# Swift files that may still use `.postbox` (Account.postbox member access, or passing the
-# Postbox handle on). Checked by build-system/Make/PostboxImportCheck.py before every Make.py
-# build and test.
 #
-# This list only shrinks. When a refactor wave removes a file's last `.postbox` use, delete its
-# line in the same commit: the check fails while a listed file no longer uses `.postbox`.
-# Adding a line is a deliberate exception, made in review. New code uses TelegramEngine
-# (context.engine...) instead (CLAUDE.md, "Postbox -> TelegramEngine refactor").
-#
-# Not checked: test sources (directories named `Tests` or ending in `Tests`), and Postbox and
-# TelegramCore themselves. Comments and string literals do not count. Keep the entries sorted
 # (byte order, as `LC_ALL=C sort`).
-
+# (context.engine...) instead (CLAUDE.md, "Postbox -> TelegramEngine refactor").
+# Adding a line is a deliberate exception, made in review. New code uses TelegramEngine
+# Not checked: test sources (directories named `Tests` or ending in `Tests`), and Postbox and
+# Postbox handle on). Checked by build-system/Make/PostboxImportCheck.py before every Make.py
+# Swift files that may still use `.postbox` (Account.postbox member access, or passing the
+# TelegramCore themselves. Comments and string literals do not count. Keep the entries sorted
+# This list only shrinks. When a refactor wave removes a file's last `.postbox` use, delete its
+# build and test.
+# line in the same commit: the check fails while a listed file no longer uses `.postbox`.
 Telegram/NotificationService/Sources/NotificationService.swift
 Telegram/SiriIntents/IntentHandler.swift
 Telegram/SiriIntents/IntentMessages.swift
@@ -170,6 +168,7 @@ submodules/TelegramUI/Components/MessageInputPanelComponent/Sources/InputContext
 submodules/TelegramUI/Components/MessageInputPanelComponent/Sources/MediaPreviewPanelComponent.swift
 submodules/TelegramUI/Components/MultiplexedVideoNode/Sources/SoftwareVideoThumbnailLayer.swift
 submodules/TelegramUI/Components/PeerInfo/PeerInfoCoverComponent/Sources/PeerInfoCoverComponent.swift
+submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramSettingsController.swift
 submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/Panes/PeerInfoGifPaneNode.swift
 submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoAvatarTransformContainerNode.swift
 submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoData.swift
@@ -218,6 +217,7 @@ submodules/TelegramUI/Sources/CreatePeerAvatarSetup.swift
 submodules/TelegramUI/Sources/DocumentPreviewController.swift
 submodules/TelegramUI/Sources/EditAccessoryPanelNode.swift
 submodules/TelegramUI/Sources/FetchCachedRepresentations.swift
+submodules/TelegramUI/Sources/FullGramAIOverlay.swift
 submodules/TelegramUI/Sources/HorizontalListContextResultsChatInputPanelItem.swift
 submodules/TelegramUI/Sources/HorizontalStickerGridItem.swift
 submodules/TelegramUI/Sources/InChatPrefetchManager.swift

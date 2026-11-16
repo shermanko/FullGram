@@ -363,6 +363,13 @@ def main() -> int:
 
     py_count = check_python_scripts()
     print(f"[OK] Python build scripts syntax check ({py_count} files)")
+
+    sys.path.insert(0, str(ROOT / "build-system" / "Make"))
+    import PostboxImportCheck
+
+    if PostboxImportCheck.run(str(ROOT)) != 0:
+        raise AssertionError("PostboxImportCheck failed")
+    print("[OK] PostboxImportCheck")
     return 0
 
 

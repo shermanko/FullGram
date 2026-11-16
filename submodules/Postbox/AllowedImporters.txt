@@ -1,14 +1,12 @@
-# Swift files that may still `import Postbox`. Checked by build-system/Make/PostboxImportCheck.py
-# before every Make.py build and test.
 #
-# This list only shrinks. When a refactor wave removes a file's last Postbox import, delete its
-# line in the same commit: the check fails while a listed file no longer imports Postbox.
 # Adding a line is a deliberate exception, made in review. New code uses TelegramEngine and its
-# wrappers instead (CLAUDE.md, "Postbox -> TelegramEngine refactor").
-#
 # Not checked: test sources (directories named `Tests` or ending in `Tests`), and Postbox and
+# Swift files that may still `import Postbox`. Checked by build-system/Make/PostboxImportCheck.py
 # TelegramCore themselves. Keep the entries sorted (byte order, as `LC_ALL=C sort`).
-
+# This list only shrinks. When a refactor wave removes a file's last Postbox import, delete its
+# before every Make.py build and test.
+# line in the same commit: the check fails while a listed file no longer imports Postbox.
+# wrappers instead (CLAUDE.md, "Postbox -> TelegramEngine refactor").
 Telegram/NotificationService/Sources/NotificationService.swift
 Telegram/SiriIntents/IntentContacts.swift
 Telegram/SiriIntents/IntentHandler.swift
@@ -70,6 +68,7 @@ submodules/TelegramUI/Components/MediaEditor/Sources/MediaEditorComposerEntity.s
 submodules/TelegramUI/Components/MediaEditor/Sources/MediaEditorDraft.swift
 submodules/TelegramUI/Components/MediaEditor/Sources/MediaEditorVideoExport.swift
 submodules/TelegramUI/Components/MediaEditorScreen/Sources/StorySource.swift
+submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramSettingsController.swift
 submodules/TelegramUI/Components/Resources/FetchVideoMediaResource/Sources/FetchVideoMediaResource.swift
 submodules/TelegramUI/Components/StickerPickerScreen/Sources/StickerPickerScreen.swift
 submodules/TelegramUI/Components/Stories/StoryContainerScreen/Sources/StoryChatContent.swift
@@ -85,6 +84,7 @@ submodules/TelegramUI/Sources/ChatHistoryViewForLocation.swift
 submodules/TelegramUI/Sources/CreateGroupController.swift
 submodules/TelegramUI/Sources/DocumentPreviewController.swift
 submodules/TelegramUI/Sources/FetchCachedRepresentations.swift
+submodules/TelegramUI/Sources/FullGramAIOverlay.swift
 submodules/TelegramUI/Sources/InChatPrefetchManager.swift
 submodules/TelegramUI/Sources/StoreDownloadedMedia.swift
 submodules/TelegramUI/Sources/TransformOutgoingMessageMedia.swift
