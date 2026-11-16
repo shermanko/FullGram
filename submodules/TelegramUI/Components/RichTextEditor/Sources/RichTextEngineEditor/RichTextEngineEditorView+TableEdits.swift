@@ -48,6 +48,15 @@ extension RichTextEngineEditorView {
         var plan = currentRoles
         plan.replaceSubrange(roles, with: freshRoles)
         let run = wholeRunRange(roles)
+        var target = 0
+        if let wanted = cell {
+            for (index, role) in freshRoles.enumerated() {
+                if role.tableCellCoordinates == wanted {
+                    target = index
+                    break
+                }
+            }
+        }
         // The splice moves the selection twice — the replacement itself, then the caret park — and
         // the selection funnel clears the structural selection on any move it was not told about.
         // The selection is the edit's SUBJECT, not a casualty of it: alignment and the header toggle
@@ -58,22 +67,35 @@ extension RichTextEngineEditorView {
         defer { isParkingCaretForStructuralSelection = wasParking }
         deliveringOneChangeNotification {
             performHostStructuralEdit {
-                replaceFlat(run, with: text, adopting: plan)
-                // An attribute cannot travel through a text edit — the two-step `insertMedia` and
-                // `convertCurrentTableToText` both use.
-                var offset = run.location
-                for block in blocks {
-                    restoreStyleFlat(NSRange(location: offset, length: block.length), from: block)
-                    offset += block.length + 1
-                }
-                let target = cell.flatMap { wanted in
-                    freshRoles.firstIndex { $0.tableCellCoordinates.map { $0 == wanted } ?? false }
-                } ?? 0
-                engineSelectedRange = NSRange(
-                    location: flatOffset(ofRoleAt: roles.lowerBound + target), length: 0)
+                self.applyTableReplacement(
+                    run: run,
+                    text: text,
+                    plan: plan,
+                    blocks: blocks,
+                    targetRoleIndex: roles.lowerBound + target
+                )
             }
         }
         setNeedsLayout()
+    }
+
+    @inline(never)
+    private func applyTableReplacement(
+        run: NSRange,
+        text: String,
+        plan: [EngineBlockRole],
+        blocks: [NSAttributedString],
+        targetRoleIndex: Int
+    ) {
+        replaceFlat(run, with: text, adopting: plan)
+        // An attribute cannot travel through a text edit — the two-step `insertMedia` and
+        // `convertCurrentTableToText` both use.
+        var offset = run.location
+        for block in blocks {
+            restoreStyleFlat(NSRange(location: offset, length: block.length), from: block)
+            offset += block.length + 1
+        }
+        engineSelectedRange = NSRange(location: flatOffset(ofRoleAt: targetRoleIndex), length: 0)
     }
 
     /// The host's record of where each table's run is scrolled, reconciled against the engine.

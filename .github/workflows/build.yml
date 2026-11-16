@@ -355,7 +355,7 @@ jobs:
           PY
 
       - name: Save Bazel disk cache
-        if: success() && inputs.skip_cache != true && steps.bazel-cache.outputs.cache-hit != 'true'
+        if: (!cancelled()) && inputs.skip_cache != true && steps.bazel-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: /Users/Shared/bazel-disk-cache

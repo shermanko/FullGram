@@ -195,6 +195,9 @@ swift_library(
     copts = [
         "-warnings-as-errors",
     ],
+    features = [
+        "-swift.opt_uses_osize",
+    ],
     deps = [
         ":RichTextEditorCore",
         ":RichTextEditorUIKit",
