@@ -225,13 +225,32 @@ jobs:
           cp "$BUILD_CONFIG_PATH" "$SOURCE_DIR/build-input/active-configuration.json"
 
           python3 - <<'PY'
+          import subprocess
           from pathlib import Path
-          for p in Path("build-system/fake-codesigning/profiles").glob("*.mobileprovision"):
-              data = p.read_bytes()
-              updated = data.replace(b"2026-10-30T17:06:30Z", b"2030-12-31T23:59:59Z")
-              if updated != data:
-                  p.write_bytes(updated)
-                  print(f"Updated ExpirationDate in {p.name}")
+
+          p12 = "build-system/fake-codesigning/certs/SelfSigned.p12"
+          key_pem = "/tmp/fg_fake_key.pem"
+          cert_pem = "/tmp/fg_fake_cert.pem"
+          subprocess.run(["openssl", "pkcs12", "-in", p12, "-passin", "pass:", "-nodes", "-nocerts", "-out", key_pem], check=True)
+          subprocess.run(["openssl", "pkcs12", "-in", p12, "-passin", "pass:", "-clcerts", "-nokeys", "-out", cert_pem], check=True)
+
+          for p in sorted(Path("build-system/fake-codesigning/profiles").glob("*.mobileprovision")):
+              plist_tmp = Path("/tmp/fg_profile.plist")
+              subprocess.run(["openssl", "smime", "-inform", "der", "-verify", "-noverify", "-in", str(p), "-out", str(plist_tmp)], check=True)
+              text = plist_tmp.read_text(encoding="utf-8")
+              updated = text.replace("2026-10-30T17:06:30Z", "2030-12-31T23:59:59Z")
+              if updated != text:
+                  plist_tmp.write_text(updated, encoding="utf-8")
+                  subprocess.run([
+                      "openssl", "smime", "-sign",
+                      "-in", str(plist_tmp),
+                      "-signer", cert_pem,
+                      "-inkey", key_pem,
+                      "-nodetach", "-outform", "der",
+                      "-out", str(p),
+                  ], check=True)
+                  subprocess.run(["openssl", "smime", "-inform", "der", "-verify", "-noverify", "-in", str(p)], stdout=subprocess.DEVNULL, check=True)
+                  print(f"Re-signed {p.name} with ExpirationDate 2030-12-31")
           PY
 
           python3 build-system/Make/ImportCertificates.py --path build-system/fake-codesigning/certs
