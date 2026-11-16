@@ -226,22 +226,35 @@ jobs:
 
           HOST_MACOS_MAJOR="$(sw_vers -productVersion | awk -F. '{print $1}')"
           HOST_MACOS_TARGET="${HOST_MACOS_MAJOR}.0"
-          BAZEL_BIN="$(CACHE_DIR="$CACHE_DIR" python3 -c 'import os, sys; sys.path.insert(0, "build-system/Make"); from BazelLocation import locate_bazel; print(locate_bazel(os.getcwd(), None, os.environ.get("CACHE_DIR")))')"
           if [ "$HOST_MACOS_MAJOR" -lt 26 ]; then
-            "$BAZEL_BIN" --output_user_root="$BAZEL_USER_ROOT" help everything-as-text > /tmp/bazel_flags.txt 2>/dev/null || true
-            {
-              echo ""
-              if grep -q -- "--macos_minimum_os" /tmp/bazel_flags.txt; then
-                echo "build:macos --macos_minimum_os=${HOST_MACOS_TARGET}"
-              fi
-              if grep -q -- "--host_macos_minimum_os" /tmp/bazel_flags.txt; then
-                echo "build:macos --host_macos_minimum_os=${HOST_MACOS_TARGET}"
-              fi
-              echo "build:macos --@build_bazel_apple_support//xcode:host_macos_minimum_os=${HOST_MACOS_TARGET}"
-              echo "build:macos --@build_bazel_apple_support//xcode:macos_minimum_os=${HOST_MACOS_TARGET}"
-            } >> "$SOURCE_DIR/.bazelrc"
-            echo "=== .bazelrc macos settings ==="
-            tail -n 10 "$SOURCE_DIR/.bazelrc"
+            echo "Pinning apple_support macOS host target to ${HOST_MACOS_TARGET} (running macOS $(sw_vers -productVersion))"
+            HOST_MACOS_MAJOR="$HOST_MACOS_MAJOR" python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          target = f'{os.environ["HOST_MACOS_MAJOR"]}.0'
+          cc_cfg = Path("build-system/bazel-rules/apple_support/crosstool/cc_toolchain_config.bzl")
+          if cc_cfg.is_file():
+              text = cc_cfg.read_text(encoding="utf-8")
+              needle = "    target_os_version = xcode_config.minimum_os_for_platform_type(platform_type)"
+              replacement = (
+                  "    target_os_version = xcode_config.minimum_os_for_platform_type(platform_type)\n"
+                  "    if platform_type == apple_common.platform_type.macos:\n"
+                  f'        target_os_version = apple_common.dotted_version("{target}")'
+              )
+              if needle in text and "platform_type == apple_common.platform_type.macos:\n        target_os_version" not in text:
+                  cc_cfg.write_text(text.replace(needle, replacement, 1), encoding="utf-8")
+                  print(f"Patched {cc_cfg} macOS target_os_version -> {target}")
+
+          xcode_cfg = Path("build-system/bazel-rules/apple_support/xcode/xcode_config.bzl")
+          if xcode_cfg.is_file():
+              text = xcode_cfg.read_text(encoding="utf-8")
+              needle = '    macos_minimum_os = read_possibly_native_flag(ctx, "macos_minimum_os") or macos_sdk_version'
+              replacement = f'    macos_minimum_os = read_possibly_native_flag(ctx, "macos_minimum_os") or apple_common.dotted_version("{target}")'
+              if needle in text:
+                  xcode_cfg.write_text(text.replace(needle, replacement, 1), encoding="utf-8")
+                  print(f"Patched {xcode_cfg} macos_minimum_os fallback -> {target}")
+          PY
           fi
 
           python3 - <<'PY'
