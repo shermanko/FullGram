@@ -320,7 +320,7 @@ private indirect enum PyExpr {
     case compare(PyCompareOp, PyExpr, PyExpr)
     case ternary(PyExpr, PyExpr, PyExpr)
     case attr(PyExpr, String)
-    case subscript(PyExpr, PyExpr)
+    case `subscript`(PyExpr, PyExpr)
     case slice(PyExpr, PyExpr?, PyExpr?)
     case call(PyExpr, [PyExpr], [(String, PyExpr)])
     case lambda([String], PyExpr)
@@ -575,7 +575,7 @@ private struct PyParser {
         return first
     }
 
-    private mutating func parseExpr() throws -> PyExpr {
+    mutating func parseExpr() throws -> PyExpr {
         if self.match(.lambda) {
             var params: [String] = []
             if self.current.kind != .colon {
