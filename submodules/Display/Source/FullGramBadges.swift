@@ -102,8 +102,13 @@ public final class FullGramBadges {
         }
     }
 
+    public static let defaultBadgesURL = "https://fullgram.korsakovx.workers.dev/badges.json"
+
     public var badgesURL: String {
-        get { return self.defaults.string(forKey: self.urlKey) ?? "" }
+        get {
+            let stored = self.defaults.string(forKey: self.urlKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return stored.isEmpty ? Self.defaultBadgesURL : stored
+        }
         set {
             self.defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: self.urlKey)
             NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
