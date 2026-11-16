@@ -1031,7 +1031,6 @@ public final class GlassBackgroundContainerView: UIView {
         }
         if GlassBackgroundView.flatMode {
             self.legacyView?.isHidden = true
-            self.shadowView?.isHidden = true
         } else if let legacyView = self.legacyView {
             self.addSubview(legacyView)
         }
