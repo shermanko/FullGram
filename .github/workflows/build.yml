@@ -1,109 +1,353 @@
-name: CI
+name: Build FullGram
 
 on:
   push:
     branches: [ master ]
-
+  pull_request:
+    branches: [ master ]
   workflow_dispatch:
+    inputs:
+      configuration:
+        description: Build configuration
+        required: true
+        default: release_arm64
+        type: choice
+        options:
+          - release_arm64
+          - debug_arm64
+          - release_sim_arm64
+      create_release:
+        description: Create GitHub Release with Telegram.ipa
+        required: false
+        default: true
+        type: boolean
+      skip_cache:
+        description: Skip restoring/saving Bazel disk cache
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: fullgram-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
 
 jobs:
+  checks:
+    name: Pre-build Source & Config Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run FullGram source and config checks
+        run: python3 tools/ci_checks.py
+
   build:
-    runs-on: macos-13
+    name: Build FullGram iOS
+    needs: checks
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    timeout-minutes: 240
 
     steps:
-      - uses: actions/checkout@v2
+      - name: Checkout repository and submodules
+        uses: actions/checkout@v4
         with:
           submodules: 'recursive'
           fetch-depth: '0'
 
-      - name: Set active Xcode path
+      - name: Select Xcode and report resources
         run: |
-          XCODE_VERSION=$(cat versions.json | python3 -c 'import json,sys;obj=json.load(sys.stdin);print(obj["xcode"]);')
-          sudo xcode-select -s /Applications/Xcode_$XCODE_VERSION.app/Contents/Developer
-
-      - name: Create canonical source directory
-        run: |
-          set -x
+          set -euo pipefail
           sudo mkdir -p /Users/Shared
-          cp -R $GITHUB_WORKSPACE /Users/Shared/
-          mv /Users/Shared/$(basename $GITHUB_WORKSPACE) /Users/Shared/telegram-ios
+          sudo chown "$(whoami)" /Users/Shared
+          mkdir -p /Users/Shared/bazel-disk-cache
 
-      - name: Build the App
+          REQ_XCODE=$(python3 -c 'import json; print(json.load(open("versions.json"))["xcode"])')
+          SELECTED_APP="/Applications/Xcode_${REQ_XCODE}.app"
+          XCODE_OVERRIDE_FLAG=""
+
+          if [ -d "${SELECTED_APP}/Contents/Developer" ]; then
+            sudo xcode-select -s "${SELECTED_APP}/Contents/Developer"
+          else
+            FALLBACK_APP=$(python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          def version_key(p: Path):
+              nums = [int(x) for x in re.findall(r"\d+", p.name)]
+              return (1 if nums else 0, nums, p.name)
+
+          apps = [
+              p for p in Path("/Applications").glob("Xcode*.app")
+              if (p / "Contents/Developer").is_dir()
+          ]
+          apps.sort(key=version_key)
+          print(str(apps[-1]) if apps else "")
+          PY
+          )
+            if [ -z "$FALLBACK_APP" ] || [ ! -d "${FALLBACK_APP}/Contents/Developer" ]; then
+              echo "::error::No Xcode installation found in /Applications"
+              exit 1
+            fi
+            sudo xcode-select -s "${FALLBACK_APP}/Contents/Developer"
+            XCODE_OVERRIDE_FLAG="--overrideXcodeVersion"
+            echo "::warning::Requested Xcode ${REQ_XCODE} not installed on runner; using ${FALLBACK_APP} with ${XCODE_OVERRIDE_FLAG}"
+          fi
+
+          echo "XCODE_OVERRIDE_FLAG=${XCODE_OVERRIDE_FLAG}" >> "$GITHUB_ENV"
+          echo "=== System Info ==="
+          sw_vers
+          xcode-select -p
+          xcodebuild -version
+          echo "CPU cores: $(sysctl -n hw.ncpu)"
+          echo "Memory (bytes): $(sysctl -n hw.memsize)"
+          df -h / /Users/Shared 2>/dev/null || df -h /
+
+      - name: Verify macOS build dependencies
         run: |
-          set -x
+          set -euo pipefail
+          MISSING=()
+          check_cmd() {
+            local cmd="$1"
+            local formula="$2"
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+              MISSING+=("$formula")
+            fi
+          }
 
-          # source code paths are included in the final binary, so we need to make them stable across builds
+          check_cmd python3 python3
+          check_cmd git git
+          check_cmd curl curl
+          check_cmd zip zip
+          check_cmd unzip unzip
+          check_cmd cmake cmake
+          check_cmd ninja ninja
+          check_cmd yasm yasm
+          check_cmd pkg-config pkg-config
+          check_cmd autoconf autoconf
+          check_cmd automake automake
+          check_cmd glibtoolize libtool
+
+          if [ "${#MISSING[@]}" -gt 0 ]; then
+            UNIQUE_FORMULAS=$(printf "%s\n" "${MISSING[@]}" | sort -u | tr '\n' ' ')
+            echo "Installing missing Homebrew packages: ${UNIQUE_FORMULAS}"
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install $UNIQUE_FORMULAS
+          else
+            echo "All required macOS build tools are already installed."
+          fi
+
+      - name: Validate Telegram credentials
+        env:
+          SECRET_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          SECRET_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/build-input"
+          python3 - <<'PY'
+          import json, os, re, sys
+          from pathlib import Path
+
+          api_id = os.environ.get("SECRET_API_ID", "").strip()
+          api_hash = os.environ.get("SECRET_API_HASH", "").strip()
+          cfg_path = Path("build-system/appstore-configuration.json")
+          cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+
+          if api_id or api_hash:
+              if not (api_id and api_hash):
+                  print("::error::Set BOTH TELEGRAM_API_ID and TELEGRAM_API_HASH secrets, or leave both unset.")
+                  sys.exit(1)
+              if not re.fullmatch(r"[0-9]+", api_id) or int(api_id) <= 0:
+                  print("::error::TELEGRAM_API_ID must be a positive integer.")
+                  sys.exit(1)
+              if not re.fullmatch(r"[0-9a-fA-F]{32}", api_hash):
+                  print("::error::TELEGRAM_API_HASH must be a 32-character hex string.")
+                  sys.exit(1)
+              cfg["api_id"] = api_id
+              cfg["api_hash"] = api_hash
+              print("Validated custom TELEGRAM_API_ID / TELEGRAM_API_HASH from GitHub Secrets.")
+          else:
+              print("::notice::Using default api_id/api_hash from build-system/appstore-configuration.json. Add TELEGRAM_API_ID and TELEGRAM_API_HASH secrets to use your own.")
+
+          out_path = Path(os.environ["GITHUB_WORKSPACE"]) / "build-input" / "ci-configuration.json"
+          out_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+          PY
+          echo "BUILD_CONFIG_PATH=$GITHUB_WORKSPACE/build-input/ci-configuration.json" >> "$GITHUB_ENV"
+
+      - name: Run FullGram source and submodule checks
+        run: python3 tools/ci_checks.py --require-submodules
+
+      - name: Restore Bazel disk cache
+        id: bazel-cache
+        if: inputs.skip_cache != true
+        uses: actions/cache/restore@v4
+        with:
+          path: /Users/Shared/bazel-disk-cache
+          key: bazel-disk-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('versions.json') }}-${{ github.sha }}
+          restore-keys: |
+            bazel-disk-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('versions.json') }}-
+            bazel-disk-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Prepare canonical source directory
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /Users/Shared
+          sudo chown "$(whoami)" /Users/Shared
+          mkdir -p /Users/Shared/bazel-disk-cache
+          rm -rf /Users/Shared/telegram-ios
+          cp -a "$GITHUB_WORKSPACE" /Users/Shared/telegram-ios
+
+      - name: Build FullGram IPA
+        env:
+          BUILD_CONFIGURATION: ${{ inputs.configuration || 'release_arm64' }}
+        run: |
+          set -euo pipefail
           SOURCE_DIR=/Users/Shared/telegram-ios
+          BAZEL_USER_ROOT=/private/var/tmp/_bazel_containerhost
+          CACHE_DIR=/Users/Shared/bazel-disk-cache
 
-          # use canonical bazel root
-          BAZEL_USER_ROOT="/private/var/tmp/_bazel_containerhost"
+          cd "$SOURCE_DIR"
 
-          cd $SOURCE_DIR
+          BUILD_NUMBER_OFFSET="$(cat build_number_offset | tr -d '[:space:]')"
+          APP_VERSION="$(python3 -c 'import json; print(json.load(open("versions.json"))["app"])')"
+          COMMIT_COUNT="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
+          BUILD_NUMBER="$((COMMIT_COUNT + BUILD_NUMBER_OFFSET))"
 
-          BUILD_NUMBER_OFFSET="$(cat build_number_offset)"
+          echo "BUILD_NUMBER=${BUILD_NUMBER}" >> "$GITHUB_ENV"
+          echo "APP_VERSION=${APP_VERSION}" >> "$GITHUB_ENV"
 
-          export APP_VERSION=$(cat versions.json | python3 -c 'import json,sys;obj=json.load(sys.stdin);print(obj["app"]);')
-          export COMMIT_COUNT=$(git rev-list --count HEAD)
-          export COMMIT_COUNT="$(($COMMIT_COUNT+$BUILD_NUMBER_OFFSET))"
-          export BUILD_NUMBER="$COMMIT_COUNT"
-          echo "BUILD_NUMBER=$(echo $BUILD_NUMBER)" >> $GITHUB_ENV
-          echo "APP_VERSION=$(echo $APP_VERSION)" >> $GITHUB_ENV
+          mkdir -p "$SOURCE_DIR/build-input"
+          cp "$BUILD_CONFIG_PATH" "$SOURCE_DIR/build-input/active-configuration.json"
 
           python3 build-system/Make/ImportCertificates.py --path build-system/fake-codesigning/certs
           python3 -u build-system/Make/Make.py \
             --bazelUserRoot="$BAZEL_USER_ROOT" \
+            --cacheDir="$CACHE_DIR" \
+            ${XCODE_OVERRIDE_FLAG:-} \
             build \
-            --configurationPath="build-system/appstore-configuration.json" \
+            --configurationPath="build-input/active-configuration.json" \
             --codesigningInformationPath=build-system/fake-codesigning \
-            --configuration=release_arm64 \
-            --buildNumber="$BUILD_NUMBER"
+            --configuration="$BUILD_CONFIGURATION" \
+            --buildNumber="$BUILD_NUMBER" \
+            --outputBuildArtifactsPath="$SOURCE_DIR/build/artifacts" \
+            2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
-          # collect ipa
-          OUTPUT_PATH="build/artifacts"
-          rm -rf "$OUTPUT_PATH"
-          mkdir -p "$OUTPUT_PATH"
-          for f in bazel-out/applebin_ios-ios_arm*-opt-ST-*/bin/Telegram/Telegram.ipa; do
-            cp "$f" $OUTPUT_PATH/
-          done
+          if [ ! -s "$SOURCE_DIR/build/artifacts/Telegram.ipa" ]; then
+            echo "::error::Build finished without producing Telegram.ipa"
+            exit 1
+          fi
 
-          # collect dsym
-          mkdir -p build/DSYMs
-          for f in bazel-out/applebin_ios-ios_arm*-opt-ST-*/bin/Telegram/*.dSYM; do
-            cp -R "$f" build/DSYMs/
-          done
-          zip -r "./$OUTPUT_PATH/Telegram.DSYMs.zip" build/DSYMs 1>/dev/null
+      - name: Show errors on the run page
+        if: failure()
+        run: |
+          {
+            echo "### Build Errors"
+            echo '```text'
+            if [ -f "$GITHUB_WORKSPACE/build.log" ]; then
+              grep -E "(^ERROR:|error:|fatal error:|FAILED:|AssertionError|Exception:)" "$GITHUB_WORKSPACE/build.log" | tail -n 120 || tail -n 80 "$GITHUB_WORKSPACE/build.log"
+            else
+              echo "No build.log captured (failed before Make.py started)."
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Stage build artifacts
+        if: success()
+        run: |
+          set -euo pipefail
+          rm -rf "$GITHUB_WORKSPACE/build/artifacts"
+          mkdir -p "$GITHUB_WORKSPACE/build"
+          cp -a /Users/Shared/telegram-ios/build/artifacts "$GITHUB_WORKSPACE/build/artifacts"
+          ls -lh "$GITHUB_WORKSPACE/build/artifacts"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: build-${{ env.BUILD_NUMBER }}
-          release_name: Telegram ${{ env.APP_VERSION }} (${{ env.BUILD_NUMBER }})
-          body: |
-            An unsigned build of Telegram for iOS ${{ env.APP_VERSION }} (${{ env.BUILD_NUMBER }})
-          draft: false
-          prerelease: false
+          name: FullGram-ipa
+          path: build/artifacts/Telegram.ipa
+          if-no-files-found: error
 
-      - name: Upload Release IPA
-        id: upload-release-ipa 
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload DSYMs artifact
+        uses: actions/upload-artifact@v4
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: /Users/Shared/telegram-ios/build/artifacts/Telegram.ipa
-          asset_name: Telegram.ipa
-          asset_content_type: application/zip
+          name: FullGram-dsyms
+          path: build/artifacts/Telegram.DSYMs.zip
+          if-no-files-found: warn
 
-      - name: Upload Release DSYM
-        id: upload-release-dsym 
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Attest the IPA
+        if: success() && github.event_name != 'pull_request'
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v2
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: /Users/Shared/telegram-ios/build/artifacts/Telegram.DSYMs.zip
-          asset_name: Telegram.DSYMs.zip
-          asset_content_type: application/zip
+          subject-path: build/artifacts/Telegram.ipa
+
+      - name: Free disk space before saving cache
+        if: always()
+        run: |
+          rm -rf /Users/Shared/telegram-ios || true
+          rm -rf /private/var/tmp/_bazel_containerhost || true
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          cache_dir = Path("/Users/Shared/bazel-disk-cache")
+          if not cache_dir.is_dir():
+              raise SystemExit(0)
+
+          max_bytes = 4_500 * 1024 * 1024
+          files = []
+          total = 0
+          for root, _, names in os.walk(cache_dir):
+              for name in names:
+                  p = Path(root) / name
+                  try:
+                      st = p.stat()
+                      files.append((st.st_mtime, st.st_size, p))
+                      total += st.st_size
+                  except OSError:
+                      pass
+
+          if total > max_bytes:
+              files.sort(key=lambda item: item[0])
+              for _, size, p in files:
+                  if total <= max_bytes:
+                      break
+                  try:
+                      p.unlink()
+                      total -= size
+                  except OSError:
+                      pass
+          print(f"Bazel disk cache size ready for save: {total / (1024 * 1024):.1f} MB")
+          PY
+
+      - name: Save Bazel disk cache
+        if: success() && inputs.skip_cache != true && steps.bazel-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /Users/Shared/bazel-disk-cache
+          key: bazel-disk-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('versions.json') }}-${{ github.sha }}
+
+      - name: Create GitHub Release
+        if: success() && ((github.event_name == 'push' && github.ref == 'refs/heads/master') || (github.event_name == 'workflow_dispatch' && inputs.create_release))
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="build-${BUILD_NUMBER}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            TAG="${TAG}-r${GITHUB_RUN_NUMBER}"
+          fi
+
+          FILES=("build/artifacts/Telegram.ipa")
+          if [ -f "build/artifacts/Telegram.DSYMs.zip" ]; then
+            FILES+=("build/artifacts/Telegram.DSYMs.zip")
+          fi
+
+          gh release create "$TAG" "${FILES[@]}" \
+            --title "FullGram ${APP_VERSION} (${BUILD_NUMBER})" \
+            --notes "Unsigned iOS build of FullGram ${APP_VERSION} (${BUILD_NUMBER}) from commit ${GITHUB_SHA}."
