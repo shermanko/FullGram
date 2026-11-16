@@ -224,6 +224,20 @@ jobs:
           mkdir -p "$SOURCE_DIR/build-input"
           cp "$BUILD_CONFIG_PATH" "$SOURCE_DIR/build-input/active-configuration.json"
 
+          HOST_MACOS_MAJOR="$(sw_vers -productVersion | awk -F. '{print $1}')"
+          HOST_MACOS_TARGET="${HOST_MACOS_MAJOR}.0"
+          BAZEL_BIN="$(CACHE_DIR="$CACHE_DIR" python3 -c 'import os, sys; sys.path.insert(0, "build-system/Make"); from BazelLocation import locate_bazel; print(locate_bazel(os.getcwd(), None, os.environ.get("CACHE_DIR")))')"
+          if [ "$HOST_MACOS_MAJOR" -lt 26 ]; then
+            if "$BAZEL_BIN" --output_user_root="$BAZEL_USER_ROOT" help build 2>/dev/null | grep -q "host_macos_minimum_os"; then
+              echo "Pinning host macOS deployment target to ${HOST_MACOS_TARGET} (running macOS $(sw_vers -productVersion))"
+              {
+                echo ""
+                echo "build:macos --macos_minimum_os=${HOST_MACOS_TARGET}"
+                echo "build:macos --host_macos_minimum_os=${HOST_MACOS_TARGET}"
+              } >> "$SOURCE_DIR/.bazelrc"
+            fi
+          fi
+
           python3 - <<'PY'
           import subprocess
           from pathlib import Path
