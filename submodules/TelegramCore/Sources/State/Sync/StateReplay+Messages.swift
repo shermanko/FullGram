@@ -276,14 +276,19 @@ extension ReplayContext {
     func applyDeleteMessagesWithGlobalIds(_ ids: [Int32]) {
         var idsToDelete: [Int32] = []
         var retainedMessageIds: [MessageId] = []
-        for globalId in ids {
-            if let messageId = transaction.messageIdForGloballyUniqueMessageId(globalId), let message = transaction.getMessage(messageId) {
-                if fullGramRetainDeletedMessage(transaction: transaction, mediaBox: mediaBox, message: message) {
-                    retainedMessageIds.append(messageId)
-                    continue
-                }
+        let resolvedMessageIds = transaction.messageIdsForGlobalIds(ids)
+        var retainedSet = Set<Int32>()
+        for messageId in resolvedMessageIds {
+            if let message = transaction.getMessage(messageId),
+               fullGramRetainDeletedMessage(transaction: transaction, mediaBox: mediaBox, message: message) {
+                retainedMessageIds.append(messageId)
+                retainedSet.insert(messageId.id)
             }
-            idsToDelete.append(globalId)
+        }
+        for globalId in ids {
+            if !retainedSet.contains(globalId) {
+                idsToDelete.append(globalId)
+            }
         }
         var resourceIds: [MediaResourceId] = []
         if !idsToDelete.isEmpty {

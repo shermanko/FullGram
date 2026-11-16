@@ -437,7 +437,11 @@ public extension TelegramEngine.Messages {
                     return .serviceError("Превышен лимит запросов Telegram")
                 case .invalidLanguage:
                     return .serviceError("Неподдерживаемый язык")
-                case .translationFailed:
+                case .textIsEmpty:
+                    return .emptyText
+                case .textTooLong:
+                    return .serviceError("Текст слишком длинный для перевода")
+                case .invalidMessageId, .tryAlternative:
                     return .serviceError("Не удалось перевести через Telegram")
                 case .generic:
                     return .networkFailure("Ошибка соединения с Telegram")
@@ -1465,19 +1469,20 @@ public final class FullGramExtras {
             return nil
         }
         // Explicitly remove metadata dictionaries and normalize technical container fields (orientation=1, 72 DPI)
+        let nullRef: Any = kCFNull as Any
         let cleanProperties: [CFString: Any] = [
             kCGImageDestinationLossyCompressionQuality: 0.94,
             kCGImagePropertyOrientation: 1,
             kCGImagePropertyDPIWidth: 72,
             kCGImagePropertyDPIHeight: 72,
-            kCGImagePropertyExifDictionary: kCFNull,
-            kCGImagePropertyGPSDictionary: kCFNull,
-            kCGImagePropertyTIFFDictionary: kCFNull,
-            kCGImagePropertyIPTCDictionary: kCFNull,
-            kCGImagePropertyExifAuxDictionary: kCFNull,
-            kCGImagePropertyMakerAppleDictionary: kCFNull,
-            kCGImageProperty8BIMDictionary: kCFNull,
-            kCGImagePropertyCIFFDictionary: kCFNull,
+            kCGImagePropertyExifDictionary: nullRef,
+            kCGImagePropertyGPSDictionary: nullRef,
+            kCGImagePropertyTIFFDictionary: nullRef,
+            kCGImagePropertyIPTCDictionary: nullRef,
+            kCGImagePropertyExifAuxDictionary: nullRef,
+            kCGImagePropertyMakerAppleDictionary: nullRef,
+            kCGImageProperty8BIMDictionary: nullRef,
+            kCGImagePropertyCIFFDictionary: nullRef,
             kCGImagePropertyJFIFDictionary: [
                 kCGImagePropertyJFIFDensityUnit: 1,
                 kCGImagePropertyJFIFXDensity: 72,
