@@ -526,7 +526,7 @@ private final class FullGramSettingsSearchUIViewController: UIViewController, UI
             FullGramSearchItem(
                 title: "ИИ Ассистент (свой агент по API-ключу)",
                 subtitle: "ИИ Ассистент / Прочее • .ai в чатах, сводки, окно и провайдеры",
-                keywords: "ии ai агент openai anthropic claude groq openrouter ключ ассистент",
+                keywords: "ии ai агент openai anthropic claude gemini google groq openrouter ключ ассистент",
                 toggle: ({ FullGramAIStore.shared.isEnabled }, { FullGramAIStore.shared.isEnabled = $0 }),
                 destination: { fullGramAIAssistantController(context: $0) }
             ),

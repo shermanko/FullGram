@@ -6,6 +6,7 @@ public enum FullGramAIProvider: String, CaseIterable, Codable {
     case openRouter = "openrouter"
     case groq = "groq"
     case anthropic = "anthropic"
+    case gemini = "gemini"
     case custom = "custom"
 
     public var title: String {
@@ -14,6 +15,7 @@ public enum FullGramAIProvider: String, CaseIterable, Codable {
         case .openRouter: return "OpenRouter"
         case .groq: return "Groq"
         case .anthropic: return "Anthropic (Claude)"
+        case .gemini: return "Google Gemini"
         case .custom: return "Свой API (OpenAI-совместимый)"
         }
     }
@@ -24,6 +26,7 @@ public enum FullGramAIProvider: String, CaseIterable, Codable {
         case .openRouter: return "https://openrouter.ai/api/v1/chat/completions"
         case .groq: return "https://api.groq.com/openai/v1/chat/completions"
         case .anthropic: return "https://api.anthropic.com/v1/messages"
+        case .gemini: return "https://generativelanguage.googleapis.com/v1beta"
         case .custom: return "https://api.openai.com/v1/chat/completions"
         }
     }
@@ -34,6 +37,7 @@ public enum FullGramAIProvider: String, CaseIterable, Codable {
         case .openRouter: return "openai/gpt-4o-mini"
         case .groq: return "llama-3.3-70b-versatile"
         case .anthropic: return "claude-3-5-sonnet-latest"
+        case .gemini: return "gemini-2.5-flash"
         case .custom: return "gpt-4o-mini"
         }
     }
@@ -445,6 +449,43 @@ public final class FullGramAIStore {
         return false
     }
 
+    private static func resolvedEndpointURL(provider: FullGramAIProvider, endpoint: String, model: String) -> URL? {
+        let trimmedEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard provider == .gemini else {
+            return URL(string: trimmedEndpoint)
+        }
+        if trimmedEndpoint.contains(":generateContent") || trimmedEndpoint.contains(":streamGenerateContent") {
+            return URL(string: trimmedEndpoint)
+        }
+        var base = trimmedEndpoint
+        while base.hasSuffix("/") {
+            base.removeLast()
+        }
+        let encodedModel = model.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? model
+        let fullURLString: String
+        if base.hasSuffix("/models") {
+            fullURLString = "\(base)/\(encodedModel):generateContent"
+        } else {
+            fullURLString = "\(base)/models/\(encodedModel):generateContent"
+        }
+        return URL(string: fullURLString)
+    }
+
+    private static func appendGeminiContent(role: String, text: String, into contents: inout [[String: Any]]) {
+        if let lastIndex = contents.indices.last,
+           let lastRole = contents[lastIndex]["role"] as? String,
+           lastRole == role,
+           var parts = contents[lastIndex]["parts"] as? [[String: Any]] {
+            parts.append(["text": text])
+            contents[lastIndex]["parts"] = parts
+        } else {
+            contents.append([
+                "role": role,
+                "parts": [["text": text]]
+            ])
+        }
+    }
+
     public func testConnection(completion: @escaping (Result<String, Error>) -> Void) {
         self.sendPrompt(
             userPrompt: "Ответь ровно одним словом: Готов.",
@@ -472,12 +513,12 @@ public final class FullGramAIStore {
             completion(.failure(NSError(domain: "FullGramAI", code: 401, userInfo: [NSLocalizedDescriptionKey: "API-ключ не настроен. Откройте Настройки FullGram → ИИ Ассистент."])))
             return
         }
-        guard let url = URL(string: self.effectiveEndpoint), Self.isAllowedEndpoint(url) else {
+        let model = self.effectiveModel
+        guard let url = Self.resolvedEndpointURL(provider: provider, endpoint: self.effectiveEndpoint, model: model), Self.isAllowedEndpoint(url) else {
             completion(.failure(NSError(domain: "FullGramAI", code: 400, userInfo: [NSLocalizedDescriptionKey: "Некорректный URL эндпоинта. Используйте https:// или http://localhost."])))
             return
         }
 
-        let model = self.effectiveModel
         let systemPrompt = self.buildFullSystemPrompt()
         let composedUserMessage: String
         if let contextBlock, !contextBlock.isEmpty {
@@ -494,7 +535,8 @@ public final class FullGramAIStore {
         let recentHistory: [FullGramAIChatMessage] = includeHistory ? Array(self.messagesSnapshot().suffix(8)) : []
 
         let bodyObj: [String: Any]
-        if provider == .anthropic {
+        switch provider {
+        case .anthropic:
             request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
             var msgs: [[String: String]] = []
@@ -508,7 +550,25 @@ public final class FullGramAIStore {
                 "system": systemPrompt,
                 "messages": msgs
             ]
-        } else {
+        case .gemini:
+            request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+            var contents: [[String: Any]] = []
+            for m in recentHistory where !m.text.isEmpty {
+                let role = m.isUser ? "user" : "model"
+                Self.appendGeminiContent(role: role, text: String(m.text.prefix(1600)), into: &contents)
+            }
+            Self.appendGeminiContent(role: "user", text: composedUserMessage, into: &contents)
+            bodyObj = [
+                "systemInstruction": [
+                    "parts": [["text": systemPrompt]]
+                ],
+                "contents": contents,
+                "generationConfig": [
+                    "temperature": 0.3,
+                    "maxOutputTokens": 1024
+                ]
+            ]
+        case .openAI, .openRouter, .groq, .custom:
             if !apiKey.isEmpty {
                 request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             }
@@ -559,11 +619,28 @@ public final class FullGramAIStore {
             }
 
             var contentText: String?
-            if provider == .anthropic {
+            switch provider {
+            case .anthropic:
                 if let contentArr = json["content"] as? [[String: Any]] {
                     contentText = contentArr.compactMap { $0["text"] as? String }.joined(separator: "\n")
                 }
-            } else {
+            case .gemini:
+                if let candidates = json["candidates"] as? [[String: Any]],
+                   let first = candidates.first,
+                   let content = first["content"] as? [String: Any],
+                   let parts = content["parts"] as? [[String: Any]] {
+                    let textParts = parts.compactMap { part -> String? in
+                        if (part["thought"] as? Bool) == true {
+                            return nil
+                        }
+                        return part["text"] as? String
+                    }
+                    let joined = textParts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !joined.isEmpty {
+                        contentText = joined
+                    }
+                }
+            case .openAI, .openRouter, .groq, .custom:
                 if let choices = json["choices"] as? [[String: Any]],
                    let first = choices.first,
                    let message = first["message"] as? [String: Any],
@@ -573,8 +650,16 @@ public final class FullGramAIStore {
             }
 
             guard let contentText, !contentText.isEmpty else {
+                var extraReason = ""
+                if provider == .gemini {
+                    if let feedback = json["promptFeedback"] as? [String: Any], let blockReason = feedback["blockReason"] as? String {
+                        extraReason = " (\(blockReason))"
+                    } else if let candidates = json["candidates"] as? [[String: Any]], let finishReason = candidates.first?["finishReason"] as? String {
+                        extraReason = " (\(finishReason))"
+                    }
+                }
                 DispatchQueue.main.async {
-                    completion(.failure(NSError(domain: "FullGramAI", code: statusCode, userInfo: [NSLocalizedDescriptionKey: "Модель не вернула текст (HTTP \(statusCode))."])))
+                    completion(.failure(NSError(domain: "FullGramAI", code: statusCode, userInfo: [NSLocalizedDescriptionKey: "Модель не вернула текст (HTTP \(statusCode)\(extraReason))."])))
                 }
                 return
             }

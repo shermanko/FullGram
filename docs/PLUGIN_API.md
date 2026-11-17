@@ -253,6 +253,6 @@ def on_command(ctx):
 Собственный ИИ-агент настраивается в [`FullGramAIAssistant.swift`](../submodules/Display/Source/FullGramAIAssistant.swift) и управляет чатами через [`FullGramAIOverlay.swift`](../submodules/TelegramUI/Sources/FullGramAIOverlay.swift):
 
 - **Хранение API-ключей**: iOS Keychain (`FullGram.AIAssistant.Keys`), без записи в бэкапы.
-- **Поддерживаемые API**: OpenAI Chat Completions, OpenRouter, Groq, Anthropic Messages (`x-api-key`) и кастомный `https://` / `http://localhost` (Ollama).
+- **Поддерживаемые API**: OpenAI Chat Completions, OpenRouter, Groq, Anthropic Messages (`x-api-key`), Google Gemini (`generateContent`, `x-goog-api-key`) и кастомный `https://` / `http://localhost` (Ollama).
 - **Изоляция данных**: чужие сообщения передаются в `[UNTRUSTED_CHAT_DATA]`, а точные счётчики за дату (например, `.ai ... 15.05.2026`) передаются в `[VERIFIED_LOCAL_STATS]` после локального вызова `searchMessages`.
 - **Действия агента**: в конце ответа модель может предложить ровно 1 JSON-блок `[[FULLGRAM_ACTION:{...}]]` с `kind` из белого списка: `insert_draft`, `send_message`, `open_chat`, `toggle_setting` (`ghost_mode`, `download_boost`, `floating_pet`, `quick_formatting`). Отправка сообщений и изменение настроек всегда требуют ручного подтверждения кнопкой в окне ассистента.

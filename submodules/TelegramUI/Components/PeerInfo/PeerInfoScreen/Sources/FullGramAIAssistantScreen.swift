@@ -219,7 +219,14 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
                 preferredStyle: .alert
             )
             alert.addTextField { tf in
-                tf.placeholder = "sk-..."
+                switch provider {
+                case .gemini:
+                    tf.placeholder = "AIza..."
+                case .anthropic:
+                    tf.placeholder = "sk-ant-..."
+                case .openAI, .openRouter, .groq, .custom:
+                    tf.placeholder = "sk-..."
+                }
                 tf.isSecureTextEntry = true
                 tf.autocorrectionType = .no
                 tf.autocapitalizationType = .none
@@ -346,7 +353,7 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
             .model("Модель", store.effectiveModel),
             .endpoint("URL API", endpointDisplay),
             .testConnection(isTestingConnection ? "⏳ Проверка подключения…" : "🔌 Проверить подключение", isTestingConnection ? .neutral : .generic),
-            .connectionFooter("Поддерживаются OpenAI, OpenRouter, Groq, Anthropic Claude и любой OpenAI-совместимый сервер (включая локальный Ollama)."),
+            .connectionFooter("Поддерживаются OpenAI, OpenRouter, Groq, Anthropic Claude, Google Gemini и любой OpenAI-совместимый сервер (включая локальный Ollama)."),
 
             .securityHeader("БЕЗОПАСНОСТЬ И ДОСТУП К TELEGRAM"),
             .allowReadChat(store.allowReadCurrentChat),
