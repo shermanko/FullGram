@@ -1125,7 +1125,6 @@ extension ChatControllerImpl {
                                         case let .cancel(toast):
                                             if let toast, !toast.isEmpty {
                                                 Queue.mainQueue().async {
-                                                    guard let strongSelf else { return }
                                                     strongSelf.present(UndoOverlayController(presentationData: strongSelf.presentationData, content: .succeed(text: toast, timeout: nil, customUndoText: nil), elevatedLayout: false, action: { _ in return false }), in: .current)
                                                 }
                                             }
