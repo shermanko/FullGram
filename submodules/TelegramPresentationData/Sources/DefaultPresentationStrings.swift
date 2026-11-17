@@ -1,6 +1,7 @@
 import Foundation
 import AppBundle
 import PresentationStrings
+import TelegramCore
 
 public typealias PresentationStrings = _PresentationStrings
 
