@@ -2578,12 +2578,17 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
         let fullGramExtrasTick = Signal<Int, NoError> { subscriber in
             var tick = 0
             subscriber.putNext(tick)
-            let observer = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { _ in
+            let extrasObserver = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { _ in
+                tick += 1
+                subscriber.putNext(tick)
+            }
+            let badgesObserver = NotificationCenter.default.addObserver(forName: FullGramBadges.didChangeNotification, object: nil, queue: .main) { _ in
                 tick += 1
                 subscriber.putNext(tick)
             }
             return ActionDisposable {
-                NotificationCenter.default.removeObserver(observer)
+                NotificationCenter.default.removeObserver(extrasObserver)
+                NotificationCenter.default.removeObserver(badgesObserver)
             }
         }
         self.dataDisposable = combineLatest(

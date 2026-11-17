@@ -476,7 +476,7 @@ private final class FullGramSettingsSearchUIViewController: UIViewController, UI
             // Прочее и Бэкап
             FullGramSearchItem(
                 title: "Бэкап всех настроек (.fullgram)",
-                subtitle: "Прочее → Бэкап FullGram • Экспорт и импорт настроек, тем и плагинов",
+                subtitle: "Прочее → Бэкап FullGram • Экспорт и импорт настроек и тем",
                 keywords: "бэкап backup экспорт импорт перенос настройки fullgram",
                 destination: { fullGramOtherCategoryController(context: $0) }
             ),

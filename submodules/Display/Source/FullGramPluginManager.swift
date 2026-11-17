@@ -40,23 +40,19 @@ private final class FullGramLoadedPlugin {
 
 public final class FullGramPluginManager {
     public static let shared = FullGramPluginManager()
+    public static let officialCatalogURL = "https://fullgram.korsakovx.workers.dev/plugins.json"
+    private static let officialCatalogHost = "fullgram.korsakovx.workers.dev"
 
     private let lock = NSRecursiveLock()
     private let systemEnabledKey = "fullgram.plugins.systemEnabled"
-    private let catalogURLKey = "fullgram.plugins.catalogURL"
     private var descriptors: [FullGramPluginDescriptor] = []
     private var loaded: [String: FullGramLoadedPlugin] = [:]
     private var logsByPlugin: [String: [String]] = [:]
+    private var officialCatalogItems: [FullGramRemotePluginItem] = []
     private var didInitialize = false
 
     public var catalogURL: String {
-        get {
-            return UserDefaults.standard.string(forKey: self.catalogURLKey) ?? ""
-        }
-        set {
-            UserDefaults.standard.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: self.catalogURLKey)
-            NotificationCenter.default.post(name: FullGramPluginNotifications.pluginsDidChange, object: nil)
-        }
+        return Self.officialCatalogURL
     }
 
     private init() {}
@@ -253,15 +249,11 @@ public final class FullGramPluginManager {
     }
 
     public func importPlugin(from url: URL) throws -> FullGramPluginDescriptor {
-        let accessed = url.startAccessingSecurityScopedResource()
-        defer {
-            if accessed { url.stopAccessingSecurityScopedResource() }
-        }
-        let code = try String(contentsOf: url, encoding: .utf8)
-        let ext = url.pathExtension.lowercased()
-        let language: FullGramPluginLanguage = (ext == "py" || ext == "python") ? .python : .lua
-        let fallbackName = url.deletingPathExtension().lastPathComponent
-        return self.savePlugin(name: fallbackName, language: language, code: code, enabled: true)
+        throw NSError(
+            domain: "FullGramPlugins",
+            code: 403,
+            userInfo: [NSLocalizedDescriptionKey: "Импорт плагинов из файлов и чатов отключён в целях безопасности. Устанавливайте плагины только из официального маркета FullGram."]
+        )
     }
 
     public func exportFileURL(forPluginId id: String) -> URL? {
@@ -1047,16 +1039,41 @@ end
 """
     }
 
-    // MARK: - Remote Plugin Catalog (GitHub Raw / Cloudflare Workers / HTTPS JSON)
+    // MARK: - Official Plugin Market (Pinned FullGram Worker)
+
+    private static func isOfficialScriptURL(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https",
+              let host = url.host?.lowercased(),
+              Self.isPublicRemoteHost(host) else {
+            return false
+        }
+        if host == Self.officialCatalogHost {
+            return true
+        }
+        let path = url.path.lowercased()
+        if host == "raw.githubusercontent.com" && path.hasPrefix("/shermanko/") {
+            return true
+        }
+        if host == "cdn.jsdelivr.net" && path.hasPrefix("/gh/shermanko/") {
+            return true
+        }
+        return false
+    }
 
     public func fetchRemoteCatalog(urlString: String? = nil, completion: @escaping (Result<FullGramRemoteCatalog, Error>) -> Void) {
-        let raw = (urlString ?? self.catalogURL).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: raw),
-              url.scheme?.lowercased() == "https",
-              let host = url.host,
-              Self.isPublicRemoteHost(host) else {
+        if let requested = urlString?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !requested.isEmpty,
+           requested != Self.officialCatalogURL {
             DispatchQueue.main.async {
-                completion(.failure(NSError(domain: "FullGramPlugins", code: 400, userInfo: [NSLocalizedDescriptionKey: "Укажите корректную публичную https:// ссылку на plugins.json (например, GitHub Raw или Workers)."])))
+                completion(.failure(NSError(domain: "FullGramPlugins", code: 403, userInfo: [NSLocalizedDescriptionKey: "Сторонние серверы плагинов отключены. Разрешён только официальный маркет FullGram."])))
+            }
+            return
+        }
+        guard let url = URL(string: Self.officialCatalogURL),
+              url.scheme?.lowercased() == "https",
+              url.host?.lowercased() == Self.officialCatalogHost else {
+            DispatchQueue.main.async {
+                completion(.failure(NSError(domain: "FullGramPlugins", code: 400, userInfo: [NSLocalizedDescriptionKey: "Некорректный адрес официального маркета FullGram."])))
             }
             return
         }
@@ -1078,6 +1095,9 @@ end
             }
             do {
                 let catalog = try JSONDecoder().decode(FullGramRemoteCatalog.self, from: data)
+                self.lock.lock()
+                self.officialCatalogItems = catalog.plugins
+                self.lock.unlock()
                 DispatchQueue.main.async { completion(.success(catalog)) }
             } catch {
                 DispatchQueue.main.async { completion(.failure(error)) }
@@ -1090,6 +1110,17 @@ end
         enableImmediately: Bool,
         completion: @escaping (Result<FullGramPluginDescriptor, Error>) -> Void
     ) {
+        self.lock.lock()
+        let isFromOfficialMarket = self.officialCatalogItems.contains(item)
+        self.lock.unlock()
+
+        guard isFromOfficialMarket else {
+            DispatchQueue.main.async {
+                completion(.failure(NSError(domain: "FullGramPlugins", code: 403, userInfo: [NSLocalizedDescriptionKey: "Плагин отсутствует в официальном маркете FullGram."])))
+            }
+            return
+        }
+
         if let inlineCode = item.code, !inlineCode.isEmpty {
             let saved = self.savePlugin(id: item.id, name: item.name, language: item.language, code: inlineCode, enabled: enableImmediately)
             DispatchQueue.main.async { completion(.success(saved)) }
@@ -1097,11 +1128,9 @@ end
         }
         guard let rawUrl = item.url,
               let url = URL(string: rawUrl),
-              url.scheme?.lowercased() == "https",
-              let host = url.host,
-              Self.isPublicRemoteHost(host) else {
+              Self.isOfficialScriptURL(url) else {
             DispatchQueue.main.async {
-                completion(.failure(NSError(domain: "FullGramPlugins", code: 400, userInfo: [NSLocalizedDescriptionKey: "Недопустимый URL скрипта плагина (требуется https://)."])))
+                completion(.failure(NSError(domain: "FullGramPlugins", code: 403, userInfo: [NSLocalizedDescriptionKey: "Недопустимый источник скрипта плагина: разрешены только официальные ресурсы FullGram."])))
             }
             return
         }

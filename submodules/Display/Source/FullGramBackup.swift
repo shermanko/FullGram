@@ -25,7 +25,8 @@ public enum FullGramBackup {
     private static let trackedPrefixes = ["fullgram."]
     private static let excludedPrivacyKeys: Set<String> = [
         "fullgram.privacy.faceIdEnabled",
-        "fullgram.privacy.lockedChats"
+        "fullgram.privacy.lockedChats",
+        "fullgram.plugins.catalogURL"
     ]
     private static let antiScamWhitelistKey = "fullgram.antiscam.whitelist"
 
@@ -148,22 +149,12 @@ public enum FullGramBackup {
             count += 1
         }
 
-        // Security: always import external backup plugins disabled so untrusted scripts cannot auto-execute.
-        for plugin in payload.plugins {
-            FullGramPluginManager.shared.savePlugin(
-                id: plugin.id,
-                name: plugin.name,
-                language: plugin.language,
-                code: plugin.code,
-                enabled: false
-            )
-        }
-
+        // Security: do not import external plugin code from backups; plugins are only installed from the official FullGram market.
         NotificationCenter.default.post(name: FullGramMixer.didChangeNotification, object: nil)
         NotificationCenter.default.post(name: FullGramAntiScam.didChangeNotification, object: nil)
         NotificationCenter.default.post(name: FullGramPluginNotifications.pluginsDidChange, object: nil)
         NotificationCenter.default.post(name: Self.didRestoreNotification, object: nil)
 
-        return (count, payload.plugins.count)
+        return (count, 0)
     }
 }

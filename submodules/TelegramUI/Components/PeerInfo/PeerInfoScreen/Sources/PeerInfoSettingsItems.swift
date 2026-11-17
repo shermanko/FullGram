@@ -404,6 +404,7 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
     let ItemPeerPersonalChannel = 13
     let ItemPeerChatAutomation = 14
     let ItemPeerChatAutomationHelp = 15
+    let ItemFullGramBadge = 16
     
     items[.help]!.append(PeerInfoScreenCommentItem(id: ItemNameHelp, text: presentationData.strings.EditProfile_NameAndPhotoOrVideoHelp))
     
@@ -481,6 +482,24 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
         items[.info]!.append(PeerInfoScreenDisclosureItem(id: ItemPhoneNumber, label: .text(user.phone.flatMap({ formatPhoneNumber(context: context, number: $0) }) ?? ""), text: presentationData.strings.Settings_PhoneNumber, icon: PresentationResourcesSettings.recentCalls, action: {
             interaction.openSettings(.phoneNumber)
         }))
+    }
+    if fullGramCanOpenAdmin(context: context), let peer = data.peer {
+        let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+        let badgePeerId = peer.id.toInt64()
+        let badgeUsername = peer.addressName
+        let statusLabel = fullGramBadgeRowStatusLabel(peerId: badgePeerId, username: badgeUsername, russian: ru)
+        items[.info]!.append(PeerInfoScreenDisclosureItem(
+            id: ItemFullGramBadge,
+            label: .text(statusLabel),
+            text: ru ? "Бейдж" : "Badge",
+            icon: fullGramBadgeMenuIcon(),
+            action: {
+                guard let controller = interaction.getController() else {
+                    return
+                }
+                controller.push(fullGramBadgeDeskController(context: context, peer: EnginePeer(peer), peerId: badgePeerId, username: badgeUsername))
+            }
+        ))
     }
     var username = ""
     if let addressName = data.peer?.addressName, !addressName.isEmpty {

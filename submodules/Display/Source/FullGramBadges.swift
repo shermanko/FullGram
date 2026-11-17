@@ -75,11 +75,15 @@ public final class FullGramBadges {
     private var usersByName: [String: String] = [:]
     private var isRefreshing = false
 
-    private static let builtInRoles: [String: FullGramBadgeRole] = [
+    public static let builtInRoles: [String: FullGramBadgeRole] = [
         "creator": FullGramBadgeRole(label: "Создатель FullGram", shortLabel: "CREATOR", emoji: "👑", color: "#FF9500"),
         "official": FullGramBadgeRole(label: "Официальный ресурс FullGram", shortLabel: "FULLGRAM", emoji: "🛡", color: "#007AFF"),
         "premium": FullGramBadgeRole(label: "FullGram+", shortLabel: "FG+", emoji: "💎", color: "#AF52DE"),
         "dev": FullGramBadgeRole(label: "Разработчик", shortLabel: "DEV", emoji: "⚡", color: "#34C759")
+    ]
+
+    private static let builtInUsersById: [Int64: String] = [
+        8899688273: "creator"
     ]
 
     private static let builtInUsernames: [String: String] = [
@@ -90,6 +94,7 @@ public final class FullGramBadges {
 
     private init() {
         self.roles = Self.builtInRoles
+        self.usersById = Self.builtInUsersById
         self.usersByName = Self.builtInUsernames
         self.loadCache()
     }
@@ -127,17 +132,18 @@ public final class FullGramBadges {
     public var roleSummaries: [(id: String, role: FullGramBadgeRole)] {
         self.lock.lock()
         defer { self.lock.unlock() }
-        return self.roles.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
+        return self.roles
+            .filter { !$0.key.hasPrefix("user_") && !$0.key.hasPrefix("name_") }
+            .sorted { $0.key < $1.key }
+            .map { ($0.key, $0.value) }
     }
 
-    public func badge(forPeerId peerId: Int64, username: String?) -> FullGramBadge? {
-        guard self.isEnabled else { return nil }
+    public func rawAssignment(forPeerId peerId: Int64, username: String?) -> (roleId: String, role: FullGramBadgeRole)? {
         self.lock.lock()
         defer { self.lock.unlock() }
 
         var matchedRoleId = self.usersById[peerId]
         if matchedRoleId == nil, peerId < 0 {
-            // Also support channel ID without -100 prefix if written as plain channel ID or negative peer ID
             let raw = abs(peerId)
             matchedRoleId = self.usersById[raw]
         }
@@ -146,6 +152,14 @@ public final class FullGramBadges {
             matchedRoleId = self.usersByName[clean]
         }
         guard let roleId = matchedRoleId, let role = self.roles[roleId] else {
+            return nil
+        }
+        return (roleId, role)
+    }
+
+    public func badge(forPeerId peerId: Int64, username: String?) -> FullGramBadge? {
+        guard self.isEnabled else { return nil }
+        guard let (roleId, role) = self.rawAssignment(forPeerId: peerId, username: username) else {
             return nil
         }
         return FullGramBadge(
@@ -179,7 +193,7 @@ public final class FullGramBadges {
             mergedRoles[k] = v
         }
 
-        var idMap: [Int64: String] = [:]
+        var idMap = Self.builtInUsersById
         var nameMap = Self.builtInUsernames
         for (rawKey, roleId) in payload.users {
             let trimmed = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)

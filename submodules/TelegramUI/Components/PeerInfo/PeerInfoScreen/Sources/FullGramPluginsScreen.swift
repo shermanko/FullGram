@@ -1,6 +1,5 @@
 import Foundation
 import UIKit
-import UniformTypeIdentifiers
 import Display
 import AsyncDisplayKit
 import SwiftSignalKit
@@ -14,7 +13,6 @@ import AccountContext
 private final class FullGramPluginsArguments {
     let toggleSystem: (Bool) -> Void
     let createPlugin: (FullGramPluginLanguage) -> Void
-    let importFile: () -> Void
     let openRemoteCatalog: () -> Void
     let openPlugin: (FullGramPluginDescriptor) -> Void
     let openApiDocs: () -> Void
@@ -22,14 +20,12 @@ private final class FullGramPluginsArguments {
     init(
         toggleSystem: @escaping (Bool) -> Void,
         createPlugin: @escaping (FullGramPluginLanguage) -> Void,
-        importFile: @escaping () -> Void,
         openRemoteCatalog: @escaping () -> Void,
         openPlugin: @escaping (FullGramPluginDescriptor) -> Void,
         openApiDocs: @escaping () -> Void
     ) {
         self.toggleSystem = toggleSystem
         self.createPlugin = createPlugin
-        self.importFile = importFile
         self.openRemoteCatalog = openRemoteCatalog
         self.openPlugin = openPlugin
         self.openApiDocs = openApiDocs
@@ -48,7 +44,6 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
     case remoteCatalog(String)
     case createLua
     case createPython
-    case importFile
     case apiDocs
     case listHeader(String)
     case pluginItem(Int32, FullGramPluginDescriptor, String?)
@@ -56,7 +51,7 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
     var section: ItemListSectionId {
         switch self {
         case .systemSwitch, .systemInfo: return FullGramPluginsSection.system.rawValue
-        case .remoteCatalog, .createLua, .createPython, .importFile, .apiDocs: return FullGramPluginsSection.actions.rawValue
+        case .remoteCatalog, .createLua, .createPython, .apiDocs: return FullGramPluginsSection.actions.rawValue
         case .listHeader, .pluginItem: return FullGramPluginsSection.list.rawValue
         }
     }
@@ -68,7 +63,6 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
         case .remoteCatalog: return 9
         case .createLua: return 10
         case .createPython: return 11
-        case .importFile: return 12
         case .apiDocs: return 13
         case .listHeader: return 100
         case let .pluginItem(idx, _, _): return 101 + idx
@@ -87,7 +81,7 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
         case let .systemInfo(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         case let .remoteCatalog(label):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: "🌐 Каталог плагинов с сервера", label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openRemoteCatalog)
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: "🛒 Маркет плагинов FullGram", label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openRemoteCatalog)
         case .createLua:
             return ItemListActionItem(presentationData: presentationData, title: "+ Новый плагин на Lua (.lua)", kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
                 args.createPlugin(.lua)
@@ -96,8 +90,6 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
             return ItemListActionItem(presentationData: presentationData, title: "+ Новый плагин на Python (.py)", kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
                 args.createPlugin(.python)
             })
-        case .importFile:
-            return ItemListActionItem(presentationData: presentationData, title: "Импортировать файл (.lua / .py)", kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.importFile)
         case .apiDocs:
             return ItemListDisclosureItem(presentationData: presentationData, title: "Справка по API (Lua и Python)", label: "", sectionId: self.section, style: .blocks, action: args.openApiDocs)
         case let .listHeader(text):
@@ -113,25 +105,8 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
     }
 }
 
-private final class FullGramPluginDocumentPickerDelegate: NSObject, UIDocumentPickerDelegate {
-    let onPick: (URL) -> Void
-    init(onPick: @escaping (URL) -> Void) {
-        self.onPick = onPick
-    }
-
-    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-        if let first = urls.first {
-            self.onPick(first)
-        }
-    }
-}
-
-private var activeDocumentPickerDelegate: FullGramPluginDocumentPickerDelegate?
-
 func fullGramPluginsController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
-    var presentControllerImpl: ((ViewController) -> Void)?
-    var presentNativeImpl: ((UIViewController) -> Void)?
 
     let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
     var version = 0
@@ -198,31 +173,6 @@ def on_outgoing_message(ctx):
             )
             pushImpl?(FullGramPluginEditorContainerController(context: context, descriptor: draft, isNew: true, onChanged: bump))
         },
-        importFile: {
-            var types: [UTType] = [.plainText, .sourceCode]
-            if let luaType = UTType(filenameExtension: "lua") { types.append(luaType) }
-            if let pyType = UTType(filenameExtension: "py") { types.append(pyType) }
-            let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
-            let delegate = FullGramPluginDocumentPickerDelegate { url in
-                activeDocumentPickerDelegate = nil
-                do {
-                    let imported = try FullGramPluginManager.shared.importPlugin(from: url)
-                    bump()
-                    let alert = textAlertController(context: context, title: "Плагин импортирован", text: "\(imported.name) [\(imported.language.displayName)] добавлен и включён.", actions: [
-                        TextAlertAction(type: .defaultAction, title: "OK", action: {})
-                    ])
-                    presentControllerImpl?(alert)
-                } catch {
-                    let alert = textAlertController(context: context, title: "Ошибка импорта", text: error.localizedDescription, actions: [
-                        TextAlertAction(type: .defaultAction, title: "OK", action: {})
-                    ])
-                    presentControllerImpl?(alert)
-                }
-            }
-            activeDocumentPickerDelegate = delegate
-            picker.delegate = delegate
-            presentNativeImpl?(picker)
-        },
         openRemoteCatalog: {
             pushImpl?(fullGramRemoteCatalogController(context: context))
         },
@@ -239,15 +189,13 @@ def on_outgoing_message(ctx):
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let manager = FullGramPluginManager.shared
         let plugins = manager.allPlugins()
-        let catalogStatus = manager.catalogURL.isEmpty ? "Настроить" : "Подключён"
 
         var entries: [FullGramPluginsEntry] = [
             .systemSwitch(manager.isSystemEnabled),
-            .systemInfo("Встроенные движки Lua и Python работают локально в изолированной песочнице. Пишите плагины здесь, импортируйте .lua/.py или скачивайте новые из онлайн-каталога без переустановки FullGram."),
-            .remoteCatalog(catalogStatus),
+            .systemInfo("Встроенные движки Lua и Python работают локально в изолированной песочнице. В целях безопасности установка сторонних плагинов из чатов и файлов отключена — загружайте проверенные плагины только из официального маркета FullGram."),
+            .remoteCatalog("Официальный"),
             .createLua,
             .createPython,
-            .importFile,
             .apiDocs
         ]
 
@@ -273,8 +221,6 @@ def on_outgoing_message(ctx):
 
     let controller = ItemListController(context: context, state: signal)
     pushImpl = { [weak controller] c in controller?.push(c) }
-    presentControllerImpl = { [weak controller] c in controller?.present(c, in: .window(.root)) }
-    presentNativeImpl = { [weak controller] vc in controller?.present(vc, animated: true) }
     return controller
 }
 
@@ -644,15 +590,15 @@ Lua библиотеки: string, table, math, json, pairs, ipairs, pcall, print
     return ItemListController(context: context, state: signal)
 }
 
-// MARK: - Онлайн-каталог плагинов (бесплатный сервер plugins.json без переустановки)
+// MARK: - Официальный маркет плагинов FullGram
 
 private final class FullGramRemoteCatalogArguments {
-    let editURL: () -> Void
     let reloadCatalog: () -> Void
+    let openAdmin: () -> Void
     let installItem: (FullGramRemotePluginItem) -> Void
-    init(editURL: @escaping () -> Void, reloadCatalog: @escaping () -> Void, installItem: @escaping (FullGramRemotePluginItem) -> Void) {
-        self.editURL = editURL
+    init(reloadCatalog: @escaping () -> Void, openAdmin: @escaping () -> Void, installItem: @escaping (FullGramRemotePluginItem) -> Void) {
         self.reloadCatalog = reloadCatalog
+        self.openAdmin = openAdmin
         self.installItem = installItem
     }
 }
@@ -664,8 +610,8 @@ private enum FullGramRemoteCatalogSection: Int32 {
 
 private enum FullGramRemoteCatalogEntry: ItemListNodeEntry {
     case serverHeader(String)
-    case serverURL(String, String)
     case reload(String, ItemListActionKind)
+    case adminManage(String)
     case serverInfo(String)
     case itemsHeader(String)
     case pluginItem(Int32, FullGramRemotePluginItem, Bool)
@@ -673,7 +619,7 @@ private enum FullGramRemoteCatalogEntry: ItemListNodeEntry {
 
     var section: ItemListSectionId {
         switch self {
-        case .serverHeader, .serverURL, .reload, .serverInfo: return FullGramRemoteCatalogSection.server.rawValue
+        case .serverHeader, .reload, .adminManage, .serverInfo: return FullGramRemoteCatalogSection.server.rawValue
         case .itemsHeader, .pluginItem, .emptyStatus: return FullGramRemoteCatalogSection.items.rawValue
         }
     }
@@ -681,9 +627,9 @@ private enum FullGramRemoteCatalogEntry: ItemListNodeEntry {
     var stableId: Int32 {
         switch self {
         case .serverHeader: return 0
-        case .serverURL: return 1
         case .reload: return 2
-        case .serverInfo: return 3
+        case .adminManage: return 3
+        case .serverInfo: return 4
         case .itemsHeader: return 100
         case let .pluginItem(idx, _, _): return 101 + idx
         case .emptyStatus: return 500
@@ -699,10 +645,10 @@ private enum FullGramRemoteCatalogEntry: ItemListNodeEntry {
         switch self {
         case let .serverHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
-        case let .serverURL(title, value):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.editURL)
         case let .reload(title, kind):
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: kind, alignment: .center, sectionId: self.section, style: .blocks, action: args.reloadCatalog)
+        case let .adminManage(title):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openAdmin)
         case let .serverInfo(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         case let .itemsHeader(text):
@@ -721,12 +667,11 @@ private enum FullGramRemoteCatalogEntry: ItemListNodeEntry {
 
 private func fullGramRemoteCatalogController(context: AccountContext) -> ViewController {
     var presentNativeImpl: ((UIViewController) -> Void)?
+    var pushImpl: ((ViewController) -> Void)?
     let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
     var tick = 0
     var isLoading = false
-    var statusMessage = FullGramPluginManager.shared.catalogURL.isEmpty
-        ? "Укажите ссылку на plugins.json (например, GitHub Raw / Cloudflare Workers) и нажмите «Обновить каталог»."
-        : "Нажмите «Обновить каталог» для загрузки списка плагинов."
+    var statusMessage = "Нажмите «Обновить маркет» для загрузки проверенных плагинов."
     var remoteItems: [FullGramRemotePluginItem] = []
 
     let bump: () -> Void = {
@@ -737,14 +682,14 @@ private func fullGramRemoteCatalogController(context: AccountContext) -> ViewCon
     let performFetch: () -> Void = {
         guard !isLoading else { return }
         isLoading = true
-        statusMessage = "Загрузка каталога…"
+        statusMessage = "Загрузка маркета…"
         bump()
         FullGramPluginManager.shared.fetchRemoteCatalog { result in
             isLoading = false
             switch result {
             case let .success(catalog):
                 remoteItems = catalog.plugins
-                statusMessage = catalog.plugins.isEmpty ? "Каталог пуст." : "Загружено плагинов: \(catalog.plugins.count)"
+                statusMessage = catalog.plugins.isEmpty ? "В маркете пока нет плагинов." : "Загружено плагинов: \(catalog.plugins.count)"
             case let .failure(error):
                 statusMessage = "Ошибка: \(error.localizedDescription)"
             }
@@ -753,33 +698,16 @@ private func fullGramRemoteCatalogController(context: AccountContext) -> ViewCon
     }
 
     let args = FullGramRemoteCatalogArguments(
-        editURL: {
-            let alert = UIAlertController(
-                title: "URL каталога (plugins.json)",
-                message: "Вставьте прямую https:// ссылку на JSON-файл каталога (GitHub Raw, jsDelivr CDN или Cloudflare Workers).",
-                preferredStyle: .alert
-            )
-            alert.addTextField { tf in
-                tf.text = FullGramPluginManager.shared.catalogURL
-                tf.placeholder = "https://raw.githubusercontent.com/user/fullgram-plugins/main/plugins.json"
-                tf.keyboardType = .URL
-                tf.autocorrectionType = .no
-                tf.autocapitalizationType = .none
-            }
-            alert.addAction(UIAlertAction(title: "Сохранить и обновить", style: .default, handler: { _ in
-                FullGramPluginManager.shared.catalogURL = alert.textFields?.first?.text ?? ""
-                performFetch()
-            }))
-            alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            presentNativeImpl?(alert)
-        },
         reloadCatalog: {
             performFetch()
+        },
+        openAdmin: {
+            pushImpl?(fullGramAdminController(context: context))
         },
         installItem: { item in
             let alert = UIAlertController(
                 title: item.name,
-                message: "Автор: \(item.author) • v\(item.version) [\(item.language.displayName)]\n\(item.description)\n\nУстановить этот плагин?",
+                message: "Автор: \(item.author) • v\(item.version) [\(item.language.displayName)]\n\(item.description)\n\nУстановить этот плагин из официального маркета?",
                 preferredStyle: .alert
             )
             let doInstall: (Bool) -> Void = { enable in
@@ -803,27 +731,25 @@ private func fullGramRemoteCatalogController(context: AccountContext) -> ViewCon
         }
     )
 
-    if !FullGramPluginManager.shared.catalogURL.isEmpty {
-        DispatchQueue.main.async {
-            performFetch()
-        }
+    DispatchQueue.main.async {
+        performFetch()
     }
 
     let signal = combineLatest(context.sharedContext.presentationData, refresh.get())
     |> deliverOnMainQueue
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
-        let currentUrl = FullGramPluginManager.shared.catalogURL
-        let urlLabel = currentUrl.isEmpty ? "Не задан" : String(currentUrl.suffix(28))
         let installedIds = Set(FullGramPluginManager.shared.allPlugins().map { $0.id })
 
         var entries: [FullGramRemoteCatalogEntry] = [
-            .serverHeader("СЕРВЕР КАТАЛОГА (0₽ / БЕЗ ПЕРЕУСТАНОВКИ)"),
-            .serverURL("Ссылка на plugins.json", urlLabel),
-            .reload(isLoading ? "⏳ Обновление…" : "🔄 Обновить каталог", isLoading ? .neutral : .generic),
-            .serverInfo("Поддерживаются бесплатный GitHub (Raw / Pages / jsDelivr) и Cloudflare Workers: добавляйте скрипты в репозиторий, и пользователи увидят их здесь сразу без обновления приложения.")
+            .serverHeader("ОФИЦИАЛЬНЫЙ МАРКЕТ FULLGRAM"),
+            .reload(isLoading ? "⏳ Обновление…" : "🔄 Обновить маркет", isLoading ? .neutral : .generic)
         ]
+        if fullGramCanOpenAdmin(context: context) {
+            entries.append(.adminManage("🔐 Управление маркетом (Админ)"))
+        }
+        entries.append(.serverInfo("Плагины в маркете публикуются и обновляются только разработчиком FullGram. Установка сторонних скриптов из чатов, файлов и других серверов отключена в целях безопасности."))
 
-        entries.append(.itemsHeader("ПЛАГИНЫ НА СЕРВЕРЕ (\(remoteItems.count))"))
+        entries.append(.itemsHeader("ДОСТУПНЫЕ ПЛАГИНЫ (\(remoteItems.count))"))
         if remoteItems.isEmpty {
             entries.append(.emptyStatus(statusMessage))
         } else {
@@ -835,7 +761,7 @@ private func fullGramRemoteCatalogController(context: AccountContext) -> ViewCon
         let data = ItemListPresentationData(presentationData)
         let state = ItemListControllerState(
             presentationData: data,
-            title: .text("Каталог плагинов"),
+            title: .text("Маркет плагинов"),
             leftNavigationButton: nil,
             rightNavigationButton: nil,
             backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back)
@@ -846,5 +772,6 @@ private func fullGramRemoteCatalogController(context: AccountContext) -> ViewCon
 
     let controller = ItemListController(context: context, state: signal)
     presentNativeImpl = { [weak controller] vc in controller?.present(vc, animated: true) }
+    pushImpl = { [weak controller] c in controller?.push(c) }
     return controller
 }

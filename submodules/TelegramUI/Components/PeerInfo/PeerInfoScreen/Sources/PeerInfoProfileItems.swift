@@ -132,6 +132,7 @@ func infoItems(
         let ItemAgentInfo = 9100
         let ItemAgentAddProvider = 9101
         let ItemAgentProvidersInfo = 9102
+        let ItemFullGramBadge = 9300
         let ItemCommunity = 10000
         
         if let cachedUserData = data.cachedData as? CachedUserData, cachedUserData.flags.contains(.unofficialSecurityRisk) {
@@ -193,6 +194,24 @@ func infoItems(
             }, requestLayout: { animated in
                 interaction.requestLayout(animated)
             }))
+        }
+        if fullGramCanOpenAdmin(context: context) {
+            let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+            let badgePeerId = user.id.toInt64()
+            let badgeUsername = user.addressName
+            let statusLabel = fullGramBadgeRowStatusLabel(peerId: badgePeerId, username: badgeUsername, russian: ru)
+            items[currentPeerInfoSection]!.append(PeerInfoScreenDisclosureItem(
+                id: ItemFullGramBadge,
+                label: .text(statusLabel),
+                text: ru ? "Бейдж" : "Badge",
+                icon: fullGramBadgeMenuIcon(),
+                action: {
+                    guard let controller = interaction.getController() else {
+                        return
+                    }
+                    controller.push(fullGramBadgeDeskController(context: context, peer: .user(user), peerId: badgePeerId, username: badgeUsername))
+                }
+            ))
         }
         if let mainUsername = user.addressName {
             var additionalUsernames: String?
@@ -678,6 +697,24 @@ func infoItems(
                 ))
             }
             
+            if fullGramCanOpenAdmin(context: context) {
+                let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+                let badgePeerId = channel.id.toInt64()
+                let badgeUsername = channel.addressName
+                let statusLabel = fullGramBadgeRowStatusLabel(peerId: badgePeerId, username: badgeUsername, russian: ru)
+                items[currentPeerInfoSection]!.append(PeerInfoScreenDisclosureItem(
+                    id: 9300,
+                    label: .text(statusLabel),
+                    text: ru ? "Бейдж" : "Badge",
+                    icon: fullGramBadgeMenuIcon(),
+                    action: {
+                        guard let controller = interaction.getController() else {
+                            return
+                        }
+                        controller.push(fullGramBadgeDeskController(context: context, peer: .channel(channel), peerId: badgePeerId, username: badgeUsername))
+                    }
+                ))
+            }
             if let mainUsername = channel.addressName {
                 var additionalUsernames: String?
                 let usernames = channel.usernames.filter { $0.isActive && $0.username != mainUsername }

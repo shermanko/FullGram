@@ -1031,8 +1031,13 @@ final class PeerInfoHeaderNode: ASDisplayNode {
                 emojiRegularStatusContent = .animation(content: .customEmoji(fileId: emojiStatus.fileId), size: CGSize(width: 80.0, height: 80.0), placeholderColor: presentationData.theme.list.mediaPlaceholderColor, themeColor: navigationContentsAccentColor, loopMode: .forever)
                 emojiExpandedStatusContent = .animation(content: .customEmoji(fileId: emojiStatus.fileId), size: CGSize(width: 80.0, height: 80.0), placeholderColor: navigationContentsAccentColor, themeColor: navigationContentsAccentColor, loopMode: .forever)
             case let .fullGram(badge):
-                emojiRegularStatusContent = .text(color: badge.uiColor, string: badge.chipText)
-                emojiExpandedStatusContent = emojiRegularStatusContent
+                if let customEmojiId = badge.customEmojiId {
+                    emojiRegularStatusContent = .animation(content: .customEmoji(fileId: customEmojiId), size: CGSize(width: 80.0, height: 80.0), placeholderColor: presentationData.theme.list.mediaPlaceholderColor, themeColor: navigationContentsAccentColor, loopMode: .forever)
+                    emojiExpandedStatusContent = .animation(content: .customEmoji(fileId: customEmojiId), size: CGSize(width: 80.0, height: 80.0), placeholderColor: navigationContentsAccentColor, themeColor: navigationContentsAccentColor, loopMode: .forever)
+                } else {
+                    emojiRegularStatusContent = .text(color: badge.uiColor, string: badge.chipText)
+                    emojiExpandedStatusContent = emojiRegularStatusContent
+                }
             }
             
             let iconSize = self.titleCredibilityIconView.update(

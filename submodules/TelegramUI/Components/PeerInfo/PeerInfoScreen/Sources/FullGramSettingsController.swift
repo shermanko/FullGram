@@ -71,17 +71,20 @@ private final class FullGramSettingsControllerArguments {
     let context: AccountContext
     let openSearch: () -> Void
     let openCategory: (FullGramCategory) -> Void
+    let openAdmin: () -> Void
     let openLink: (String) -> Void
 
     init(
         context: AccountContext,
         openSearch: @escaping () -> Void,
         openCategory: @escaping (FullGramCategory) -> Void,
+        openAdmin: @escaping () -> Void,
         openLink: @escaping (String) -> Void
     ) {
         self.context = context
         self.openSearch = openSearch
         self.openCategory = openCategory
+        self.openAdmin = openAdmin
         self.openLink = openLink
     }
 }
@@ -89,6 +92,7 @@ private final class FullGramSettingsControllerArguments {
 private enum FullGramSettingsSection: Int32 {
     case header
     case search
+    case admin
     case categories
     case links
 }
@@ -96,6 +100,7 @@ private enum FullGramSettingsSection: Int32 {
 private enum FullGramSettingsEntry: ItemListNodeEntry {
     case header(PresentationTheme)
     case search(PresentationTheme)
+    case adminPanel(PresentationTheme, String)
     case categoriesHeader(PresentationTheme, String)
     case category(Int32, PresentationTheme, FullGramCategory)
     case linksHeader(PresentationTheme, String)
@@ -107,6 +112,8 @@ private enum FullGramSettingsEntry: ItemListNodeEntry {
             return FullGramSettingsSection.header.rawValue
         case .search:
             return FullGramSettingsSection.search.rawValue
+        case .adminPanel:
+            return FullGramSettingsSection.admin.rawValue
         case .categoriesHeader, .category:
             return FullGramSettingsSection.categories.rawValue
         case .linksHeader, .link:
@@ -120,10 +127,12 @@ private enum FullGramSettingsEntry: ItemListNodeEntry {
             return 0
         case .search:
             return 1
-        case .categoriesHeader:
+        case .adminPanel:
             return 2
+        case .categoriesHeader:
+            return 3
         case let .category(index, _, _):
-            return 3 + index
+            return 4 + index
         case .linksHeader:
             return 100
         case let .link(index, _, _, _, _, _):
@@ -141,6 +150,11 @@ private enum FullGramSettingsEntry: ItemListNodeEntry {
         case let .search(lhsTheme):
             if case let .search(rhsTheme) = rhs {
                 return lhsTheme === rhsTheme
+            }
+            return false
+        case let .adminPanel(lhsTheme, lhsTitle):
+            if case let .adminPanel(rhsTheme, rhsTitle) = rhs {
+                return lhsTheme === rhsTheme && lhsTitle == rhsTitle
             }
             return false
         case let .categoriesHeader(lhsTheme, lhsText):
@@ -188,6 +202,20 @@ private enum FullGramSettingsEntry: ItemListNodeEntry {
                 disclosureStyle: .arrow,
                 action: {
                     arguments.openSearch()
+                }
+            )
+        case let .adminPanel(_, title):
+            return ItemListDisclosureItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                icon: fullGramBadgeMenuIcon(),
+                title: title,
+                label: "",
+                sectionId: self.section,
+                style: .blocks,
+                disclosureStyle: .arrow,
+                action: {
+                    arguments.openAdmin()
                 }
             )
         case let .categoriesHeader(_, text):
@@ -401,6 +429,9 @@ func fullGramSettingsController(context: AccountContext) -> ViewController {
                 pushControllerImpl?(fullGramAIAssistantController(context: context))
             }
         },
+        openAdmin: {
+            pushControllerImpl?(fullGramAdminController(context: context))
+        },
         openLink: { url in
             let presentationData = context.sharedContext.currentPresentationData.with { $0 }
             context.sharedContext.openExternalUrl(
@@ -419,9 +450,13 @@ func fullGramSettingsController(context: AccountContext) -> ViewController {
     |> map { presentationData -> (ItemListControllerState, (ItemListNodeState, Any)) in
         var entries: [FullGramSettingsEntry] = [
             .header(presentationData.theme),
-            .search(presentationData.theme),
-            .categoriesHeader(presentationData.theme, "КАТЕГОРИИ")
+            .search(presentationData.theme)
         ]
+        if fullGramCanOpenAdmin(context: context) {
+            let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+            entries.append(.adminPanel(presentationData.theme, ru ? "Админ-панель FullGram" : "FullGram Admin"))
+        }
+        entries.append(.categoriesHeader(presentationData.theme, "КАТЕГОРИИ"))
 
         var index: Int32 = 0
         for category in FullGramCategory.allCases {
@@ -3284,8 +3319,7 @@ func fullGramOtherCategoryController(context: AccountContext) -> ViewController 
                 let finishImport: (Bool) -> Void = { allowWhitelist in
                     do {
                         let res = try FullGramBackup.importFromFile(url: url, allowAntiScamWhitelist: allowWhitelist)
-                        let pluginNote = res.pluginsCount > 0 ? "\nВсе импортированные плагины отключены по соображениям безопасности." : ""
-                        let alert = UIAlertController(title: "Бэкап восстановлен", message: "Загружено настроек: \(res.settingsCount), плагинов: \(res.pluginsCount).\(pluginNote)", preferredStyle: .alert)
+                        let alert = UIAlertController(title: "Бэкап восстановлен", message: "Загружено настроек: \(res.settingsCount).\nПлагины из файла не импортируются — для безопасности устанавливайте их только из официального маркета FullGram.", preferredStyle: .alert)
                         alert.addAction(UIAlertAction(title: "OK", style: .default))
                         presentNativeImpl?(alert)
                     } catch {
@@ -3337,9 +3371,9 @@ func fullGramOtherCategoryController(context: AccountContext) -> ViewController 
             .aiAssistantLink("ИИ Ассистент и свой агент", aiStatus),
             .badgesLink("Бейджи FullGram (badges.json)", badgesStatus),
             .backupHeader("БЭКАП FULLGRAM (.FULLGRAM)"),
-            .exportBackup("Экспорт всех настроек и плагинов"),
+            .exportBackup("Экспорт настроек и тем"),
             .importBackup("Импорт из файла .fullgram"),
-            .backupInfo("Сохраняет в один файл .fullgram все переключатели, белый список Анти-скама, пресеты Микшера, шрифты, темы и плагины Lua/Python.")
+            .backupInfo("Сохраняет в один файл .fullgram все переключатели, белый список Анти-скама, пресеты Микшера, шрифты и темы. В целях безопасности плагины при импорте не переносятся — устанавливайте их только из маркета.")
         ]
         let data = ItemListPresentationData(presentationData)
         let state = ItemListControllerState(presentationData: data, title: .text("Прочее"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))

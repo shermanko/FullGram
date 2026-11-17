@@ -51,7 +51,7 @@ extension RichTextEngineEditorView {
         var target = 0
         if let wanted = cell {
             for (index, role) in freshRoles.enumerated() {
-                if role.tableCellCoordinates == wanted {
+                if let coords = role.tableCellCoordinates, coords.row == wanted.row, coords.column == wanted.column {
                     target = index
                     break
                 }

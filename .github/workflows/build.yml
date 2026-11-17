@@ -51,7 +51,7 @@ jobs:
     name: Build FullGram iOS
     needs: checks
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 240
 
     steps:
@@ -142,6 +142,30 @@ jobs:
             echo "All required macOS build tools are already installed."
           fi
 
+          # Ensure restricted-PATH Bazel genrules (PATH=/bin:/usr/bin:/usr/local/bin) can locate sysctl,
+          # and ensure the Metal compiler toolchain is installed and functional on Xcode 27.
+          sudo mkdir -p /usr/local/bin
+          if ! env PATH=/bin:/usr/bin:/usr/local/bin sysctl -n hw.ncpu >/dev/null 2>&1; then
+            sudo ln -sf /usr/sbin/sysctl /usr/local/bin/sysctl
+          fi
+
+          probe_metal() {
+            local probe_dir
+            probe_dir="$(mktemp -d)"
+            printf '#include <metal_stdlib>\nusing namespace metal;\nkernel void fg_probe(device uint *out [[buffer(0)]], uint id [[thread_position_in_grid]]) { out[id] = id; }\n' > "$probe_dir/probe.metal"
+            xcrun --sdk iphoneos metal -c -target air64-apple-ios15.0 "$probe_dir/probe.metal" -o "$probe_dir/probe.air" >/dev/null 2>&1
+            local rc=$?
+            rm -rf "$probe_dir"
+            return $rc
+          }
+
+          if ! probe_metal; then
+            echo "Downloading MetalToolchain Xcode component..."
+            xcodebuild -downloadComponent MetalToolchain
+            probe_metal
+          fi
+          echo "Metal toolchain verified."
+
       - name: Validate Telegram credentials
         env:
           SECRET_API_ID: ${{ secrets.TELEGRAM_API_ID }}
@@ -188,10 +212,10 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: /Users/Shared/bazel-disk-cache
-          key: bazel-disk-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('versions.json') }}-${{ github.sha }}
+          key: bazel-disk-xcode27-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('versions.json') }}-${{ github.sha }}
           restore-keys: |
-            bazel-disk-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('versions.json') }}-
-            bazel-disk-${{ runner.os }}-${{ runner.arch }}-
+            bazel-disk-xcode27-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('versions.json') }}-
+            bazel-disk-xcode27-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Prepare canonical source directory
         run: |
@@ -292,6 +316,7 @@ jobs:
             --cacheDir="$CACHE_DIR" \
             ${XCODE_OVERRIDE_FLAG:-} \
             build \
+            --continueOnError \
             --configurationPath="build-input/active-configuration.json" \
             --codesigningInformationPath=build-system/fake-codesigning \
             --configuration="$BUILD_CONFIGURATION" \
@@ -351,8 +376,8 @@ jobs:
       - name: Free disk space before saving cache
         if: always()
         run: |
-          rm -rf /Users/Shared/telegram-ios || true
-          rm -rf /private/var/tmp/_bazel_containerhost || true
+          chmod -R u+w /private/var/tmp/_bazel_containerhost 2>/dev/null || true
+          rm -rf /Users/Shared/telegram-ios /private/var/tmp/_bazel_containerhost || true
           python3 - <<'PY'
           import os
           from pathlib import Path
@@ -392,7 +417,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: /Users/Shared/bazel-disk-cache
-          key: bazel-disk-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('versions.json') }}-${{ github.sha }}
+          key: bazel-disk-xcode27-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('versions.json') }}-${{ github.sha }}
 
       - name: Create GitHub Release
         if: success() && ((github.event_name == 'push' && github.ref == 'refs/heads/master') || (github.event_name == 'workflow_dispatch' && inputs.create_release))

@@ -2834,7 +2834,11 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
                 if !isChannelSelfPost,
                    !effectiveAuthor.isScam && !effectiveAuthor.isFake && !effectiveAuthor.isVerified && effectiveAuthor.emojiStatus == nil,
                    let fullGramBadge = FullGramBadges.shared.badge(forPeerId: effectiveAuthor.id.toInt64(), username: effectiveAuthor.addressName) {
-                    currentCredibilityIcon = (.text(color: fullGramBadge.uiColor, string: fullGramBadge.chipText), nil)
+                    if let customEmojiId = fullGramBadge.customEmojiId {
+                        currentCredibilityIcon = (.animation(content: .customEmoji(fileId: customEmojiId), size: CGSize(width: 20.0, height: 20.0), placeholderColor: incoming ? item.presentationData.theme.theme.chat.message.incoming.mediaPlaceholderColor : item.presentationData.theme.theme.chat.message.outgoing.mediaPlaceholderColor, themeColor: color.withMultipliedAlpha(0.4), loopMode: .count(2)), nil)
+                    } else {
+                        currentCredibilityIcon = (.text(color: fullGramBadge.uiColor, string: fullGramBadge.chipText), nil)
+                    }
                 }
             }
             if let rawAuthorNameColor = authorNameColor {
