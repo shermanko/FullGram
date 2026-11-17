@@ -6,7 +6,10 @@ from __future__ import annotations
 import argparse
 import configparser
 import json
+import plistlib
 import re
+import struct
+import subprocess
 import sys
 from pathlib import Path
 from typing import Iterable
@@ -314,12 +317,194 @@ def check_swift_sources() -> int:
     return len(swift_files)
 
 
+def read_png_dimensions(path: Path) -> tuple[int, int]:
+    """Read and validate PNG header and return (width, height)."""
+    data = path.read_bytes()
+    if len(data) < 24 or data[:8] != PNG_MAGIC or data[12:16] != b"IHDR":
+        raise AssertionError(f"Invalid PNG header in {path.relative_to(ROOT)}")
+    width, height = struct.unpack(">II", data[16:24])
+    if width <= 0 or height <= 0:
+        raise AssertionError(f"Invalid PNG dimensions {width}x{height} in {path.relative_to(ROOT)}")
+    return width, height
+
+
+def parse_minimum_os_version(build_text: str) -> tuple[int, ...]:
+    match = re.search(r'minimum_os_version\s*=\s*"([0-9]+(?:\.[0-9]+)*)"', build_text)
+    if not match:
+        raise AssertionError("Telegram/BUILD missing minimum_os_version")
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
+def check_xcassets_and_icons() -> tuple[int, int]:
+    """Validate compiled xcassets, DefaultAppIcon appiconset rules, and alternate icons."""
+    build_path = ROOT / "Telegram/BUILD"
+    build_text = build_path.read_text(encoding="utf-8")
+    min_os = parse_minimum_os_version(build_text)
+
+    # 1. Validate all Contents.json files inside Telegram/ and submodules/ xcassets.
+    xcasset_count = 0
+    for base in (ROOT / "Telegram", ROOT / "submodules"):
+        if not base.is_dir():
+            continue
+        for xcasset in sorted(base.rglob("*.xcassets")):
+            xcasset_count += 1
+            for contents_json in sorted(xcasset.rglob("Contents.json")):
+                data = load_json(contents_json)
+                if not isinstance(data, dict):
+                    raise AssertionError(f"{contents_json.relative_to(ROOT)} must be a JSON object")
+                for img in data.get("images", []):
+                    filename = img.get("filename")
+                    if filename and not (contents_json.parent / filename).is_file():
+                        raise AssertionError(
+                            f"Missing asset '{filename}' referenced by {contents_json.relative_to(ROOT)}"
+                        )
+
+    # 2. Strictly validate DefaultAppIcon.xcassets (compiled by //Telegram:Telegram actool).
+    default_app_icon_dir = ROOT / "Telegram/Telegram-iOS/DefaultAppIcon.xcassets"
+    appiconsets = sorted(default_app_icon_dir.glob("*.appiconset/Contents.json"))
+    if not appiconsets:
+        raise AssertionError("No .appiconset found under Telegram/Telegram-iOS/DefaultAppIcon.xcassets")
+
+    for contents_json in appiconsets:
+        data = load_json(contents_json)
+        for idx, img in enumerate(data.get("images", [])):
+            filename = img.get("filename")
+            idiom = img.get("idiom", "")
+            size_str = img.get("size", "")
+            scale_str = img.get("scale", "1x")
+
+            # actool rejects 76x76@1x iPad icons when minimum_os_version >= 10.0.
+            if filename and min_os >= (10, 0) and idiom == "ipad" and size_str == "76x76" and scale_str == "1x":
+                raise AssertionError(
+                    f"{contents_json.relative_to(ROOT)} slot[{idx}] assigns '{filename}' to ipad 76x76@1x, "
+                    f"which actool rejects for minimum_os_version >= 10.0"
+                )
+            if not filename:
+                continue
+
+            png_path = contents_json.parent / filename
+            width, height = read_png_dimensions(png_path)
+            if "x" in size_str and scale_str.endswith("x"):
+                sw, sh = (float(part) for part in size_str.split("x"))
+                scale = float(scale_str[:-1])
+                expected = (int(round(sw * scale)), int(round(sh * scale)))
+                if (width, height) != expected:
+                    raise AssertionError(
+                        f"{png_path.relative_to(ROOT)} is {width}x{height}, expected {expected[0]}x{expected[1]} "
+                        f"for {size_str}@{scale_str}"
+                    )
+
+    # 3. Validate alternate_icon_folders, UTTypeIconFiles, and Swift icon registrations.
+    alt_match = re.search(r"alternate_icon_folders\s*=\s*\[(.*?)\]", build_text, re.S)
+    if not alt_match:
+        raise AssertionError("Telegram/BUILD missing alternate_icon_folders")
+    alt_folders = re.findall(r'"([^"]+)"', alt_match.group(1))
+    if not alt_folders:
+        raise AssertionError("Telegram/BUILD alternate_icon_folders is empty")
+
+    for name in alt_folders:
+        alt_dir = ROOT / "Telegram/Telegram-iOS" / f"{name}.alticon"
+        if not alt_dir.is_dir():
+            raise AssertionError(f"Missing alternate icon directory: {alt_dir.relative_to(ROOT)}")
+        pngs = sorted(alt_dir.glob("*.png"))
+        if not pngs:
+            raise AssertionError(f"Alternate icon directory has no PNGs: {alt_dir.relative_to(ROOT)}")
+        for png_path in pngs:
+            read_png_dimensions(png_path)
+
+    for icon_file in re.findall(r"<key>UTTypeIconFiles</key>\s*<array>\s*<string>([^<]+)</string>", build_text):
+        matches = list((ROOT / "Telegram/Telegram-iOS").rglob(icon_file))
+        if not matches:
+            raise AssertionError(f"UTTypeIconFiles references missing icon '{icon_file}' in Telegram/BUILD")
+
+    app_delegate_path = ROOT / "submodules/TelegramUI/Sources/AppDelegate.swift"
+    if app_delegate_path.is_file():
+        app_delegate_text = app_delegate_path.read_text(encoding="utf-8")
+        for icon_name in re.findall(r'PresentationAppIcon\(name:\s*"([^"]+)"', app_delegate_text):
+            if icon_name not in alt_folders:
+                raise AssertionError(
+                    f"AppDelegate.swift registers PresentationAppIcon '{icon_name}' missing from alternate_icon_folders"
+                )
+
+    appearance_path = ROOT / "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramAppearanceScreens.swift"
+    if appearance_path.is_file():
+        appearance_text = appearance_path.read_text(encoding="utf-8")
+        for icon_expr, res_expr in re.findall(
+            r"FullGramIconPreset\(iconName:\s*([^,]+),\s*title:[^,]+,\s*isMonochrome:[^,]+,\s*previewResource:\s*([^)]+)\)",
+            appearance_text,
+        ):
+            icon_name = icon_expr.strip().strip('"')
+            res_name = res_expr.strip().strip('"')
+            if icon_name != "nil" and icon_name not in alt_folders:
+                raise AssertionError(
+                    f"FullGramAppearanceScreens.swift uses iconName '{icon_name}' missing from alternate_icon_folders"
+                )
+            if res_name != "nil":
+                res_path = ROOT / "Telegram/Telegram-iOS/Resources" / f"{res_name}.png"
+                if not res_path.is_file():
+                    raise AssertionError(
+                        f"FullGramAppearanceScreens.swift previewResource missing: {res_path.relative_to(ROOT)}"
+                    )
+                read_png_dimensions(res_path)
+
+    return xcasset_count, len(alt_folders)
+
+
+def check_plists_and_patches(require_submodules: bool) -> None:
+    """Validate XML Info.plist files and unsigned CI patch readiness."""
+    plist_targets = [
+        ROOT / "Telegram/Telegram-iOS/Info.plist",
+        ROOT / "Telegram/WatchApp/tgwatch Watch App/Info.plist",
+    ]
+    for path in plist_targets:
+        if not path.is_file():
+            raise AssertionError(f"Missing plist file: {path.relative_to(ROOT)}")
+        try:
+            plistlib.loads(path.read_bytes())
+        except Exception as exc:
+            raise AssertionError(f"Invalid plist XML in {path.relative_to(ROOT)}: {exc}") from exc
+
+    patch_path = ROOT / "tools/ci/unsigned-build-rules.patch"
+    if not patch_path.is_file() or patch_path.stat().st_size == 0:
+        raise AssertionError("Missing or empty tools/ci/unsigned-build-rules.patch")
+
+    if require_submodules:
+        rules_apple = ROOT / "build-system/bazel-rules/rules_apple"
+        target_file = rules_apple / "apple/internal/ios_rules.bzl"
+        if not target_file.is_file():
+            raise AssertionError(
+                f"Expected file missing in rules_apple submodule: {target_file.relative_to(ROOT)}"
+            )
+        rev = subprocess.run(
+            ["git", "-C", str(rules_apple), "apply", "--reverse", "--check", str(patch_path)],
+            capture_output=True,
+            text=True,
+        )
+        if rev.returncode != 0:
+            fwd = subprocess.run(
+                ["git", "-C", str(rules_apple), "apply", "--check", str(patch_path)],
+                capture_output=True,
+                text=True,
+            )
+            if fwd.returncode != 0:
+                raise AssertionError(
+                    f"tools/ci/unsigned-build-rules.patch does not apply cleanly to rules_apple:\n{fwd.stderr.strip()}"
+                )
+
+
 def check_conflict_markers_in_core_files() -> None:
     targets = [
         ROOT / "versions.json",
         ROOT / ".gitmodules",
         ROOT / ".github/workflows/build.yml",
         ROOT / "build-system/appstore-configuration.json",
+        ROOT / "Telegram/BUILD",
+        ROOT / "Telegram/Telegram-iOS/Config-AppStoreLLC.xcconfig",
+        ROOT / "Telegram/Telegram-iOS/DefaultAppIcon.xcassets/AppIconLLC.appiconset/Contents.json",
+        ROOT / "tools/ci/unsigned-build-rules.patch",
+        ROOT / "tools/ci/prepare_macos.sh",
+        ROOT / "submodules/TelegramUI/Sources/AppDelegate.swift",
+        ROOT / "submodules/SettingsUI/Sources/Themes/ThemeSettingsAppIconItem.swift",
     ]
     for path in targets:
         if not path.is_file():
@@ -353,9 +538,15 @@ def main() -> int:
     check_configs()
     print("[OK] versions.json, build_number_offset, appstore-configuration.json, badges.example.json")
 
+    xcasset_count, alt_count = check_xcassets_and_icons()
+    print(f"[OK] Asset catalogs and app icons ({xcasset_count} xcassets, {alt_count} alternate icons)")
+
     check_submodules(require_populated=args.require_submodules)
     mode = "populated + valid URLs" if args.require_submodules else "valid URLs"
     print(f"[OK] .gitmodules ({mode})")
+
+    check_plists_and_patches(require_submodules=args.require_submodules)
+    print("[OK] Info.plist XML and unsigned-build-rules.patch")
 
     check_conflict_markers_in_core_files()
     swift_count = check_swift_sources()

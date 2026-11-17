@@ -344,7 +344,7 @@ jobs:
               echo "No build.log captured (failed before Make.py started)."
             fi
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Stage build artifacts
         if: success()
