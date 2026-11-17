@@ -534,14 +534,11 @@ private final class FullGramPluginEditorViewController: UIViewController {
     }
 }
 
-private final class FullGramPluginEditorContainerController: ViewController {
-    private let hosted: FullGramPluginEditorViewController
-
+private final class FullGramPluginEditorContainerController: FullGramHostedViewController<FullGramPluginEditorViewController> {
     init(context: AccountContext, descriptor: FullGramPluginDescriptor, isNew: Bool, onChanged: @escaping () -> Void) {
-        let data = context.sharedContext.currentPresentationData.with { $0 }
-        self.hosted = FullGramPluginEditorViewController(theme: data.theme, descriptor: descriptor, isNew: isNew, onChanged: onChanged)
-        super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: data))
-        self.title = descriptor.name
+        super.init(context: context, title: descriptor.name) { theme in
+            FullGramPluginEditorViewController(theme: theme, descriptor: descriptor, isNew: isNew, onChanged: onChanged)
+        }
         self.hosted.onClose = { [weak self] in
             self?.navigationController?.popViewController(animated: true)
         }
@@ -549,21 +546,6 @@ private final class FullGramPluginEditorContainerController: ViewController {
 
     required init(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-
-    override func displayNodeDidLoad() {
-        super.displayNodeDidLoad()
-        self.addChild(self.hosted)
-        self.hosted.view.frame = self.displayNode.bounds
-        self.hosted.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        self.displayNode.view.addSubview(self.hosted.view)
-        self.hosted.didMove(toParent: self)
-    }
-
-    override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
-        super.containerLayoutUpdated(layout, transition: transition)
-        let topInset = self.navigationLayout(layout: layout).navigationFrame.maxY
-        self.hosted.additionalSafeAreaInsets = UIEdgeInsets(top: topInset, left: layout.safeInsets.left, bottom: layout.intrinsicInsets.bottom, right: layout.safeInsets.right)
     }
 }
 

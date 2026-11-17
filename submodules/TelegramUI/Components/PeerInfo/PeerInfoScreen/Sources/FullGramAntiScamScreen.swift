@@ -311,33 +311,15 @@ private final class FullGramAntiScamGuideUIViewController: UIViewController {
     }
 }
 
-private final class FullGramAntiScamGuideContainerController: ViewController {
-    private let hosted: FullGramAntiScamGuideUIViewController
-
+private final class FullGramAntiScamGuideContainerController: FullGramHostedViewController<FullGramAntiScamGuideUIViewController> {
     init(context: AccountContext) {
-        let data = context.sharedContext.currentPresentationData.with { $0 }
-        self.hosted = FullGramAntiScamGuideUIViewController(theme: data.theme)
-        super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: data))
-        self.title = FullGramGuideContent.screenTitle
+        super.init(context: context, title: FullGramGuideContent.screenTitle) { theme in
+            FullGramAntiScamGuideUIViewController(theme: theme)
+        }
     }
 
     required init(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-
-    override func displayNodeDidLoad() {
-        super.displayNodeDidLoad()
-        self.addChild(self.hosted)
-        self.hosted.view.frame = self.displayNode.bounds
-        self.hosted.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        self.displayNode.view.addSubview(self.hosted.view)
-        self.hosted.didMove(toParent: self)
-    }
-
-    override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
-        super.containerLayoutUpdated(layout, transition: transition)
-        let topInset = self.navigationLayout(layout: layout).navigationFrame.maxY
-        self.hosted.additionalSafeAreaInsets = UIEdgeInsets(top: topInset, left: layout.safeInsets.left, bottom: layout.intrinsicInsets.bottom, right: layout.safeInsets.right)
     }
 }
 
@@ -727,16 +709,11 @@ private final class FullGramAntiScamUIViewController: UIViewController {
     }
 }
 
-private final class FullGramAntiScamContainerController: ViewController {
-    private let context: AccountContext
-    private let hosted: FullGramAntiScamUIViewController
-
+private final class FullGramAntiScamContainerController: FullGramHostedViewController<FullGramAntiScamUIViewController> {
     init(context: AccountContext) {
-        self.context = context
-        let data = context.sharedContext.currentPresentationData.with { $0 }
-        self.hosted = FullGramAntiScamUIViewController(context: context, theme: data.theme)
-        super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: data))
-        self.title = "Анти-скам"
+        super.init(context: context, title: "Анти-скам") { theme in
+            FullGramAntiScamUIViewController(context: context, theme: theme)
+        }
     }
 
     required init(coder aDecoder: NSCoder) {
@@ -744,22 +721,7 @@ private final class FullGramAntiScamContainerController: ViewController {
     }
 
     func pushGuide() {
-        self.push(FullGramAntiScamGuideContainerController(context: self.context))
-    }
-
-    override func displayNodeDidLoad() {
-        super.displayNodeDidLoad()
-        self.addChild(self.hosted)
-        self.hosted.view.frame = self.displayNode.bounds
-        self.hosted.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        self.displayNode.view.addSubview(self.hosted.view)
-        self.hosted.didMove(toParent: self)
-    }
-
-    override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
-        super.containerLayoutUpdated(layout, transition: transition)
-        let topInset = self.navigationLayout(layout: layout).navigationFrame.maxY
-        self.hosted.additionalSafeAreaInsets = UIEdgeInsets(top: topInset, left: layout.safeInsets.left, bottom: layout.intrinsicInsets.bottom, right: layout.safeInsets.right)
+        self.push(FullGramAntiScamGuideContainerController(context: self.accountContext))
     }
 }
 

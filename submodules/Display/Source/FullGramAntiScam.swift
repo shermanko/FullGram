@@ -18,6 +18,16 @@ public final class FullGramAntiScam {
 
     private let defaults = UserDefaults.standard
     private let prefix = "fullgram.antiscam."
+    private let whitelistLock = NSLock()
+    private var cachedLowerWhitelist: [String]?
+
+    private static let detectorLock = NSLock()
+    private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    private static let otcRegexes: [NSRegularExpression] = [
+        "\\botc\\b", "\\bотс\\b", "\\bescrow\\b", "гарант", "guarantor",
+        "через гаранта", "гарант-бот", "гарант бот", "гарант-сервис",
+        "безопасная сделка", "p2p сделк"
+    ].compactMap { try? NSRegularExpression(pattern: $0) }
 
     private init() {}
 
@@ -69,9 +79,23 @@ public final class FullGramAntiScam {
             return self.defaults.stringArray(forKey: self.prefix + "whitelist") ?? []
         }
         set {
+            self.whitelistLock.lock()
+            self.cachedLowerWhitelist = newValue.map { $0.lowercased() }
+            self.whitelistLock.unlock()
             self.defaults.set(newValue, forKey: self.prefix + "whitelist")
             NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
         }
+    }
+
+    private func lowercasedWhitelist() -> [String] {
+        self.whitelistLock.lock()
+        defer { self.whitelistLock.unlock() }
+        if let cached = self.cachedLowerWhitelist {
+            return cached
+        }
+        let loaded = (self.defaults.stringArray(forKey: self.prefix + "whitelist") ?? []).map { $0.lowercased() }
+        self.cachedLowerWhitelist = loaded
+        return loaded
     }
 
     public func addWhitelistedDomain(_ host: String) {
@@ -139,8 +163,8 @@ public final class FullGramAntiScam {
 
     public func isWhitelisted(host: String) -> Bool {
         let lower = host.lowercased()
-        return self.whitelistDomains.contains { entry in
-            lower == entry.lowercased() || lower.hasSuffix("." + entry.lowercased())
+        return self.lowercasedWhitelist().contains { entry in
+            lower == entry || lower.hasSuffix("." + entry)
         }
     }
 
@@ -300,17 +324,13 @@ public final class FullGramAntiScam {
             }
         }
 
-        // Check embedded URLs inside message
-        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
-            let ns = trimmed as NSString
-            let matches = detector.matches(in: trimmed, range: NSRange(location: 0, length: ns.length))
-            for m in matches {
-                if let link = m.url?.absoluteString, let urlVerdict = self.inspectURL(link, forceCheck: true) {
-                    score += (urlVerdict.severity == .high ? 3 : 2)
-                    reasons.append(contentsOf: urlVerdict.reasons)
-                } else if !matches.isEmpty && score >= 1 {
-                    score += 1
-                }
+        let links = self.extractLinks(in: trimmed)
+        for link in links {
+            if let urlVerdict = self.inspectURL(link, forceCheck: true) {
+                score += (urlVerdict.severity == .high ? 3 : 2)
+                reasons.append(contentsOf: urlVerdict.reasons)
+            } else if score >= 1 {
+                score += 1
             }
         }
 
@@ -321,6 +341,18 @@ public final class FullGramAntiScam {
             summary: "В тексте обнаружены признаки скама или фишинга",
             reasons: Array(Set(reasons)).sorted()
         )
+    }
+
+    private func extractLinks(in text: String) -> [String] {
+        guard (text.contains(".") || text.contains("://")),
+              let detector = Self.linkDetector else {
+            return []
+        }
+        let range = NSRange(location: 0, length: (text as NSString).length)
+        Self.detectorLock.lock()
+        let matches = detector.matches(in: text, range: range)
+        Self.detectorLock.unlock()
+        return matches.compactMap { $0.url?.absoluteString }
     }
 
     // MARK: - Карточка 2: Анти-офер
@@ -346,16 +378,7 @@ public final class FullGramAntiScam {
         let normalized = trimmed.lowercased().replacingOccurrences(of: "ё", with: "е")
 
         let looksLikeOffer = Self.offerKeywords.contains { normalized.contains($0) }
-        var detectedLinks: [String] = []
-        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
-            let ns = trimmed as NSString
-            let matches = detector.matches(in: trimmed, range: NSRange(location: 0, length: ns.length))
-            for m in matches {
-                if let urlStr = m.url?.absoluteString {
-                    detectedLinks.append(urlStr)
-                }
-            }
-        }
+        let detectedLinks = self.extractLinks(in: trimmed)
 
         let hasDangerousUrl = detectedLinks.contains { self.inspectURL($0, forceCheck: true) != nil }
         guard looksLikeOffer || hasDangerousUrl else { return nil }
@@ -390,19 +413,14 @@ public final class FullGramAntiScam {
 
     public static let otcWarningText = "OTC — небезопасная сделка, гарант может оказаться скамом. Продолжай на свой страх и риск"
 
-    private static let otcPatterns: [String] = [
-        "\\botc\\b", "\\bотс\\b", "\\bescrow\\b", "гарант", "guarantor",
-        "через гаранта", "гарант-бот", "гарант бот", "гарант-сервис",
-        "безопасная сделка", "p2p сделк"
-    ]
-
     public func inspectOTC(text: String, forceCheck: Bool = false) -> String? {
         if !forceCheck {
             guard self.isEnabled && self.antiOtcEnabled else { return nil }
         }
         let normalized = text.lowercased().replacingOccurrences(of: "ё", with: "е")
-        for pat in Self.otcPatterns {
-            if normalized.range(of: pat, options: .regularExpression) != nil {
+        let range = NSRange(location: 0, length: (normalized as NSString).length)
+        for regex in Self.otcRegexes {
+            if regex.firstMatch(in: normalized, range: range) != nil {
                 return Self.otcWarningText
             }
         }

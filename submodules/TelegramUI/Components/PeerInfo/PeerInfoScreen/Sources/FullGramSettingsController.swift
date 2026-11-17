@@ -14,6 +14,45 @@ import ItemListUI
 import PresentationDataUtils
 import TelegramPresentationData
 
+/// Shared Telegram `ViewController` wrapper that hosts an embedded UIKit `UIViewController`
+/// with navigation bar presentation data and safe-area inset propagation.
+internal class FullGramHostedViewController<Content: UIViewController>: ViewController {
+    let accountContext: AccountContext
+    let hosted: Content
+
+    init(context: AccountContext, title: String, makeContent: (PresentationTheme) -> Content) {
+        self.accountContext = context
+        let data = context.sharedContext.currentPresentationData.with { $0 }
+        self.hosted = makeContent(data.theme)
+        super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: data))
+        self.title = title
+    }
+
+    required init(coder aDecoder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func displayNodeDidLoad() {
+        super.displayNodeDidLoad()
+        self.addChild(self.hosted)
+        self.hosted.view.frame = self.displayNode.bounds
+        self.hosted.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        self.displayNode.view.addSubview(self.hosted.view)
+        self.hosted.didMove(toParent: self)
+    }
+
+    override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
+        super.containerLayoutUpdated(layout, transition: transition)
+        let topInset = self.navigationLayout(layout: layout).navigationFrame.maxY
+        self.hosted.additionalSafeAreaInsets = UIEdgeInsets(
+            top: topInset,
+            left: layout.safeInsets.left,
+            bottom: layout.intrinsicInsets.bottom,
+            right: layout.safeInsets.right
+        )
+    }
+}
+
 public enum FullGramCategory: Int32, CaseIterable {
     case privacy = 0
     case chats = 1

@@ -48,7 +48,17 @@ public final class FullGramPluginManager {
     private var descriptors: [FullGramPluginDescriptor] = []
     private var loaded: [String: FullGramLoadedPlugin] = [:]
     private var logsByPlugin: [String: [String]] = [:]
+    private var cachedSystemEnabled: Bool?
+    private var hasRenderHooks: Bool = false
     private var didInitialize = false
+
+    private static let logDateFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.dateFormat = "HH:mm:ss"
+        return df
+    }()
+    private static let commandHintRegex = try? NSRegularExpression(pattern: #"(?:command|cmd)\s*==\s*["']([a-zA-Z0-9_-]+)["']"#)
+    private static let plugSubcommandRegex = try? NSRegularExpression(pattern: #"subcommand\s*==\s*["']([a-zA-Z0-9_-]+)["']"#)
 
     public var catalogURL: String {
         get {
@@ -69,12 +79,24 @@ public final class FullGramPluginManager {
 
     public var isSystemEnabled: Bool {
         get {
-            if UserDefaults.standard.object(forKey: self.systemEnabledKey) == nil {
-                return true
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            if let cached = self.cachedSystemEnabled {
+                return cached
             }
-            return UserDefaults.standard.bool(forKey: self.systemEnabledKey)
+            let resolved: Bool
+            if UserDefaults.standard.object(forKey: self.systemEnabledKey) == nil {
+                resolved = true
+            } else {
+                resolved = UserDefaults.standard.bool(forKey: self.systemEnabledKey)
+            }
+            self.cachedSystemEnabled = resolved
+            return resolved
         }
         set {
+            self.lock.lock()
+            self.cachedSystemEnabled = newValue
+            self.lock.unlock()
             UserDefaults.standard.set(newValue, forKey: self.systemEnabledKey)
             self.reloadRuntime()
             NotificationCenter.default.post(name: FullGramPluginNotifications.pluginsDidChange, object: nil)
@@ -178,10 +200,8 @@ public final class FullGramPluginManager {
     }
 
     private func appendLog(pluginId: String, message: String) {
-        let df = DateFormatter()
-        df.dateFormat = "HH:mm:ss"
-        let line = "[\(df.string(from: Date()))] \(message)"
         self.lock.lock()
+        let line = "[\(Self.logDateFormatter.string(from: Date()))] \(message)"
         var arr = self.logsByPlugin[pluginId] ?? []
         arr.append(line)
         if arr.count > 200 {
@@ -299,12 +319,18 @@ public final class FullGramPluginManager {
 
     private func reloadRuntimeLocked() {
         self.loaded.removeAll()
+        self.hasRenderHooks = false
         guard self.isSystemEnabled else { return }
 
+        var anyRender = false
         for descriptor in self.descriptors where descriptor.isEnabled {
             let runtime = self.compile(descriptor: descriptor)
+            if runtime.hasRenderHook {
+                anyRender = true
+            }
             self.loaded[descriptor.id] = runtime
         }
+        self.hasRenderHooks = anyRender
     }
 
     private static let chatStatsThreadKey = "FullGram.Plugin.ChatStats"
@@ -465,8 +491,8 @@ public final class FullGramPluginManager {
 
         var results: [(command: String, description: String, pluginName: String)] = []
         var seen = Set<String>()
-        let regex = try? NSRegularExpression(pattern: #"(?:command|cmd)\s*==\s*["']([a-zA-Z0-9_-]+)["']"#)
-        let plugRegex = try? NSRegularExpression(pattern: #"subcommand\s*==\s*["']([a-zA-Z0-9_-]+)["']"#)
+        let regex = Self.commandHintRegex
+        let plugRegex = Self.plugSubcommandRegex
 
         for (desc, holder) in active {
             for cmd in holder.registeredCommands.keys.sorted() {
@@ -662,7 +688,7 @@ public final class FullGramPluginManager {
         guard !text.isEmpty else { return text }
         self.ensureLoaded()
         self.lock.lock()
-        guard self.isSystemEnabled else {
+        guard self.isSystemEnabled && self.hasRenderHooks else {
             self.lock.unlock()
             return text
         }

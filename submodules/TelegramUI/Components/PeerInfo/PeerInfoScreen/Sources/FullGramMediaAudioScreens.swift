@@ -899,14 +899,11 @@ private final class FullGramMixerUIViewController: UIViewController {
     }
 }
 
-private final class FullGramMixerContainerController: ViewController {
-    private let hosted: FullGramMixerUIViewController
-
+private final class FullGramMixerContainerController: FullGramHostedViewController<FullGramMixerUIViewController> {
     init(context: AccountContext, onChanged: @escaping () -> Void) {
-        let data = context.sharedContext.currentPresentationData.with { $0 }
-        self.hosted = FullGramMixerUIViewController(theme: data.theme, onChanged: onChanged)
-        super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: data))
-        self.title = "Микшер"
+        super.init(context: context, title: "Микшер") { theme in
+            FullGramMixerUIViewController(theme: theme, onChanged: onChanged)
+        }
         self.navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Сброс", style: .plain, target: self, action: #selector(self.resetTapped))
     }
 
@@ -918,21 +915,6 @@ private final class FullGramMixerContainerController: ViewController {
         if let flat = FullGramMixer.presets.first {
             FullGramMixer.apply(preset: flat)
         }
-    }
-
-    override func displayNodeDidLoad() {
-        super.displayNodeDidLoad()
-        self.addChild(self.hosted)
-        self.hosted.view.frame = self.displayNode.bounds
-        self.hosted.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        self.displayNode.view.addSubview(self.hosted.view)
-        self.hosted.didMove(toParent: self)
-    }
-
-    override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
-        super.containerLayoutUpdated(layout, transition: transition)
-        let topInset = self.navigationLayout(layout: layout).navigationFrame.maxY
-        self.hosted.additionalSafeAreaInsets = UIEdgeInsets(top: topInset, left: layout.safeInsets.left, bottom: layout.intrinsicInsets.bottom, right: layout.safeInsets.right)
     }
 }
 

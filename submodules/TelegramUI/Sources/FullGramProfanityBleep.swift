@@ -72,11 +72,18 @@ enum FullGramProfanityBleep {
         let dataItem = TGDataItem()
         let writer = TGOggOpusWriter()
         guard writer.begin(with: dataItem) else { return nil }
+        var chunk = [Int16](repeating: 0, count: packet)
         var offset = 0
         while offset < samples.count {
-            var chunk = Array(samples[offset ..< min(offset + packet, samples.count)])
-            if chunk.count < packet {
-                chunk.append(contentsOf: [Int16](repeating: 0, count: packet - chunk.count))
+            let valid = min(packet, samples.count - offset)
+            chunk.withUnsafeMutableBufferPointer { dst in
+                samples.withUnsafeBufferPointer { src in
+                    guard let dstBase = dst.baseAddress, let srcBase = src.baseAddress else { return }
+                    dstBase.update(from: srcBase.advanced(by: offset), count: valid)
+                    if valid < packet {
+                        dstBase.advanced(by: valid).update(repeating: 0, count: packet - valid)
+                    }
+                }
             }
             chunk.withUnsafeMutableBytes { raw in
                 _ = writer.writeFrame(raw.bindMemory(to: UInt8.self).baseAddress, frameByteCount: UInt(raw.count))
