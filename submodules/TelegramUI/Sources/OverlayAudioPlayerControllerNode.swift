@@ -543,8 +543,9 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
         self.lyricsStateDisposable = (context.sharedContext.mediaManager.musicMediaPlayerState
         |> deliverOnMainQueue).startStrict(next: { [weak self] state in
             guard let self else { return }
-            if case let .item(itemState) = state, let item = itemState.item as? SharedMediaPlaylistItem {
-                if let file = item.playbackData?.source as? TelegramMediaFile {
+            if let (_, valueOrLoading, _) = state, case let .state(itemState) = valueOrLoading {
+                if case let .telegramFile(fileReference, _, _) = itemState.item.playbackData?.source {
+                    let file = fileReference.media
                     for attr in file.attributes {
                         if case let .Audio(_, duration, title, performer, _) = attr {
                             let trackTitle = title ?? file.fileName ?? ""

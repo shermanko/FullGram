@@ -1154,8 +1154,17 @@ extension ChatControllerImpl {
                         let messageSignals: [Signal<EnqueueMessage, NoError>] = pluginMessages.map { msg in
                             if case let .message(text, attributes, inlineStickers, mediaReference, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets) = msg, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                 return strongSelf.context.engine.messages.fullGramTranslate(text: text, toLang: targetLang)
-                                |> map { translated in
-                                    return EnqueueMessage.message(text: translated, attributes: attributes, inlineStickers: inlineStickers, mediaReference: mediaReference, threadId: threadId, replyToMessageId: replyToMessageId, replyToStoryId: replyToStoryId, localGroupingKey: localGroupingKey, correlationId: correlationId, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets)
+                                |> map { translatedText, translatedEntities in
+                                    var updatedAttributes = attributes.filter { !($0 is TextEntitiesMessageAttribute) }
+                                    if !translatedEntities.isEmpty {
+                                        updatedAttributes.append(TextEntitiesMessageAttribute(entities: translatedEntities))
+                                    } else {
+                                        let entities = generateTextEntities(translatedText, enabledTypes: .all)
+                                        if !entities.isEmpty {
+                                            updatedAttributes.append(TextEntitiesMessageAttribute(entities: entities))
+                                        }
+                                    }
+                                    return EnqueueMessage.message(text: translatedText, attributes: updatedAttributes, inlineStickers: inlineStickers, mediaReference: mediaReference, threadId: threadId, replyToMessageId: replyToMessageId, replyToStoryId: replyToStoryId, localGroupingKey: localGroupingKey, correlationId: correlationId, bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets)
                                 }
                                 |> `catch` { _ -> Signal<EnqueueMessage, NoError> in
                                     return .single(msg)

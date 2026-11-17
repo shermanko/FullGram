@@ -111,6 +111,17 @@ public struct FullGramTranslationSettings: Codable, Equatable {
         case telegram
         case libreTranslate
         case deepLFree
+
+        public var title: String {
+            switch self {
+            case .telegram:
+                return "Telegram"
+            case .libreTranslate:
+                return "LibreTranslate"
+            case .deepLFree:
+                return "DeepL API Free"
+            }
+        }
     }
 
     public static let supportedLanguageCodes: [String] = [

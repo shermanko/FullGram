@@ -56,6 +56,20 @@ func canEditMessage(context: AccountContext, limitsConfiguration: EngineConfigur
     return canEditMessage(accountPeerId: context.account.peerId, limitsConfiguration: limitsConfiguration, message: message)
 }
 
+private func fullGramCanUseSearchAuthor(peer: EnginePeer) -> Bool {
+    switch peer {
+    case .legacyGroup:
+        return true
+    case let .channel(channel):
+        if case .group = channel.info {
+            return true
+        }
+        return false
+    default:
+        return false
+    }
+}
+
 private func canEditFactCheck(appConfig: AppConfiguration) -> Bool {
     if let data = appConfig.data, let value = data["can_edit_factcheck"] as? Bool {
         return value
@@ -1470,7 +1484,6 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
                 }
                 
                 let fullGramGhostSettings = context.account.network.fullGramGhostMode.current
-                let fullGramShowTranslate = fullGramGhostSettings.interface.showTranslate
                 let fullGramCustomProvider = fullGramGhostSettings.translation.provider != .telegram
                 var (canTranslate, _) = canTranslateText(context: context, text: messageText, showTranslate: translationSettings.showTranslate || fullGramCustomProvider, showTranslateIfTopical: showTranslateIfTopical, ignoredLanguages: translationSettings.ignoredLanguages)
                 if let peerId = chatPresentationInterfaceState.chatLocation.peerId, peerId.namespace == Namespaces.Peer.SecretChat {
@@ -1522,13 +1535,13 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
                         })))
                     }
                 }
-                if fullGramShowTranslate && (canTranslate || (fullGramCustomProvider && !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)) {
+                if canTranslate || (fullGramCustomProvider && !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
                     actions.append(.action(ContextMenuActionItem(text: chatPresentationInterfaceState.strings.Conversation_ContextMenuTranslate, icon: { theme in
                         return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Translate"), color: theme.actionSheet.primaryTextColor)
                     }, action: { _, f in
                         if fullGramCustomProvider {
                             let _ = (context.engine.messages.fullGramTranslate(text: messageText)
-                            |> deliverOnMainQueue).startStandalone(next: { translatedText in
+                            |> deliverOnMainQueue).startStandalone(next: { translatedText, _ in
                                 let alertController = textAlertController(
                                     context: context,
                                     title: "Перевод (\(fullGramGhostSettings.translation.provider.title))",
@@ -1546,14 +1559,18 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
                                 switch error {
                                 case .emptyText:
                                     errorMessage = "Пустой текст для перевода."
+                                case .missingEndpoint:
+                                    errorMessage = "Укажите адрес сервера LibreTranslate в настройках FullGram → Чаты → Перевод."
                                 case .missingApiKey:
                                     errorMessage = "Укажите API-ключ в настройках FullGram → Чаты → Перевод."
                                 case .invalidEndpoint:
                                     errorMessage = "Некорректный адрес сервера перевода."
-                                case .networkError:
-                                    errorMessage = "Ошибка сети при обращении к сервису перевода."
-                                case let .responseError(details):
+                                case let .networkFailure(details):
+                                    errorMessage = details.isEmpty ? "Ошибка сети при обращении к сервису перевода." : details
+                                case let .serviceError(details):
                                     errorMessage = details
+                                case .invalidResponse:
+                                    errorMessage = "Некорректный ответ сервиса перевода."
                                 }
                                 let alertController = textAlertController(
                                     context: context,
