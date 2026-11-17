@@ -142,29 +142,8 @@ jobs:
             echo "All required macOS build tools are already installed."
           fi
 
-          # Ensure restricted-PATH Bazel genrules (PATH=/bin:/usr/bin:/usr/local/bin) can locate sysctl,
-          # and ensure the Metal compiler toolchain is installed and functional on Xcode 27.
-          sudo mkdir -p /usr/local/bin
-          if ! env PATH=/bin:/usr/bin:/usr/local/bin sysctl -n hw.ncpu >/dev/null 2>&1; then
-            sudo ln -sf /usr/sbin/sysctl /usr/local/bin/sysctl
-          fi
-
-          probe_metal() {
-            local probe_dir
-            probe_dir="$(mktemp -d)"
-            printf '#include <metal_stdlib>\nusing namespace metal;\nkernel void fg_probe(device uint *out [[buffer(0)]], uint id [[thread_position_in_grid]]) { out[id] = id; }\n' > "$probe_dir/probe.metal"
-            xcrun --sdk iphoneos metal -c -target air64-apple-ios15.0 "$probe_dir/probe.metal" -o "$probe_dir/probe.air" >/dev/null 2>&1
-            local rc=$?
-            rm -rf "$probe_dir"
-            return $rc
-          }
-
-          if ! probe_metal; then
-            echo "Downloading MetalToolchain Xcode component..."
-            xcodebuild -downloadComponent MetalToolchain
-            probe_metal
-          fi
-          echo "Metal toolchain verified."
+          # VoidGram-proven restricted-PATH symlinks (ccache + sysctl) and MetalToolchain preflight
+          bash tools/ci/prepare_macos.sh
 
       - name: Validate Telegram credentials
         env:
@@ -281,71 +260,76 @@ jobs:
           PY
           fi
 
+          # Apply VoidGram's unsigned rules_apple patch and Bazel unsigned build flags in $SOURCE_DIR
+          RULES_APPLE="$SOURCE_DIR/build-system/bazel-rules/rules_apple"
+          RULES_PATCH="$SOURCE_DIR/tools/ci/unsigned-build-rules.patch"
+          if ! git -C "$RULES_APPLE" apply --reverse --check "$RULES_PATCH" >/dev/null 2>&1; then
+            git -C "$RULES_APPLE" apply --check "$RULES_PATCH"
+            git -C "$RULES_APPLE" apply "$RULES_PATCH"
+            echo "Applied unsigned-build-rules.patch to rules_apple"
+          fi
+
           python3 - <<'PY'
-          import os, subprocess
           from pathlib import Path
 
-          p12 = "build-system/fake-codesigning/certs/SelfSigned.p12"
-          key_pem = "/tmp/fg_fake_key.pem"
-          cert_pem = "/tmp/fg_fake_cert.pem"
-
-          def extract_p12():
-              attempts = [
-                  ("openssl", ["-legacy"]),
-                  ("openssl", []),
-              ]
-              if os.path.exists("/usr/bin/openssl"):
-                  attempts.append(("/usr/bin/openssl", []))
-              last_err = None
-              for bin_path, extra in attempts:
-                  try:
-                      subprocess.run([bin_path, "pkcs12", *extra, "-in", p12, "-passin", "pass:", "-nodes", "-nocerts", "-out", key_pem], check=True)
-                      subprocess.run([bin_path, "pkcs12", *extra, "-in", p12, "-passin", "pass:", "-clcerts", "-nokeys", "-out", cert_pem], check=True)
-                      print(f"Extracted SelfSigned.p12 using {bin_path} {extra}")
-                      return
-                  except subprocess.CalledProcessError as e:
-                      last_err = e
-              raise last_err
-
-          extract_p12()
-
-          for p in sorted(Path("build-system/fake-codesigning/profiles").glob("*.mobileprovision")):
-              plist_tmp = Path("/tmp/fg_profile.plist")
-              subprocess.run(["openssl", "smime", "-inform", "der", "-verify", "-noverify", "-in", str(p), "-out", str(plist_tmp)], check=True)
-              text = plist_tmp.read_text(encoding="utf-8")
-              updated = text.replace("2026-10-30T17:06:30Z", "2030-12-31T23:59:59Z")
-              if updated != text:
-                  plist_tmp.write_text(updated, encoding="utf-8")
-                  subprocess.run([
-                      "openssl", "smime", "-sign",
-                      "-in", str(plist_tmp),
-                      "-signer", cert_pem,
-                      "-inkey", key_pem,
-                      "-nodetach", "-outform", "der",
-                      "-out", str(p),
-                  ], check=True)
-                  subprocess.run(["openssl", "smime", "-inform", "der", "-verify", "-noverify", "-in", str(p)], stdout=subprocess.DEVNULL, check=True)
-                  print(f"Re-signed {p.name} with ExpirationDate 2030-12-31")
+          rc = Path(".bazelrc")
+          text = rc.read_text(encoding="utf-8")
+          additions = [
+              "build --//Telegram:disableProvisioningProfiles",
+              "build --features=ayu_unsigned_compilation --features=disable_legacy_signing",
+          ]
+          missing = [line for line in additions if line not in text]
+          if missing:
+              rc.write_text(text.rstrip() + "\n" + "\n".join(missing) + "\n", encoding="utf-8")
           PY
 
-          python3 build-system/Make/ImportCertificates.py --path build-system/fake-codesigning/certs
           python3 -u build-system/Make/Make.py \
             --bazelUserRoot="$BAZEL_USER_ROOT" \
             --cacheDir="$CACHE_DIR" \
             ${XCODE_OVERRIDE_FLAG:-} \
             build \
+            --xcodeManagedCodesigning \
+            --disableProvisioningProfiles \
+            --skipDsym \
             --continueOnError \
             --configurationPath="build-input/active-configuration.json" \
-            --codesigningInformationPath=build-system/fake-codesigning \
             --configuration="$BUILD_CONFIGURATION" \
             --buildNumber="$BUILD_NUMBER" \
             --outputBuildArtifactsPath="$SOURCE_DIR/build/artifacts" \
             2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
-          if [ ! -s "$SOURCE_DIR/build/artifacts/Telegram.ipa" ]; then
+          IPA_PATH="$SOURCE_DIR/build/artifacts/Telegram.ipa"
+          if [ ! -s "$IPA_PATH" ]; then
             echo "::error::Build finished without producing Telegram.ipa"
             exit 1
           fi
+
+          python3 - "$IPA_PATH" "$BUILD_CONFIGURATION" <<'PY'
+          import hashlib, plistlib, struct, sys, zipfile
+          from pathlib import Path
+
+          ipa_path = Path(sys.argv[1])
+          cfg = sys.argv[2]
+          with zipfile.ZipFile(ipa_path) as zf:
+              info = plistlib.loads(zf.read("Payload/Telegram.app/Info.plist"))
+              binary = zf.read("Payload/Telegram.app/" + info["CFBundleExecutable"])
+              if binary[:4] != b"\xcf\xfa\xed\xfe":
+                  raise SystemExit("Expected 64-bit Mach-O executable")
+              if int.from_bytes(binary[4:8], "little") != 0x0100000C:
+                  raise SystemExit("Expected arm64 Mach-O architecture")
+              expected_platform = 7 if "sim" in cfg else 2
+              platform_id = None
+              cursor = 32
+              for _ in range(struct.unpack_from("<I", binary, 16)[0]):
+                  cmd_id, cmd_size = struct.unpack_from("<II", binary, cursor)
+                  if cmd_id == 0x32 and cmd_size >= 24:
+                      platform_id = struct.unpack_from("<I", binary, cursor + 8)[0]
+                  cursor += cmd_size
+              if platform_id != expected_platform:
+                  raise SystemExit(f"Wrong Mach-O platform: expected {expected_platform}, got {platform_id}")
+          sha = hashlib.sha256(ipa_path.read_bytes()).hexdigest()
+          print(f"Verified unsigned arm64 IPA ({ipa_path.stat().st_size / (1024*1024):.2f} MiB), sha256={sha}")
+          PY
 
       - name: Show errors on the run page
         if: failure()
@@ -382,7 +366,7 @@ jobs:
         with:
           name: FullGram-dsyms
           path: build/artifacts/Telegram.DSYMs.zip
-          if-no-files-found: warn
+          if-no-files-found: ignore
 
       - name: Attest the IPA
         if: success() && github.event_name != 'pull_request'

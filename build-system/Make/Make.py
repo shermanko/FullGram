@@ -634,6 +634,13 @@ def build(bazel, arguments):
     )
 
     bazel_command_line.set_configuration(arguments.configuration)
+    if getattr(arguments, 'disableProvisioningProfiles', False):
+        bazel_command_line.set_disable_provisioning_profiles()
+    if getattr(arguments, 'skipDsym', False):
+        bazel_command_line.configuration_args = [
+            argument for argument in bazel_command_line.configuration_args
+            if argument not in ('--apple_generate_dsym', '--output_groups=+dsyms')
+        ]
     if arguments.embedWatchApp:
         if arguments.configuration in ('debug_arm64', 'release_arm64'):
             if arguments.watchApiId is None or arguments.watchApiHash is None:
@@ -684,17 +691,18 @@ def build(bazel, arguments):
         shutil.copyfile(ipa_paths[0], artifacts_path + '/Telegram.ipa')
 
         dsym_paths = glob.glob('bazel-bin/Telegram/*.dSYM')
-        for dsym_path in dsym_paths:
-            file_name = os.path.basename(dsym_path)
-            shutil.copytree(dsym_path, artifacts_path + '/DSYMs/{}'.format(file_name))
-        previous_directory = os.getcwd()
-        os.chdir(artifacts_path)
-        run_executable_with_output('zip', arguments=[
-            '-r',
-            'Telegram.DSYMs.zip',
-            './DSYMs'
-        ], check_result=True)
-        os.chdir(previous_directory)
+        if dsym_paths:
+            for dsym_path in dsym_paths:
+                file_name = os.path.basename(dsym_path)
+                shutil.copytree(dsym_path, artifacts_path + '/DSYMs/{}'.format(file_name))
+            previous_directory = os.getcwd()
+            os.chdir(artifacts_path)
+            run_executable_with_output('zip', arguments=[
+                '-r',
+                'Telegram.DSYMs.zip',
+                './DSYMs'
+            ], check_result=True)
+            os.chdir(previous_directory)
         shutil.rmtree(artifacts_path + '/DSYMs')
 
 
@@ -1032,6 +1040,18 @@ if __name__ == '__main__':
     )
 
     buildParser = subparsers.add_parser('build', help='Build the app')
+    buildParser.add_argument(
+        '--disableProvisioningProfiles',
+        action='store_true',
+        default=False,
+        help='Build without provisioning profiles (unsigned device/simulator artifact).'
+    )
+    buildParser.add_argument(
+        '--skipDsym',
+        action='store_true',
+        default=False,
+        help='Do not generate dSYM debug symbols (faster CI builds).'
+    )
     buildParser.add_argument(
         '--buildNumber',
         required=True,

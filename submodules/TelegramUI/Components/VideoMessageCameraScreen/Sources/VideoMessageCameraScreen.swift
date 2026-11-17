@@ -493,7 +493,7 @@ private final class VideoMessageCameraScreenComponent: CombinedComponent {
             controller.lastActionTimestamp = currentTimestamp
             
             self.resultDisposable.set((camera.stopRecording()
-            |> mapToSignal { result -> Signal<Camera.RecordingResult, NoError> in
+            |> mapToSignal { result -> Signal<VideoCaptureResult, NoError> in
                 guard case let .finished(mainResult, secondaryResult, duration, a, b) = result, FullGramBleepSound.current.isEnabled else {
                     return .single(result)
                 }
@@ -504,12 +504,13 @@ private final class VideoMessageCameraScreenComponent: CombinedComponent {
                 return Signal { subscriber in
                     FullGramSpeechBleep.processAudioOrVideoFile(inputURL: inputURL, outputURL: outputURL, sound: sound) { replaced in
                         if replaced {
-                            let updated = Camera.RecordingResult.Video(
+                            let updated = VideoCaptureResult.Result(
                                 path: outputPath,
-                                dimensions: mainResult.dimensions,
-                                thumbnail: mainResult.thumbnail
+                                thumbnail: mainResult.thumbnail,
+                                isMirrored: mainResult.isMirrored,
+                                dimensions: mainResult.dimensions
                             )
-                            subscriber.putNext(.finished(updated, secondaryResult, duration, a, b))
+                            subscriber.putNext(.finished(main: updated, additional: secondaryResult, duration: duration, positionChangeTimestamps: a, captureTimestamp: b))
                         } else {
                             subscriber.putNext(result)
                         }
