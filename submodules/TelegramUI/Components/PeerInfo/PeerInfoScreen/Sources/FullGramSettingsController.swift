@@ -314,7 +314,7 @@ private final class FullGramHeaderItemNode: ListViewItemNode {
         self.titleNode = TextNode()
         self.versionNode = TextNode()
 
-        super.init(layerBacked: false, dynamicBounce: false, rotated: false, seeThrough: false)
+        super.init(layerBacked: false, rotated: false, seeThrough: false)
 
         self.addSubnode(self.iconNode)
         self.addSubnode(self.titleNode)
@@ -325,7 +325,7 @@ private final class FullGramHeaderItemNode: ListViewItemNode {
         let makeTitleLayout = TextNode.asyncLayout(self.titleNode)
         let makeVersionLayout = TextNode.asyncLayout(self.versionNode)
 
-        return { item, params, neighbors in
+        return { [weak self] item, params, neighbors in
             let iconSize = CGSize(width: 80.0, height: 80.0)
             let topInset: CGFloat = 20.0
             let titleSpacing: CGFloat = 14.0
@@ -368,7 +368,7 @@ private final class FullGramHeaderItemNode: ListViewItemNode {
 
             let layout = ListViewItemNodeLayout(contentSize: contentSize, insets: insets)
 
-            return (layout, { [weak self] in
+            return (layout, {
                 guard let self else {
                     return
                 }
@@ -558,7 +558,7 @@ private enum FullGramPrivacyCategoryEntry: ItemListNodeEntry {
             return ItemListDisclosureItem(
                 presentationData: presentationData,
                 systemStyle: .glass,
-                icon: PresentationResourcesSettings.privacy,
+                icon: PresentationResourcesSettings.lockOrange,
                 title: "Деятельность и следы",
                 label: "",
                 sectionId: self.section,
@@ -3319,7 +3319,7 @@ func fullGramOtherCategoryController(context: AccountContext) -> ViewController 
                 let finishImport: (Bool) -> Void = { allowWhitelist in
                     do {
                         let res = try FullGramBackup.importFromFile(url: url, allowAntiScamWhitelist: allowWhitelist)
-                        let alert = UIAlertController(title: "Бэкап восстановлен", message: "Загружено настроек: \(res.settingsCount).\nПлагины из файла не импортируются — для безопасности устанавливайте их только из официального маркета FullGram.", preferredStyle: .alert)
+                        let alert = UIAlertController(title: "Бэкап восстановлен", message: "Загружено настроек: \(res.settingsCount), плагинов: \(res.pluginsCount).", preferredStyle: .alert)
                         alert.addAction(UIAlertAction(title: "OK", style: .default))
                         presentNativeImpl?(alert)
                     } catch {
@@ -3371,9 +3371,9 @@ func fullGramOtherCategoryController(context: AccountContext) -> ViewController 
             .aiAssistantLink("ИИ Ассистент и свой агент", aiStatus),
             .badgesLink("Бейджи FullGram (badges.json)", badgesStatus),
             .backupHeader("БЭКАП FULLGRAM (.FULLGRAM)"),
-            .exportBackup("Экспорт настроек и тем"),
+            .exportBackup("Экспорт настроек, тем и плагинов"),
             .importBackup("Импорт из файла .fullgram"),
-            .backupInfo("Сохраняет в один файл .fullgram все переключатели, белый список Анти-скама, пресеты Микшера, шрифты и темы. В целях безопасности плагины при импорте не переносятся — устанавливайте их только из маркета.")
+            .backupInfo("Сохраняет в один файл .fullgram все переключатели, белый список Анти-скама, пресеты Микшера, шрифты, темы и установленные плагины.")
         ]
         let data = ItemListPresentationData(presentationData)
         let state = ItemListControllerState(presentationData: data, title: .text("Прочее"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))

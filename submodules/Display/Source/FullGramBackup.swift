@@ -149,12 +149,23 @@ public enum FullGramBackup {
             count += 1
         }
 
-        // Security: do not import external plugin code from backups; plugins are only installed from the official FullGram market.
+        var importedPlugins = 0
+        for plugin in payload.plugins {
+            FullGramPluginManager.shared.savePlugin(
+                id: plugin.id,
+                name: plugin.name,
+                language: plugin.language,
+                code: plugin.code,
+                enabled: plugin.isEnabled
+            )
+            importedPlugins += 1
+        }
+
         NotificationCenter.default.post(name: FullGramMixer.didChangeNotification, object: nil)
         NotificationCenter.default.post(name: FullGramAntiScam.didChangeNotification, object: nil)
         NotificationCenter.default.post(name: FullGramPluginNotifications.pluginsDidChange, object: nil)
         NotificationCenter.default.post(name: Self.didRestoreNotification, object: nil)
 
-        return (count, 0)
+        return (count, importedPlugins)
     }
 }

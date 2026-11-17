@@ -281,11 +281,24 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                     }
                     let lowerExt = (file.fileName as NSString?)?.pathExtension.lowercased() ?? ""
                     if lowerExt == "lua" || lowerExt == "py" {
-                        params.present(textAlertController(context: params.context, title: "Установка из чата запрещена", text: "В целях безопасности плагины (.lua / .py) нельзя скачивать и устанавливать из чатов или сторонних файлов. Используйте только официальный маркет плагинов в настройках FullGram.", actions: [
-                            TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})
+                        let pluginFileName = file.fileName ?? "plugin.\(lowerExt)"
+                        params.present(textAlertController(context: params.context, title: "Установить плагин FullGram", text: "Импортировать и включить «\(pluginFileName)»?", actions: [
+                            TextAlertAction(type: .defaultAction, title: "Установить", action: {
+                                let _ = messageMediaFileInteractiveFetched(context: params.context, message: params.message, file: file, userInitiated: true).startStandalone()
+                                let _ = (params.context.engine.resources.data(id: EngineMediaResource.Id(file.resource.id))
+                                |> filter { $0.isComplete }
+                                |> take(1)
+                                |> deliverOnMainQueue).startStandalone(next: { data in
+                                    if let saved = try? FullGramPluginManager.shared.importPlugin(from: URL(fileURLWithPath: data.path), preferredFileName: pluginFileName) {
+                                        params.present(UndoOverlayController(presentationData: presentationData, content: .succeed(text: "Плагин «\(saved.name)» установлен", timeout: nil, customUndoText: nil), elevatedLayout: false, action: { _ in return false }), nil, .window(.root))
+                                    }
+                                })
+                            }),
+                            TextAlertAction(type: .genericAction, title: "Открыть как файл", action: { proceed() }),
+                            TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {})
                         ]), nil, .window(.root))
                     } else if lowerExt == "fullgram" {
-                        params.present(textAlertController(context: params.context, title: "Бэкап FullGram", text: "Импортировать настройки из «\(file.fileName ?? "backup.fullgram")»? Сторонние плагины из файла не устанавливаются в целях безопасности, а белый список Анти-скама сохранён текущим.", actions: [
+                        params.present(textAlertController(context: params.context, title: "Бэкап FullGram", text: "Импортировать настройки и плагины из «\(file.fileName ?? "backup.fullgram")»? Белый список Анти-скама будет сохранён текущим.", actions: [
                             TextAlertAction(type: .defaultAction, title: "Восстановить", action: {
                                 let _ = messageMediaFileInteractiveFetched(context: params.context, message: params.message, file: file, userInitiated: true).startStandalone()
                                 let _ = (params.context.engine.resources.data(id: EngineMediaResource.Id(file.resource.id))
@@ -293,7 +306,7 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                                 |> take(1)
                                 |> deliverOnMainQueue).startStandalone(next: { data in
                                     if let res = try? FullGramBackup.importFromFile(url: URL(fileURLWithPath: data.path), allowAntiScamWhitelist: false) {
-                                        params.present(UndoOverlayController(presentationData: presentationData, content: .succeed(text: "Восстановлено настроек: \(res.settingsCount). Плагины — только из маркета.", timeout: nil, customUndoText: nil), elevatedLayout: false, action: { _ in return false }), nil, .window(.root))
+                                        params.present(UndoOverlayController(presentationData: presentationData, content: .succeed(text: "Восстановлено настроек: \(res.settingsCount), плагинов: \(res.pluginsCount)", timeout: nil, customUndoText: nil), elevatedLayout: false, action: { _ in return false }), nil, .window(.root))
                                     }
                                 })
                             }),

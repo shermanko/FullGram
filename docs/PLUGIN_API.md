@@ -21,11 +21,10 @@
 
 Плагины выполняются во встроенных изолированных VM ([`FullGramLuaEngine.swift`](../submodules/Display/Source/FullGramLuaEngine.swift) и [`FullGramPythonEngine.swift`](../submodules/Display/Source/FullGramPythonEngine.swift)) под управлением [`FullGramPluginManager`](../submodules/Display/Source/FullGramPluginManager.swift).
 
-Установить или создать плагин можно двумя способами:
-1. Установка проверенных плагинов из **официального маркета FullGram**: **Настройки → FullGram → Плагины → 🛒 Маркет плагинов FullGram**.
+Установить или создать плагин можно несколькими способами:
+1. Установка из **маркета плагинов FullGram** или любого своего каталога `plugins.json`: **Настройки → FullGram → Плагины → 🛒 Маркет плагинов FullGram**.
 2. Написание локального скрипта во встроенном редакторе: **Настройки → FullGram → Плагины → `+ Новый плагин на Lua / Python`**.
-
-> Установка `.lua`/`.py` файлов из чатов, «Файлов», сторонних серверов или бэкапов `.fullgram` отключена в целях безопасности.
+3. Импорт `.lua`/`.py` файлов из приложения «Файлы», напрямую из чатов, а также восстановление из бэкапа `.fullgram`.
 
 ---
 
@@ -137,7 +136,7 @@
 | `fullgram.storage_set` | `(key: string, value: any) -> bool` | Сохранить значение (`nil`/`None` удаляет ключ) |
 | `fullgram.register_command` | `(cmd: string, fn: function) -> nil` | Зарегистрировать обработчик команды без `on_command` |
 | `fullgram.get_chat_stats` | `() -> table \| nil` | Получить статистику открытого чата (для `.plug info-chat` и т.п.) |
-| `fullgram.http_get` | `(url: string) -> string \| nil` | Синхронный `HTTPS GET`-запрос (таймаут `1.8 с`, требует `@permission net`) |
+| `fullgram.http_get` | `(url: string) -> string \| nil` | Синхронный `HTTP / HTTPS GET`-запрос (таймаут `8.0 с`) |
 
 ### Структура `fullgram.get_chat_stats()`
 
@@ -168,11 +167,7 @@
 - **Лимит инструкций (`maxSteps`)**: `120 000` шагов на один вызов хука — защита от бесконечных циклов.
 - **Лимит рекурсии (`maxCallDepth`)**: `64` вложенных вызова — защита от Stack Overflow.
 - **Потокобезопасность (`vmLock`)**: все операции VM (`load`, `hasFunction`, `callFunction`, `getGlobal`) защищены `NSRecursiveLock`.
-- **Сетевой контроль `http_get`**:
-  - требует явного `-- @permission net` / `# @permission net` в заголовке плагина;
-  - запрещает `http://`, разрешает **только `https://`**;
-  - блокирует `localhost`, `.local`, `.internal`, `.arpa`, IPv6 и приватные/серые IPv4 (`127.*`, `10.*`, `192.168.*`, `172.16-31.*`, `169.254.*`, `100.64-127.*`, `224+.*`);
-  - блокируется внутри `on_render_message`.
+- **Сеть `http_get`**: разрешены любые `http://` и `https://` запросы с таймаутом `8.0 с` без обязательного `@permission net`.
 - **Защита источников плагинов**: установка плагинов из чатов, «Файлов», сторонних серверов и бэкапов `.fullgram` заблокирована; маркет привязан только к официальному серверу FullGram.
 
 ---

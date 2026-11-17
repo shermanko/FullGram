@@ -905,13 +905,14 @@ private final class FullGramMixerContainerController: ViewController {
     init(context: AccountContext, onChanged: @escaping () -> Void) {
         let data = context.sharedContext.currentPresentationData.with { $0 }
         self.hosted = FullGramMixerUIViewController(theme: data.theme, onChanged: onChanged)
-        let navBarTheme = NavigationBarTheme(overallDarkAppearance: data.theme.overallDarkAppearance, buttonColor: data.theme.rootController.navigationBar.buttonColor, disabledButtonColor: data.theme.rootController.navigationBar.disabledButtonColor, primaryTextColor: data.theme.rootController.navigationBar.primaryTextColor, backgroundColor: data.theme.rootController.navigationBar.opaqueBackgroundColor, opaqueBackgroundColor: data.theme.rootController.navigationBar.opaqueBackgroundColor, enableBackgroundBlur: false, separatorColor: data.theme.rootController.navigationBar.separatorColor, badgeBackgroundColor: data.theme.rootController.navigationBar.badgeBackgroundColor, badgeStrokeColor: data.theme.rootController.navigationBar.badgeStrokeColor, badgeTextColor: data.theme.rootController.navigationBar.badgeTextColor)
-        super.init(navigationBarPresentationData: NavigationBarPresentationData(theme: navBarTheme, strings: NavigationBarStrings(presentationStrings: data.strings)))
+        super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: data))
         self.title = "Микшер"
         self.navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Сброс", style: .plain, target: self, action: #selector(self.resetTapped))
     }
 
-    required init?(coder: NSCoder) { return nil }
+    required init(coder aDecoder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
     @objc private func resetTapped() {
         if let flat = FullGramMixer.presets.first {

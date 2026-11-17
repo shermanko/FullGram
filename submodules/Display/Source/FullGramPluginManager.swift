@@ -41,18 +41,28 @@ private final class FullGramLoadedPlugin {
 public final class FullGramPluginManager {
     public static let shared = FullGramPluginManager()
     public static let officialCatalogURL = "https://fullgram.korsakovx.workers.dev/plugins.json"
-    private static let officialCatalogHost = "fullgram.korsakovx.workers.dev"
 
     private let lock = NSRecursiveLock()
     private let systemEnabledKey = "fullgram.plugins.systemEnabled"
+    private let catalogURLKey = "fullgram.plugins.catalogURL"
     private var descriptors: [FullGramPluginDescriptor] = []
     private var loaded: [String: FullGramLoadedPlugin] = [:]
     private var logsByPlugin: [String: [String]] = [:]
-    private var officialCatalogItems: [FullGramRemotePluginItem] = []
     private var didInitialize = false
 
     public var catalogURL: String {
-        return Self.officialCatalogURL
+        get {
+            let stored = UserDefaults.standard.string(forKey: self.catalogURLKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return stored.isEmpty ? Self.officialCatalogURL : stored
+        }
+        set {
+            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                UserDefaults.standard.removeObject(forKey: self.catalogURLKey)
+            } else {
+                UserDefaults.standard.set(trimmed, forKey: self.catalogURLKey)
+            }
+        }
     }
 
     private init() {}
@@ -248,12 +258,27 @@ public final class FullGramPluginManager {
         NotificationCenter.default.post(name: FullGramPluginNotifications.pluginsDidChange, object: nil)
     }
 
-    public func importPlugin(from url: URL) throws -> FullGramPluginDescriptor {
-        throw NSError(
-            domain: "FullGramPlugins",
-            code: 403,
-            userInfo: [NSLocalizedDescriptionKey: "Импорт плагинов из файлов и чатов отключён в целях безопасности. Устанавливайте плагины только из официального маркета FullGram."]
-        )
+    public func importPlugin(from url: URL, preferredFileName: String? = nil) throws -> FullGramPluginDescriptor {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessed { url.stopAccessingSecurityScopedResource() }
+        }
+        let code = try String(contentsOf: url, encoding: .utf8)
+        let sourceName = preferredFileName?.isEmpty == false ? preferredFileName! : url.lastPathComponent
+        let ext = (sourceName as NSString).pathExtension.lowercased()
+        let baseName = (sourceName as NSString).deletingPathExtension
+        let language: FullGramPluginLanguage
+        if ext == "py" {
+            language = .python
+        } else if ext == "lua" {
+            language = .lua
+        } else if code.contains("def on_") || code.contains("import fullgram") || code.contains("# @name") {
+            language = .python
+        } else {
+            language = .lua
+        }
+        let fallbackName = baseName.isEmpty ? "Импортированный плагин" : baseName
+        return self.savePlugin(id: nil, name: fallbackName, language: language, code: code, enabled: true)
     }
 
     public func exportFileURL(forPluginId id: String) -> URL? {
@@ -282,42 +307,11 @@ public final class FullGramPluginManager {
         }
     }
 
-    private static let renderHookThreadKey = "FullGram.Plugin.InRenderHook"
     private static let chatStatsThreadKey = "FullGram.Plugin.ChatStats"
-
-    private static func isPublicRemoteHost(_ rawHost: String) -> Bool {
-        let host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !host.isEmpty else { return false }
-        if host == "localhost" || host.hasSuffix(".local") || host.hasSuffix(".internal") || host.hasSuffix(".arpa") {
-            return false
-        }
-        // Reject raw IPv6 literals, mapped addresses, loopback, ULA, and link-local ranges.
-        if host.contains(":") {
-            return false
-        }
-        // Reject integer/hex/octal single-token IPs such as 2130706433 or 0x7f000001.
-        if !host.contains(".") {
-            return false
-        }
-        let octets = host.split(separator: ".", omittingEmptySubsequences: false)
-        if octets.count == 4, octets.allSatisfy({ Int($0) != nil }) {
-            let nums = octets.compactMap { Int($0) }
-            guard nums.count == 4, nums.allSatisfy({ $0 >= 0 && $0 <= 255 }) else { return false }
-            let a = nums[0], b = nums[1]
-            if a == 0 || a == 10 || a == 127 { return false }
-            if a == 100 && b >= 64 && b <= 127 { return false }
-            if a == 169 && b == 254 { return false }
-            if a == 172 && b >= 16 && b <= 31 { return false }
-            if a == 192 && (b == 168 || (b == 0 && (nums[2] == 0 || nums[2] == 2))) { return false }
-            if a >= 224 { return false }
-        }
-        return true
-    }
 
     private func makeHostAPI(
         pluginId: String,
         commandsBox: FullGramLoadedPlugin?,
-        allowNetwork: Bool = false,
         logCapture: ((String) -> Void)? = nil
     ) -> [String: FullGramPluginValue] {
         let storagePrefix = "fullgram.plugin.store.\(pluginId)."
@@ -394,35 +388,24 @@ public final class FullGramPluginManager {
                 }
                 return .nil
             },
-            "http_get": .function { [weak self] args in
-                if (Thread.current.threadDictionary[FullGramPluginManager.renderHookThreadKey] as? Bool) == true {
-                    self?.appendLog(pluginId: pluginId, message: "BLOCKED: http_get запрещён в on_render_message")
-                    return .nil
-                }
-                guard allowNetwork else {
-                    self?.appendLog(pluginId: pluginId, message: "BLOCKED: http_get требует @permission net в заголовке плагина")
-                    return .nil
-                }
+            "http_get": .function { args in
                 let rawURL = args.first?.asString ?? ""
                 guard let url = URL(string: rawURL),
                       let scheme = url.scheme?.lowercased(),
-                      scheme == "https",
-                      let host = url.host,
-                      FullGramPluginManager.isPublicRemoteHost(host) else {
-                    self?.appendLog(pluginId: pluginId, message: "BLOCKED: http_get разрешает только публичные https:// URL")
+                      scheme == "https" || scheme == "http" else {
                     return .nil
                 }
                 let sem = DispatchSemaphore(value: 0)
                 var body: String?
                 var request = URLRequest(url: url)
-                request.timeoutInterval = 1.8
+                request.timeoutInterval = 8.0
                 URLSession.shared.dataTask(with: request) { data, _, _ in
                     if let data {
                         body = String(data: data, encoding: .utf8)
                     }
                     sem.signal()
                 }.resume()
-                _ = sem.wait(timeout: .now() + 2.0)
+                _ = sem.wait(timeout: .now() + 8.5)
                 return body.map { .string($0) } ?? .nil
             }
         ]
@@ -430,8 +413,7 @@ public final class FullGramPluginManager {
 
     private func compile(descriptor: FullGramPluginDescriptor) -> FullGramLoadedPlugin {
         let holder = FullGramLoadedPlugin(descriptor: descriptor)
-        let meta = FullGramPluginMetadata.parse(from: descriptor.code, fallbackName: descriptor.name, language: descriptor.language)
-        let hostAPI = self.makeHostAPI(pluginId: descriptor.id, commandsBox: holder, allowNetwork: meta.hasNetworkPermission)
+        let hostAPI = self.makeHostAPI(pluginId: descriptor.id, commandsBox: holder)
 
         do {
             switch descriptor.language {
@@ -687,9 +669,6 @@ public final class FullGramPluginManager {
         let renderPlugins = self.descriptors.compactMap { self.loaded[$0.id] }.filter { $0.hasRenderHook }
         self.lock.unlock()
         guard !renderPlugins.isEmpty else { return text }
-
-        Thread.current.threadDictionary[FullGramPluginManager.renderHookThreadKey] = true
-        defer { Thread.current.threadDictionary.removeObject(forKey: FullGramPluginManager.renderHookThreadKey) }
 
         var currentText = text
         for plugin in renderPlugins {
@@ -1039,41 +1018,16 @@ end
 """
     }
 
-    // MARK: - Official Plugin Market (Pinned FullGram Worker)
-
-    private static func isOfficialScriptURL(_ url: URL) -> Bool {
-        guard url.scheme?.lowercased() == "https",
-              let host = url.host?.lowercased(),
-              Self.isPublicRemoteHost(host) else {
-            return false
-        }
-        if host == Self.officialCatalogHost {
-            return true
-        }
-        let path = url.path.lowercased()
-        if host == "raw.githubusercontent.com" && path.hasPrefix("/shermanko/") {
-            return true
-        }
-        if host == "cdn.jsdelivr.net" && path.hasPrefix("/gh/shermanko/") {
-            return true
-        }
-        return false
-    }
+    // MARK: - Remote Plugin Market
 
     public func fetchRemoteCatalog(urlString: String? = nil, completion: @escaping (Result<FullGramRemoteCatalog, Error>) -> Void) {
-        if let requested = urlString?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !requested.isEmpty,
-           requested != Self.officialCatalogURL {
+        let targetString = urlString?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveString = (targetString?.isEmpty == false) ? targetString! : self.catalogURL
+        guard let url = URL(string: effectiveString),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http" else {
             DispatchQueue.main.async {
-                completion(.failure(NSError(domain: "FullGramPlugins", code: 403, userInfo: [NSLocalizedDescriptionKey: "Сторонние серверы плагинов отключены. Разрешён только официальный маркет FullGram."])))
-            }
-            return
-        }
-        guard let url = URL(string: Self.officialCatalogURL),
-              url.scheme?.lowercased() == "https",
-              url.host?.lowercased() == Self.officialCatalogHost else {
-            DispatchQueue.main.async {
-                completion(.failure(NSError(domain: "FullGramPlugins", code: 400, userInfo: [NSLocalizedDescriptionKey: "Некорректный адрес официального маркета FullGram."])))
+                completion(.failure(NSError(domain: "FullGramPlugins", code: 400, userInfo: [NSLocalizedDescriptionKey: "Некорректный адрес каталога плагинов."])))
             }
             return
         }
@@ -1087,7 +1041,7 @@ end
                 return
             }
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            guard (200 ..< 300).contains(status), let data, data.count <= 512_000 else {
+            guard (200 ..< 300).contains(status), let data, data.count <= 2_097_152 else {
                 DispatchQueue.main.async {
                     completion(.failure(NSError(domain: "FullGramPlugins", code: status, userInfo: [NSLocalizedDescriptionKey: "Сервер вернул код \(status) или слишком большой каталог."])))
                 }
@@ -1095,9 +1049,6 @@ end
             }
             do {
                 let catalog = try JSONDecoder().decode(FullGramRemoteCatalog.self, from: data)
-                self.lock.lock()
-                self.officialCatalogItems = catalog.plugins
-                self.lock.unlock()
                 DispatchQueue.main.async { completion(.success(catalog)) }
             } catch {
                 DispatchQueue.main.async { completion(.failure(error)) }
@@ -1110,17 +1061,6 @@ end
         enableImmediately: Bool,
         completion: @escaping (Result<FullGramPluginDescriptor, Error>) -> Void
     ) {
-        self.lock.lock()
-        let isFromOfficialMarket = self.officialCatalogItems.contains(item)
-        self.lock.unlock()
-
-        guard isFromOfficialMarket else {
-            DispatchQueue.main.async {
-                completion(.failure(NSError(domain: "FullGramPlugins", code: 403, userInfo: [NSLocalizedDescriptionKey: "Плагин отсутствует в официальном маркете FullGram."])))
-            }
-            return
-        }
-
         if let inlineCode = item.code, !inlineCode.isEmpty {
             let saved = self.savePlugin(id: item.id, name: item.name, language: item.language, code: inlineCode, enabled: enableImmediately)
             DispatchQueue.main.async { completion(.success(saved)) }
@@ -1128,9 +1068,10 @@ end
         }
         guard let rawUrl = item.url,
               let url = URL(string: rawUrl),
-              Self.isOfficialScriptURL(url) else {
+              let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http" else {
             DispatchQueue.main.async {
-                completion(.failure(NSError(domain: "FullGramPlugins", code: 403, userInfo: [NSLocalizedDescriptionKey: "Недопустимый источник скрипта плагина: разрешены только официальные ресурсы FullGram."])))
+                completion(.failure(NSError(domain: "FullGramPlugins", code: 400, userInfo: [NSLocalizedDescriptionKey: "У плагина отсутствует корректная ссылка на скрипт."])))
             }
             return
         }
@@ -1145,7 +1086,7 @@ end
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard (200 ..< 300).contains(status),
                   let data,
-                  data.count <= 262_144,
+                  data.count <= 1_048_576,
                   let scriptCode = String(data: data, encoding: .utf8) else {
                 DispatchQueue.main.async {
                     completion(.failure(NSError(domain: "FullGramPlugins", code: status, userInfo: [NSLocalizedDescriptionKey: "Не удалось скачать скрипт плагина (HTTP \(status))."])))

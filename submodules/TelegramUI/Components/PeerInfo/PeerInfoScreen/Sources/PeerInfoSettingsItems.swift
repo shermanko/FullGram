@@ -497,7 +497,7 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
                 guard let controller = interaction.getController() else {
                     return
                 }
-                controller.push(fullGramBadgeDeskController(context: context, peer: EnginePeer(peer), peerId: badgePeerId, username: badgeUsername))
+                controller.push(fullGramBadgeDeskController(context: context, peer: peer, peerId: badgePeerId, username: badgeUsername))
             }
         ))
     }

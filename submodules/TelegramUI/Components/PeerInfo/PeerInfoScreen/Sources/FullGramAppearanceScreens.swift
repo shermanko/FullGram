@@ -51,24 +51,10 @@ private enum FullGramFontsEntry: ItemListNodeEntry {
         case let .header(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .font(_, option, selected):
-            let previewFont: UIFont
-            if let psName = option.postScriptName, let custom = UIFont(name: psName, size: 16.0) {
-                previewFont = custom
-            } else {
-                previewFont = Font.regular(16.0)
-            }
-            let titleAttr = NSAttributedString(
-                string: "\(option.title)  —  \(option.sample)",
-                attributes: [
-                    .font: previewFont,
-                    .foregroundColor: presentationData.theme.list.itemPrimaryTextColor
-                ]
-            )
             return ItemListCheckboxItem(
                 presentationData: presentationData,
                 systemStyle: .glass,
-                title: option.title,
-                attributedTitle: titleAttr,
+                title: "\(option.title)  —  \(option.sample)",
                 style: .right,
                 checked: selected,
                 zeroSeparatorInsets: false,
@@ -141,21 +127,22 @@ private final class FullGramThemePreviewItem: ListViewItem, ItemListItem {
         self.revision = revision
     }
 
-    func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, previousItem: ListViewItem?, nextItem: ListViewItem?, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+    func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
         async {
             let node = FullGramThemePreviewItemNode()
-            let (layout, apply) = node.asyncLayout()(self, params, previousItem == nil, nextItem == nil)
+            let (layout, apply) = node.asyncLayout()(self, params, neighbors.previous == nil, neighbors.next == nil)
+            node.contentSize = layout.contentSize
+            node.insets = layout.insets
             Queue.mainQueue().async {
                 completion(node, { (nil, { _ in apply() }) })
             }
-            _ = layout
         }
     }
 
-    func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, previousItem: ListViewItem?, nextItem: ListViewItem?, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+    func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? FullGramThemePreviewItemNode {
-                let (layout, apply) = nodeValue.asyncLayout()(self, params, previousItem == nil, nextItem == nil)
+                let (layout, apply) = nodeValue.asyncLayout()(self, params, neighbors.previous == nil, neighbors.next == nil)
                 completion(layout, { _ in apply() })
             }
         }

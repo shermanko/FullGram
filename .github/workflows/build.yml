@@ -203,7 +203,7 @@ jobs:
           sudo chown "$(whoami)" /Users/Shared
           mkdir -p /Users/Shared/bazel-disk-cache
           rm -rf /Users/Shared/telegram-ios
-          cp -a "$GITHUB_WORKSPACE" /Users/Shared/telegram-ios
+          cp -ac "$GITHUB_WORKSPACE" /Users/Shared/telegram-ios 2>/dev/null || cp -a "$GITHUB_WORKSPACE" /Users/Shared/telegram-ios
 
       - name: Build FullGram IPA
         env:
@@ -388,7 +388,7 @@ jobs:
           if not cache_dir.is_dir():
               raise SystemExit(0)
 
-          max_bytes = 4_500 * 1024 * 1024
+          max_bytes = 5_200 * 1024 * 1024
           files = []
           total = 0
           for root, _, names in os.walk(cache_dir):
