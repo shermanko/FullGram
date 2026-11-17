@@ -3929,7 +3929,7 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                     let bar = FullGramPluginCommandBarView(frame: CGRect(x: 8.0, y: 0.0, width: max(120.0, self.bounds.width - 16.0), height: 40.0))
                     bar.onSelectCommand = { [weak self] cmd in
                         self?.controller?.updateChatPresentationInterfaceState(animated: false, interactive: true, {
-                            $0.updatedInterfaceState { $0.withUpdatedComposeInputState(ChatTextInputState(inputText: NSAttributedString(string: cmd), selectionRange: cmd.count ..< cmd.count)) }
+                            $0.updatedInterfaceState { $0.withUpdatedComposeInputState(ChatTextInputState(inputText: NSAttributedString(string: cmd), selectionRange: cmd.utf16.count ..< cmd.utf16.count)) }
                         })
                     }
                     self.view.addSubview(bar)

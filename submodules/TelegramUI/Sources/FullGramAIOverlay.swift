@@ -1129,7 +1129,7 @@ final class FullGramAIOverlayCoordinator {
             if let chat = self.activeChatController() {
                 chat.updateChatPresentationInterfaceState(animated: true, interactive: true, {
                     $0.updatedInterfaceState {
-                        $0.withUpdatedComposeInputState(ChatTextInputState(inputText: NSAttributedString(string: text), selectionRange: text.count ..< text.count))
+                        $0.withUpdatedComposeInputState(ChatTextInputState(inputText: NSAttributedString(string: text), selectionRange: text.utf16.count ..< text.utf16.count))
                     }
                 })
                 store.updateActionStatus(messageId: messageId, status: .applied)

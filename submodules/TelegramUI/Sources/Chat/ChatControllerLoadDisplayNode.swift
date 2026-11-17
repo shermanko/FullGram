@@ -1283,10 +1283,10 @@ extension ChatControllerImpl {
                             let presentationData = strongSelf.context.sharedContext.currentPresentationData.with { $0 }
                             let undoController = UndoOverlayController(
                                 presentationData: presentationData,
-                                content: .Action(
+                                content: .succeed(
                                     text: "Отправка через \(undoSeconds) сек...",
-                                    undoText: presentationData.strings.Undo_Undo,
-                                    timeout: Double(undoSeconds)
+                                    timeout: Double(undoSeconds),
+                                    customUndoText: presentationData.strings.Undo_Undo
                                 ),
                                 elevatedLayout: false,
                                 animateInAsReplacement: true,
