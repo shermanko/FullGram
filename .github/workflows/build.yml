@@ -282,14 +282,32 @@ jobs:
           fi
 
           python3 - <<'PY'
-          import subprocess
+          import os, subprocess
           from pathlib import Path
 
           p12 = "build-system/fake-codesigning/certs/SelfSigned.p12"
           key_pem = "/tmp/fg_fake_key.pem"
           cert_pem = "/tmp/fg_fake_cert.pem"
-          subprocess.run(["openssl", "pkcs12", "-in", p12, "-passin", "pass:", "-nodes", "-nocerts", "-out", key_pem], check=True)
-          subprocess.run(["openssl", "pkcs12", "-in", p12, "-passin", "pass:", "-clcerts", "-nokeys", "-out", cert_pem], check=True)
+
+          def extract_p12():
+              attempts = [
+                  ("openssl", ["-legacy"]),
+                  ("openssl", []),
+              ]
+              if os.path.exists("/usr/bin/openssl"):
+                  attempts.append(("/usr/bin/openssl", []))
+              last_err = None
+              for bin_path, extra in attempts:
+                  try:
+                      subprocess.run([bin_path, "pkcs12", *extra, "-in", p12, "-passin", "pass:", "-nodes", "-nocerts", "-out", key_pem], check=True)
+                      subprocess.run([bin_path, "pkcs12", *extra, "-in", p12, "-passin", "pass:", "-clcerts", "-nokeys", "-out", cert_pem], check=True)
+                      print(f"Extracted SelfSigned.p12 using {bin_path} {extra}")
+                      return
+                  except subprocess.CalledProcessError as e:
+                      last_err = e
+              raise last_err
+
+          extract_p12()
 
           for p in sorted(Path("build-system/fake-codesigning/profiles").glob("*.mobileprovision")):
               plist_tmp = Path("/tmp/fg_profile.plist")
