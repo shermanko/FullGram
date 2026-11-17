@@ -664,7 +664,7 @@ private struct FullGramIconPreset {
 }
 
 private let fullGramStandardIcons: [FullGramIconPreset] = [
-    FullGramIconPreset(iconName: nil, title: "Стандартная (Синяя)", isMonochrome: false, previewResource: nil),
+    FullGramIconPreset(iconName: nil, title: "Стандартная (FullGram)", isMonochrome: false, previewResource: "FullGramIcon_FullGramDefault"),
     FullGramIconPreset(iconName: "BlueClassicIcon", title: "Классическая синяя", isMonochrome: false, previewResource: nil),
     FullGramIconPreset(iconName: "BlueFilledIcon", title: "Синяя заливка", isMonochrome: false, previewResource: nil),
     FullGramIconPreset(iconName: "BlackIcon", title: "Чёрная", isMonochrome: true, previewResource: nil),

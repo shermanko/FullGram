@@ -387,6 +387,18 @@ class ThemeSettingsAppIconItemNode: ListViewItemNode, ItemListItemNode {
                             var name = "Icon"
                             var bordered = true
                             switch icon.name {
+                                case "FullGramDefault":
+                                    name = "FullGram"
+                                    bordered = false
+                                case "FullGramRed":
+                                    name = "FullGram Red"
+                                    bordered = false
+                                case "FullGramMascot":
+                                    name = "FullGram Mascot"
+                                    bordered = false
+                                case "FullGramOrange":
+                                    name = "FullGram Orange"
+                                    bordered = false
                                 case "BlueIcon":
                                     name = item.strings.Appearance_AppIconDefault
                                 case "BlackIcon":

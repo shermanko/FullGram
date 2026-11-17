@@ -314,7 +314,9 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         let appGroupName = "group.\(baseAppBundleId)"
 
         let configuration = URLSessionConfiguration.background(withIdentifier: identifier)
-        configuration.sharedContainerIdentifier = appGroupName
+        if FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName) != nil {
+            configuration.sharedContainerIdentifier = appGroupName
+        }
         configuration.isDiscretionary = false
         let session = URLSession(configuration: configuration, delegate: self, delegateQueue: .main)
         self.urlSessions.append(session)
@@ -569,7 +571,15 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         try! PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .mainApp, biometricKeychainService: walletBiometricKeychainService), privateAccessGroup: {
             BuildConfig.keychainAccessGroup(baseAppBundleId: baseAppBundleId)
         })
-        let maybeAppGroupUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName)
+        let maybeAppGroupUrl: URL? = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName) ?? {
+            guard let baseDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+                return nil
+            }
+            let dir = baseDir.appendingPathComponent("FullGramAppGroup", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: nil)
+            return dir
+        }()
         
         let buildConfig = BuildConfig(baseAppBundleId: baseAppBundleId)
         self.buildConfig = buildConfig
@@ -998,7 +1008,11 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         }, getAvailableAlternateIcons: {
             if #available(iOS 10.3, *) {
                 var icons = [
-                    PresentationAppIcon(name: "BlueIcon", imageName: "BlueIcon", isDefault: buildConfig.isAppStoreBuild),
+                    PresentationAppIcon(name: "FullGramDefault", imageName: "FullGramDefault", isDefault: true),
+                    PresentationAppIcon(name: "FullGramRed", imageName: "FullGramRed"),
+                    PresentationAppIcon(name: "FullGramMascot", imageName: "FullGramMascot"),
+                    PresentationAppIcon(name: "FullGramOrange", imageName: "FullGramOrange"),
+                    PresentationAppIcon(name: "BlueIcon", imageName: "BlueIcon"),
                     PresentationAppIcon(name: "New2", imageName: "New2"),
                     PresentationAppIcon(name: "New1", imageName: "New1"),
                     PresentationAppIcon(name: "BlackIcon", imageName: "BlackIcon"),

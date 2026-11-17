@@ -276,6 +276,7 @@ jobs:
           text = rc.read_text(encoding="utf-8")
           additions = [
               "build --//Telegram:disableProvisioningProfiles",
+              "build --//Telegram:disableExtensions",
               "build --features=ayu_unsigned_compilation --features=disable_legacy_signing",
           ]
           missing = [line for line in additions if line not in text]
