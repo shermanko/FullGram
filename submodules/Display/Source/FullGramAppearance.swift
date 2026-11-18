@@ -356,7 +356,7 @@ public enum FullGramThemeColors {
         }
     }
 
-    public struct Preset {
+    public struct Preset: Equatable {
         public let id: String
         public let title: String
         public let colors: [Slot: String]

@@ -1066,7 +1066,7 @@ public final class FullGramRustVM {
             guard let v = args.first else { return .int(0) }
             switch v {
             case let .string(s): return .int(Int64(s.count))
-            case let .table(t): return .int(Int64(t.length()))
+            case let .table(t): return .int(Int64(t.arrayPart.isEmpty ? t.mapPart.count : t.arrayPart.count))
             default: return .int(0)
             }
         })
@@ -1210,17 +1210,17 @@ public final class FullGramRustVM {
             case "=": return rhs
             case "+=":
                 if case let .string(a) = cur { return .string(a + rhs.asString) }
-                if case .int = cur, case .int = rhs { return .int(cur.asInt + rhs.asInt) }
-                return .double(cur.asDouble + rhs.asDouble)
+                if case .int = cur, case .int = rhs { return .int((cur.asInt ?? 0) + (rhs.asInt ?? 0)) }
+                return .double((cur.asDouble ?? 0.0) + (rhs.asDouble ?? 0.0))
             case "-=":
-                if case .int = cur, case .int = rhs { return .int(cur.asInt - rhs.asInt) }
-                return .double(cur.asDouble - rhs.asDouble)
+                if case .int = cur, case .int = rhs { return .int((cur.asInt ?? 0) - (rhs.asInt ?? 0)) }
+                return .double((cur.asDouble ?? 0.0) - (rhs.asDouble ?? 0.0))
             case "*=":
-                if case .int = cur, case .int = rhs { return .int(cur.asInt * rhs.asInt) }
-                return .double(cur.asDouble * rhs.asDouble)
+                if case .int = cur, case .int = rhs { return .int((cur.asInt ?? 0) * (rhs.asInt ?? 0)) }
+                return .double((cur.asDouble ?? 0.0) * (rhs.asDouble ?? 0.0))
             case "/=":
-                let d = rhs.asDouble
-                return d == 0 ? .int(0) : .double(cur.asDouble / d)
+                let d = rhs.asDouble ?? 0.0
+                return d == 0.0 ? .int(0) : .double((cur.asDouble ?? 0.0) / d)
             default: return rhs
             }
         }
@@ -1326,7 +1326,7 @@ public final class FullGramRustVM {
             case "!": return .bool(!v.isTruthy)
             case "-":
                 if case let .int(i) = v { return .int(-i) }
-                return .double(-v.asDouble)
+                return .double(-(v.asDouble ?? 0.0))
             default: return v
             }
         case let .binary(op, lhsExpr, rhsExpr):
@@ -1343,38 +1343,38 @@ public final class FullGramRustVM {
             switch op {
             case "+":
                 if case let .string(a) = l { return .string(a + r.asString) }
-                if case .int = l, case .int = r { return .int(l.asInt + r.asInt) }
-                return .double(l.asDouble + r.asDouble)
+                if case .int = l, case .int = r { return .int((l.asInt ?? 0) + (r.asInt ?? 0)) }
+                return .double((l.asDouble ?? 0.0) + (r.asDouble ?? 0.0))
             case "-":
-                if case .int = l, case .int = r { return .int(l.asInt - r.asInt) }
-                return .double(l.asDouble - r.asDouble)
+                if case .int = l, case .int = r { return .int((l.asInt ?? 0) - (r.asInt ?? 0)) }
+                return .double((l.asDouble ?? 0.0) - (r.asDouble ?? 0.0))
             case "*":
-                if case .int = l, case .int = r { return .int(l.asInt * r.asInt) }
-                return .double(l.asDouble * r.asDouble)
+                if case .int = l, case .int = r { return .int((l.asInt ?? 0) * (r.asInt ?? 0)) }
+                return .double((l.asDouble ?? 0.0) * (r.asDouble ?? 0.0))
             case "/":
                 if case .int = l, case .int = r {
-                    let ri = r.asInt
-                    return ri == 0 ? .int(0) : .int(l.asInt / ri)
+                    let ri = r.asInt ?? 0
+                    return ri == 0 ? .int(0) : .int((l.asInt ?? 0) / ri)
                 }
-                let rd = r.asDouble
-                return rd == 0 ? .double(0) : .double(l.asDouble / rd)
+                let rd = r.asDouble ?? 0.0
+                return rd == 0.0 ? .double(0) : .double((l.asDouble ?? 0.0) / rd)
             case "%":
-                let ri = r.asInt
-                return ri == 0 ? .int(0) : .int(l.asInt % ri)
+                let ri = r.asInt ?? 0
+                return ri == 0 ? .int(0) : .int((l.asInt ?? 0) % ri)
             case "==": return .bool(Self.valuesEqual(l, r))
             case "!=": return .bool(!Self.valuesEqual(l, r))
-            case "<": return .bool(l.asDouble < r.asDouble)
-            case "<=": return .bool(l.asDouble <= r.asDouble)
-            case ">": return .bool(l.asDouble > r.asDouble)
-            case ">=": return .bool(l.asDouble >= r.asDouble)
+            case "<": return .bool((l.asDouble ?? 0.0) < (r.asDouble ?? 0.0))
+            case "<=": return .bool((l.asDouble ?? 0.0) <= (r.asDouble ?? 0.0))
+            case ">": return .bool((l.asDouble ?? 0.0) > (r.asDouble ?? 0.0))
+            case ">=": return .bool((l.asDouble ?? 0.0) >= (r.asDouble ?? 0.0))
             case "..":
-                let start = l.asInt
-                let end = r.asInt
+                let start = l.asInt ?? 0
+                let end = r.asInt ?? 0
                 guard end > start && (end - start) <= 10_000 else { return .table(FullGramPluginTableBox()) }
                 return .table(FullGramPluginTableBox(array: (start..<end).map { .int($0) }))
             case "..=":
-                let start = l.asInt
-                let end = r.asInt
+                let start = l.asInt ?? 0
+                let end = r.asInt ?? 0
                 guard end >= start && (end - start) <= 10_000 else { return .table(FullGramPluginTableBox()) }
                 return .table(FullGramPluginTableBox(array: (start...end).map { .int($0) }))
             default:
@@ -1402,7 +1402,7 @@ public final class FullGramRustVM {
                 return box.get(key: key)
             }
             if case let .string(s) = obj {
-                let i = Int(key.asInt)
+                let i = Int(key.asInt ?? -1)
                 if i >= 0 && i < s.count {
                     let sIdx = s.index(s.startIndex, offsetBy: i)
                     return .string(String(s[sIdx]))
