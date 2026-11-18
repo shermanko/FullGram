@@ -202,6 +202,20 @@ public final class FullGramPluginTableBox {
             self.mapPart[key] = value
         }
     }
+
+    public func toJSONObject() -> Any {
+        if self.mapPart.isEmpty {
+            return self.arrayPart.map { $0.toJSONObject() }
+        }
+        var dict: [String: Any] = [:]
+        for (k, v) in self.mapPart {
+            dict[k] = v.toJSONObject()
+        }
+        for (i, v) in self.arrayPart.enumerated() {
+            dict[String(i + 1)] = v.toJSONObject()
+        }
+        return dict
+    }
 }
 
 public indirect enum FullGramPluginValue {
@@ -282,17 +296,7 @@ public indirect enum FullGramPluginValue {
         case let .string(s): return s
         case let .list(arr): return arr.map { $0.toJSONObject() }
         case let .table(box):
-            if box.mapPart.isEmpty {
-                return box.arrayPart.map { $0.toJSONObject() }
-            }
-            var dict: [String: Any] = [:]
-            for (k, v) in box.mapPart {
-                dict[k] = v.toJSONObject()
-            }
-            for (i, v) in box.arrayPart.enumerated() {
-                dict[String(i + 1)] = v.toJSONObject()
-            }
-            return dict
+            return box.toJSONObject()
         case .function:
             return "<function>"
         }
