@@ -1278,6 +1278,40 @@ extension PeerInfoScreenNode {
                     }
                 }
                 
+                if !items.isEmpty {
+                    items.append(.separator)
+                }
+                let fullGramTargetPeerId = peer.id.toInt64()
+                let fullGramTargetTitle = EnginePeer(peer).compactDisplayTitle
+                items.append(.action(ContextMenuActionItem(text: "Сводка чата (ИИ)", icon: { theme in
+                    UIImage(systemName: "sparkles")?.withTintColor(theme.contextMenu.primaryColor, renderingMode: .alwaysOriginal)
+                }, action: { _, f in
+                    f(.dismissWithoutContent)
+                    NotificationCenter.default.post(
+                        name: FullGramAINotifications.openWindow,
+                        object: nil,
+                        userInfo: [
+                            "peerId": fullGramTargetPeerId,
+                            "prompt": "Сделай подробную краткую сводку этого чата по последним сообщениям",
+                            "autoSend": true
+                        ]
+                    )
+                })))
+                items.append(.action(ContextMenuActionItem(text: "Плагины FullGram", icon: { theme in
+                    UIImage(systemName: "puzzlepiece.extension.fill")?.withTintColor(theme.contextMenu.primaryColor, renderingMode: .alwaysOriginal)
+                }, action: { _, f in
+                    f(.dismissWithoutContent)
+                    NotificationCenter.default.post(
+                        name: FullGramPluginNotifications.runCommandInChatRequested,
+                        object: nil,
+                        userInfo: [
+                            "peerId": fullGramTargetPeerId,
+                            "title": fullGramTargetTitle,
+                            "showPicker": true
+                        ]
+                    )
+                })))
+
                 return .single(items)
             }
             

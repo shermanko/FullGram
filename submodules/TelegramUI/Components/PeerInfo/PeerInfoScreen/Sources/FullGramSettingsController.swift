@@ -19,12 +19,17 @@ import TelegramPresentationData
 internal class FullGramHostedViewController<Content: UIViewController>: ViewController {
     let accountContext: AccountContext
     let hosted: Content
+    private let hostTheme: PresentationTheme
+    private var didAttachHosted = false
 
     init(context: AccountContext, title: String, makeContent: (PresentationTheme) -> Content) {
         self.accountContext = context
         let data = context.sharedContext.currentPresentationData.with { $0 }
+        self.hostTheme = data.theme
         self.hosted = makeContent(data.theme)
         super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: data))
+        self.isOpaqueWhenInOverlay = true
+        self.blocksBackgroundWhenInOverlay = true
         self.title = title
     }
 
@@ -32,17 +37,36 @@ internal class FullGramHostedViewController<Content: UIViewController>: ViewCont
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func displayNodeDidLoad() {
-        super.displayNodeDidLoad()
+    override func loadDisplayNode() {
+        let node = ASDisplayNode()
+        node.backgroundColor = self.hostTheme.list.blocksBackgroundColor
+        self.displayNode = node
+        self.displayNodeDidLoad()
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        self.attachHostedIfNeeded()
+    }
+
+    private func attachHostedIfNeeded() {
+        guard !self.didAttachHosted else { return }
+        self.didAttachHosted = true
         self.addChild(self.hosted)
-        self.hosted.view.frame = self.displayNode.bounds
+        self.hosted.view.frame = self.view.bounds
         self.hosted.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        self.displayNode.view.addSubview(self.hosted.view)
+        if let navView = self.navigationBar?.view, navView.superview === self.view {
+            self.view.insertSubview(self.hosted.view, belowSubview: navView)
+        } else {
+            self.view.insertSubview(self.hosted.view, at: 0)
+        }
         self.hosted.didMove(toParent: self)
     }
 
     override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
         super.containerLayoutUpdated(layout, transition: transition)
+        self.attachHostedIfNeeded()
+        self.hosted.view.frame = CGRect(origin: .zero, size: layout.size)
         let topInset = self.navigationLayout(layout: layout).navigationFrame.maxY
         self.hosted.additionalSafeAreaInsets = UIEdgeInsets(
             top: topInset,
@@ -59,9 +83,10 @@ public enum FullGramCategory: Int32, CaseIterable {
     case mediaAndAudio = 2
     case appearance = 3
     case security = 4
-    case other = 5
-    case plugins = 6
-    case aiAssistant = 7
+    case antiScam = 5
+    case other = 6
+    case plugins = 7
+    case aiAssistant = 8
 
     var title: String {
         switch self {
@@ -75,6 +100,8 @@ public enum FullGramCategory: Int32, CaseIterable {
             return "Оформление"
         case .security:
             return "Безопасность"
+        case .antiScam:
+            return "Анти-скам"
         case .other:
             return "Прочее"
         case .plugins:
@@ -96,6 +123,8 @@ public enum FullGramCategory: Int32, CaseIterable {
             return PresentationResourcesSettings.appearance
         case .security:
             return PresentationResourcesSettings.devices
+        case .antiScam:
+            return UIImage(systemName: "shield.lefthalf.filled")?.withTintColor(UIColor(rgb: 0xFF9500), renderingMode: .alwaysOriginal) ?? PresentationResourcesSettings.security
         case .other:
             return PresentationResourcesSettings.dataAndStorage
         case .plugins:
@@ -458,6 +487,8 @@ func fullGramSettingsController(context: AccountContext) -> ViewController {
                 pushControllerImpl?(fullGramAppearanceCategoryController(context: context))
             case .security:
                 pushControllerImpl?(fullGramSecurityCategoryController(context: context))
+            case .antiScam:
+                pushControllerImpl?(fullGramAntiScamController(context: context))
             case .mediaAndAudio:
                 pushControllerImpl?(fullGramMediaAudioCategoryController(context: context))
             case .other:
@@ -3463,19 +3494,33 @@ private enum FullGramOtherGeneralToggle: Int32, CaseIterable {
 
 private struct FullGramOtherGeneralArguments {
     let toggle: (FullGramOtherGeneralToggle, Bool) -> Void
+    let pickDownloadBoostMultiplier: () -> Void
 }
 
 private enum FullGramOtherGeneralEntry: ItemListNodeEntry {
     case header(String)
     case toggle(FullGramOtherGeneralToggle, Bool)
+    case boostHeader(String)
+    case boostToggle(Bool)
+    case boostMultiplier(String)
     case info(String)
 
-    var section: ItemListSectionId { return 0 }
+    var section: ItemListSectionId {
+        switch self {
+        case .boostHeader, .boostToggle, .boostMultiplier, .info:
+            return 1
+        default:
+            return 0
+        }
+    }
 
     var stableId: Int32 {
         switch self {
         case .header: return 0
         case let .toggle(opt, _): return opt.rawValue
+        case .boostHeader: return 20
+        case .boostToggle: return 21
+        case .boostMultiplier: return 22
         case .info: return 50
         }
     }
@@ -3491,6 +3536,12 @@ private enum FullGramOtherGeneralEntry: ItemListNodeEntry {
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .toggle(opt, value):
             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: opt.title, value: value, sectionId: self.section, style: .blocks, updated: { args.toggle(opt, $0) })
+        case let .boostHeader(text):
+            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+        case let .boostToggle(value):
+            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Улучшение загрузки", value: value, sectionId: self.section, style: .blocks, updated: { args.toggle(.downloadBoost, $0) })
+        case let .boostMultiplier(value):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: "Множитель ускорения", label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.pickDownloadBoostMultiplier)
         case let .info(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         }
@@ -3498,27 +3549,47 @@ private enum FullGramOtherGeneralEntry: ItemListNodeEntry {
 }
 
 func fullGramOtherGeneralController(context: AccountContext) -> ViewController {
+    var presentImpl: ((UIViewController) -> Void)?
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
     var version = 0
     let observer = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { _ in
         version += 1
         changed.set(version)
     }
-    let args = FullGramOtherGeneralArguments(toggle: { opt, value in
-        switch opt {
-        case .disableNumberRounding: FullGramExtras.shared.disableNumberRounding = value
-        case .showMessageSeconds: FullGramExtras.shared.showMessageSeconds = value
-        case .showPeerIds: FullGramExtras.shared.showPeerIds = value
-        case .hidePaidAds: FullGramExtras.shared.hidePaidAds = value
-        case .dimRepliesToMe: FullGramExtras.shared.dimRepliesToMe = value
-        case .trackOnLockScreen: FullGramExtras.shared.trackOnLockScreen = value
-        case .noAutoplayNextVoice: FullGramExtras.shared.noAutoplayNextVoice = value
-        case .keepScreenOnInPlayer: FullGramExtras.shared.keepScreenOnInPlayer = value
-        case .keepScreenOnInVoice: FullGramExtras.shared.keepScreenOnInVoice = value
-        case .downloadBoost: FullGramExtras.shared.downloadBoost = value
-        case .localFreeTranscription: FullGramExtras.shared.localFreeTranscription = value
+    let args = FullGramOtherGeneralArguments(
+        toggle: { opt, value in
+            switch opt {
+            case .disableNumberRounding: FullGramExtras.shared.disableNumberRounding = value
+            case .showMessageSeconds: FullGramExtras.shared.showMessageSeconds = value
+            case .showPeerIds: FullGramExtras.shared.showPeerIds = value
+            case .hidePaidAds: FullGramExtras.shared.hidePaidAds = value
+            case .dimRepliesToMe: FullGramExtras.shared.dimRepliesToMe = value
+            case .trackOnLockScreen: FullGramExtras.shared.trackOnLockScreen = value
+            case .noAutoplayNextVoice: FullGramExtras.shared.noAutoplayNextVoice = value
+            case .keepScreenOnInPlayer: FullGramExtras.shared.keepScreenOnInPlayer = value
+            case .keepScreenOnInVoice: FullGramExtras.shared.keepScreenOnInVoice = value
+            case .downloadBoost: FullGramExtras.shared.downloadBoost = value
+            case .localFreeTranscription: FullGramExtras.shared.localFreeTranscription = value
+            }
+        },
+        pickDownloadBoostMultiplier: {
+            let sheet = UIAlertController(
+                title: "Множитель ускорения загрузки",
+                message: "Выберите кратность параллельных потоков к DC и CDN",
+                preferredStyle: .actionSheet
+            )
+            let current = FullGramExtras.shared.downloadBoostMultiplier
+            for option in FullGramExtras.downloadBoostMultiplierOptions {
+                let prefix = (FullGramExtras.shared.downloadBoost && current == option) ? "✓ " : ""
+                sheet.addAction(UIAlertAction(title: "\(prefix)x\(option)", style: .default) { _ in
+                    FullGramExtras.shared.downloadBoost = true
+                    FullGramExtras.shared.downloadBoostMultiplier = option
+                })
+            }
+            sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            presentImpl?(sheet)
         }
-    })
+    )
     let signal = combineLatest(context.sharedContext.presentationData, changed.get())
     |> deliverOnMainQueue
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
@@ -3533,14 +3604,17 @@ func fullGramOtherGeneralController(context: AccountContext) -> ViewController {
             (.noAutoplayNextVoice, extras.noAutoplayNextVoice),
             (.keepScreenOnInPlayer, extras.keepScreenOnInPlayer),
             (.keepScreenOnInVoice, extras.keepScreenOnInVoice),
-            (.downloadBoost, extras.downloadBoost),
             (.localFreeTranscription, extras.localFreeTranscription)
         ]
         var entries: [FullGramOtherGeneralEntry] = [.header("ОСНОВНОЕ")]
         for (opt, val) in values {
             entries.append(.toggle(opt, val))
         }
-        entries.append(.info("Переключатель «не гасить экран в голосовых и кружках» отключает датчик приближения при прослушивании.\n\n«Улучшение загрузки» увеличивает пул параллельных соединений до DC и CDN, распределяет части равномерно по сокетам, ускоряет адаптивное окно до 1 МБ/чанк и предзагружает CDN-хэши наперёд."))
+        entries.append(.boostHeader("УЛУЧШЕНИЕ ЗАГРУЗКИ"))
+        entries.append(.boostToggle(extras.downloadBoost))
+        let multLabel = extras.downloadBoost ? "x\(extras.downloadBoostMultiplier)" : "Выкл (x\(extras.downloadBoostMultiplier))"
+        entries.append(.boostMultiplier(multLabel))
+        entries.append(.info("Переключатель «не гасить экран в голосовых и кружках» отключает датчик приближения при прослушивании.\n\n«Улучшение загрузки» увеличивает пул параллельных соединений до DC и CDN с выбранным множителем (x2–x8), распределяет части равномерно по сокетам и ускоряет загрузку крупных файлов."))
         let data = ItemListPresentationData(presentationData)
         let state = ItemListControllerState(presentationData: data, title: .text("Основное"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
         let listState = ItemListNodeState(presentationData: data, entries: entries, style: .blocks, animateChanges: false)
@@ -3549,7 +3623,15 @@ func fullGramOtherGeneralController(context: AccountContext) -> ViewController {
     |> afterDisposed {
         NotificationCenter.default.removeObserver(observer)
     }
-    return ItemListController(context: context, state: signal)
+    let controller = ItemListController(context: context, state: signal)
+    presentImpl = { [weak controller] vc in
+        if let pop = vc.popoverPresentationController, let view = controller?.view {
+            pop.sourceView = view
+            pop.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1.0, height: 1.0)
+        }
+        controller?.present(vc, animated: true)
+    }
+    return controller
 }
 
 private func fullGramCategoryController(context: AccountContext, category: FullGramCategory) -> ViewController {

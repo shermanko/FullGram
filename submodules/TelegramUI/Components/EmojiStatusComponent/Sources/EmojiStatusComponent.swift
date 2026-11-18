@@ -21,6 +21,7 @@ import TelegramUIPreferences
 private enum EmojiStatusBadgeKey: Hashable {
     case verified(fillColor: UIColor, foregroundColor: UIColor, imageNamePrefix: String)
     case text(color: UIColor, string: String)
+    case fullGramBadge(color: UIColor, string: String)
 }
 
 private let emojiStatusBadgeCache = Atomic<[EmojiStatusBadgeKey: UIImage]>(value: [:])
@@ -94,6 +95,7 @@ public final class EmojiStatusComponent: Component {
         case premium(color: UIColor)
         case verified(fillColor: UIColor, foregroundColor: UIColor, sizeType: SizeType)
         case text(color: UIColor, string: String)
+        case fullGramBadge(color: UIColor, string: String)
         case animation(content: AnimationContent, size: CGSize, placeholderColor: UIColor, themeColor: UIColor?, loopMode: LoopMode)
         case topic(title: String, color: Int32, size: CGSize)
         case image(image: UIImage?, tintColor: UIColor?)
@@ -440,6 +442,41 @@ public final class EmojiStatusComponent: Component {
                             CTFrameDraw(titleFrame, context)
                         })
                     })
+                case let .fullGramBadge(color, string):
+                    iconImage = cachedEmojiStatusBadge(.fullGramBadge(color: color, string: string), generate: {
+                        // Use unswizzled system UIFont so custom interface fonts never clip or deform the badge.
+                        let badgeFont = UIFont.systemFont(ofSize: 10.5, weight: .bold)
+                        let attributes: [NSAttributedString.Key: Any] = [
+                            .font: badgeFont,
+                            .foregroundColor: color
+                        ]
+                        let titleString = NSAttributedString(string: string, attributes: attributes)
+                        let measured = titleString.boundingRect(
+                            with: CGSize(width: 140.0, height: 18.0),
+                            options: [.usesLineFragmentOrigin, .usesFontLeading],
+                            context: nil
+                        )
+                        let pillWidth = ceil(measured.width) + 12.0
+                        let pillHeight: CGFloat = 18.0
+                        let size = CGSize(width: max(20.0, pillWidth), height: pillHeight)
+                        let format = UIGraphicsImageRendererFormat()
+                        format.opaque = false
+                        format.scale = UIScreen.main.scale
+                        return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+                            let bounds = CGRect(origin: .zero, size: size)
+                            let path = UIBezierPath(roundedRect: bounds, cornerRadius: 6.0)
+                            color.withAlphaComponent(0.16).setFill()
+                            path.fill()
+
+                            let textRect = CGRect(
+                                x: floor((bounds.width - ceil(measured.width)) / 2.0),
+                                y: floor((bounds.height - ceil(measured.height)) / 2.0),
+                                width: ceil(measured.width),
+                                height: ceil(measured.height)
+                            )
+                            titleString.draw(in: textRect)
+                        }
+                    })
                 case let .animation(animationContent, size, placeholderColor, themeColor, loopMode):
                     iconImage = nil
                     emojiFileId = animationContent.fileId.id
@@ -536,7 +573,7 @@ public final class EmojiStatusComponent: Component {
                 
                 var useFit = false
                 switch component.content {
-                case .text:
+                case .text, .fullGramBadge:
                     useFit = true
                 case .verified(_, _, sizeType: .compact):
                     useFit = true

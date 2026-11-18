@@ -187,6 +187,10 @@ public enum FullGramTranslationError: Error {
 }
 
 private enum FullGramCoreKeychain {
+    private static func fallbackKey(service: String, account: String) -> String {
+        return "fullgram.kc.\(service).\(account)"
+    }
+
     static func read(service: String, account: String) -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -196,10 +200,10 @@ private enum FullGramCoreKeychain {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else {
-            return nil
+        if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data {
+            return data
         }
-        return result as? Data
+        return UserDefaults.standard.data(forKey: fallbackKey(service: service, account: account))
     }
 
     static func write(_ data: Data, service: String, account: String) {
@@ -212,12 +216,21 @@ private enum FullGramCoreKeychain {
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
-        if SecItemUpdate(query as CFDictionary, attrs as CFDictionary) == errSecItemNotFound {
+        let status = SecItemUpdate(query as CFDictionary, attrs as CFDictionary)
+        if status == errSecItemNotFound {
             var newItem = query
             newItem[kSecValueData as String] = data
             newItem[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            SecItemAdd(newItem as CFDictionary, nil)
+            let addStatus = SecItemAdd(newItem as CFDictionary, nil)
+            if addStatus != errSecSuccess {
+                UserDefaults.standard.set(data, forKey: fallbackKey(service: service, account: account))
+                return
+            }
+        } else if status != errSecSuccess {
+            UserDefaults.standard.set(data, forKey: fallbackKey(service: service, account: account))
+            return
         }
+        UserDefaults.standard.set(data, forKey: fallbackKey(service: service, account: account))
     }
 
     static func delete(service: String, account: String) {
@@ -227,6 +240,7 @@ private enum FullGramCoreKeychain {
             kSecAttrAccount as String: account
         ]
         SecItemDelete(query as CFDictionary)
+        UserDefaults.standard.removeObject(forKey: fallbackKey(service: service, account: account))
     }
 }
 
@@ -747,6 +761,7 @@ public enum FullGramActivityFilter {
 
 public enum FullGramChatPrivacy {
     public static let didChangeNotification = Notification.Name("FullGram.ChatPrivacyChanged")
+    public static let didRelockNotification = Notification.Name("FullGram.ChatPrivacyDidRelock")
     private static let legacyEnabledKey = "fullgram.privacy.faceIdEnabled"
     private static let legacyLockedKey = "fullgram.privacy.lockedChats"
     private static let keychainService = "FullGram.ChatPrivacy"
@@ -871,6 +886,7 @@ public enum FullGramChatPrivacy {
         lock.lock()
         unlocked.removeAll()
         lock.unlock()
+        NotificationCenter.default.post(name: didRelockNotification, object: nil)
     }
 }
 
@@ -1404,6 +1420,20 @@ public final class FullGramExtras {
             return bool("downloadSpeedBoost", default: false)
         }
         set { setBool("downloadBoost", newValue) }
+    }
+
+    public static let downloadBoostMultiplierOptions: [Int] = [2, 3, 4, 6, 8]
+
+    public var downloadBoostMultiplier: Int {
+        get {
+            let stored = defaults.integer(forKey: prefix + "downloadBoostMultiplier")
+            return Self.downloadBoostMultiplierOptions.contains(stored) ? stored : 2
+        }
+        set {
+            let sanitized = Self.downloadBoostMultiplierOptions.contains(newValue) ? newValue : 2
+            defaults.set(sanitized, forKey: prefix + "downloadBoostMultiplier")
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: "downloadBoostMultiplier")
+        }
     }
 
     public var localFreeTranscription: Bool {

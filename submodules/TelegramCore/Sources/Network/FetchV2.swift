@@ -525,8 +525,9 @@ private final class FetchImpl {
             }
             self.cdnPartSize = 128 * 1024
             if self.boostDownloads {
-                self.masterPendingParts = boostedMasterPendingParts
-                self.cdnPendingParts = boostedCdnPendingParts
+                let multiplier = FullGramExtras.shared.downloadBoostMultiplier
+                self.masterPendingParts = min(48, max(boostedMasterPendingParts, 8 * multiplier))
+                self.cdnPendingParts = min(64, max(boostedCdnPendingParts, 12 * multiplier))
             } else {
                 self.masterPendingParts = self.fastDownloads ? fastDownloadMasterPendingParts : 6
                 self.cdnPendingParts = self.fastDownloads ? fastDownloadCdnPendingParts : 6

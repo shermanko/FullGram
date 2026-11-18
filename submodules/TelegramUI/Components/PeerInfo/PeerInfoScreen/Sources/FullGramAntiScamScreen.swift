@@ -5,6 +5,7 @@ import AsyncDisplayKit
 import SwiftSignalKit
 import TelegramCore
 import TelegramPresentationData
+import ItemListUI
 import AccountContext
 
 // MARK: - Гайд «Не попадись» (структурированный экран, легко наполняемый через массив блоков)
@@ -121,610 +122,301 @@ private enum FullGramGuideContent {
     ]
 }
 
-private final class FullGramAntiScamGuideUIViewController: UIViewController {
-    private let theme: PresentationTheme
+// MARK: - Экран мануала «Не попадись» (нативный ItemListController)
 
-    init(theme: PresentationTheme) {
-        self.theme = theme
-        super.init(nibName: nil, bundle: nil)
-        self.title = FullGramGuideContent.screenTitle
+private enum FullGramGuideEntry: ItemListNodeEntry {
+    case header(Int32, String)
+    case text(Int32, String)
+
+    var section: ItemListSectionId { return self.stableId / 100 }
+
+    var stableId: Int32 {
+        switch self {
+        case let .header(id, _), let .text(id, _):
+            return id
+        }
     }
 
-    required init?(coder: NSCoder) { return nil }
+    static func < (lhs: FullGramGuideEntry, rhs: FullGramGuideEntry) -> Bool {
+        return lhs.stableId < rhs.stableId
+    }
 
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        self.view.backgroundColor = self.theme.list.blocksBackgroundColor
+    func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
+        switch self {
+        case let .header(_, title):
+            return ItemListSectionHeaderItem(presentationData: presentationData, text: title, sectionId: self.section)
+        case let .text(_, body):
+            return ItemListTextItem(presentationData: presentationData, text: .plain(body), sectionId: self.section)
+        }
+    }
+}
 
-        let scroll = UIScrollView()
-        scroll.alwaysBounceVertical = true
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        self.view.addSubview(scroll)
-
-        let stack = UIStackView()
-        stack.axis = .vertical
-        stack.spacing = 12.0
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        scroll.addSubview(stack)
-
-        NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.topAnchor),
-            scroll.bottomAnchor.constraint(equalTo: self.view.bottomAnchor),
-            scroll.leadingAnchor.constraint(equalTo: self.view.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: self.view.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 16.0),
-            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -28.0),
-            stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: 16.0),
-            stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -16.0)
-        ])
+private func fullGramAntiScamGuideController(context: AccountContext) -> ViewController {
+    let signal = context.sharedContext.presentationData
+    |> map { presentationData -> (ItemListControllerState, (ItemListNodeState, Any)) in
+        var entries: [FullGramGuideEntry] = []
+        var sectionIndex: Int32 = 0
+        var itemIndex: Int32 = 1
 
         for block in FullGramGuideContent.blocks {
-            stack.addArrangedSubview(self.makeView(for: block))
-        }
-    }
-
-    private func makeCard(background: UIColor, borderColor: UIColor? = nil) -> UIView {
-        let view = UIView()
-        view.backgroundColor = background
-        view.layer.cornerRadius = 14.0
-        if let borderColor {
-            view.layer.borderWidth = 1.0
-            view.layer.borderColor = borderColor.cgColor
-        }
-        return view
-    }
-
-    private func makeView(for block: FullGramGuideBlock) -> UIView {
-        switch block {
-        case let .heading(text):
-            let label = UILabel()
-            label.text = text
-            label.font = .systemFont(ofSize: 22.0, weight: .bold)
-            label.textColor = self.theme.list.itemPrimaryTextColor
-            label.numberOfLines = 0
-            return label
-
-        case let .placeholder(text):
-            let card = self.makeCard(background: self.theme.list.itemBlocksBackgroundColor)
-            let label = UILabel()
-            label.text = text
-            label.font = .systemFont(ofSize: 15.0)
-            label.textColor = self.theme.list.itemPrimaryTextColor
-            label.numberOfLines = 0
-            label.translatesAutoresizingMaskIntoConstraints = false
-            card.addSubview(label)
-            NSLayoutConstraint.activate([
-                label.topAnchor.constraint(equalTo: card.topAnchor, constant: 14.0),
-                label.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -14.0),
-                label.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14.0),
-                label.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14.0)
-            ])
-            return card
-
-        case let .step(number, title, text):
-            let card = self.makeCard(background: self.theme.list.itemBlocksBackgroundColor)
-            let badge = UILabel()
-            badge.text = "\(number)"
-            badge.font = .systemFont(ofSize: 13.0, weight: .bold)
-            badge.textColor = .white
-            badge.textAlignment = .center
-            badge.backgroundColor = self.theme.list.itemAccentColor
-            badge.layer.cornerRadius = 13.0
-            badge.clipsToBounds = true
-            badge.translatesAutoresizingMaskIntoConstraints = false
-
-            let titleLabel = UILabel()
-            titleLabel.text = title
-            titleLabel.font = .systemFont(ofSize: 16.0, weight: .semibold)
-            titleLabel.textColor = self.theme.list.itemPrimaryTextColor
-            titleLabel.numberOfLines = 0
-            titleLabel.translatesAutoresizingMaskIntoConstraints = false
-
-            let bodyLabel = UILabel()
-            bodyLabel.text = text
-            bodyLabel.font = .systemFont(ofSize: 14.5)
-            bodyLabel.textColor = self.theme.list.itemSecondaryTextColor
-            bodyLabel.numberOfLines = 0
-            bodyLabel.translatesAutoresizingMaskIntoConstraints = false
-
-            card.addSubview(badge)
-            card.addSubview(titleLabel)
-            card.addSubview(bodyLabel)
-            NSLayoutConstraint.activate([
-                badge.topAnchor.constraint(equalTo: card.topAnchor, constant: 14.0),
-                badge.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14.0),
-                badge.widthAnchor.constraint(equalToConstant: 26.0),
-                badge.heightAnchor.constraint(equalToConstant: 26.0),
-                titleLabel.centerYAnchor.constraint(equalTo: badge.centerYAnchor),
-                titleLabel.leadingAnchor.constraint(equalTo: badge.trailingAnchor, constant: 10.0),
-                titleLabel.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14.0),
-                bodyLabel.topAnchor.constraint(equalTo: badge.bottomAnchor, constant: 8.0),
-                bodyLabel.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14.0),
-                bodyLabel.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14.0),
-                bodyLabel.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -14.0)
-            ])
-            return card
-
-        case let .example(title, text):
-            let card = self.makeCard(
-                background: self.theme.list.itemBlocksBackgroundColor,
-                borderColor: self.theme.list.itemSecondaryTextColor.withAlphaComponent(0.22)
-            )
-            let titleLabel = UILabel()
-            titleLabel.text = title.uppercased()
-            titleLabel.font = .systemFont(ofSize: 11.5, weight: .bold)
-            titleLabel.textColor = self.theme.list.itemAccentColor
-            titleLabel.translatesAutoresizingMaskIntoConstraints = false
-
-            let bodyLabel = UILabel()
-            bodyLabel.text = text
-            bodyLabel.font = .systemFont(ofSize: 14.5)
-            bodyLabel.textColor = self.theme.list.itemPrimaryTextColor
-            bodyLabel.numberOfLines = 0
-            bodyLabel.translatesAutoresizingMaskIntoConstraints = false
-
-            card.addSubview(titleLabel)
-            card.addSubview(bodyLabel)
-            NSLayoutConstraint.activate([
-                titleLabel.topAnchor.constraint(equalTo: card.topAnchor, constant: 12.0),
-                titleLabel.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14.0),
-                titleLabel.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14.0),
-                bodyLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 6.0),
-                bodyLabel.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14.0),
-                bodyLabel.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14.0),
-                bodyLabel.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -12.0)
-            ])
-            return card
-
-        case let .important(title, text):
-            let accent = UIColor.systemOrange
-            let card = self.makeCard(
-                background: accent.withAlphaComponent(0.12),
-                borderColor: accent.withAlphaComponent(0.45)
-            )
-            let titleLabel = UILabel()
-            titleLabel.text = "⚠️ " + title
-            titleLabel.font = .systemFont(ofSize: 15.0, weight: .bold)
-            titleLabel.textColor = accent
-            titleLabel.translatesAutoresizingMaskIntoConstraints = false
-
-            let bodyLabel = UILabel()
-            bodyLabel.text = text
-            bodyLabel.font = .systemFont(ofSize: 14.5, weight: .medium)
-            bodyLabel.textColor = self.theme.list.itemPrimaryTextColor
-            bodyLabel.numberOfLines = 0
-            bodyLabel.translatesAutoresizingMaskIntoConstraints = false
-
-            card.addSubview(titleLabel)
-            card.addSubview(bodyLabel)
-            NSLayoutConstraint.activate([
-                titleLabel.topAnchor.constraint(equalTo: card.topAnchor, constant: 12.0),
-                titleLabel.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14.0),
-                titleLabel.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14.0),
-                bodyLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 6.0),
-                bodyLabel.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14.0),
-                bodyLabel.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14.0),
-                bodyLabel.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -12.0)
-            ])
-            return card
-        }
-    }
-}
-
-private final class FullGramAntiScamGuideContainerController: FullGramHostedViewController<FullGramAntiScamGuideUIViewController> {
-    init(context: AccountContext) {
-        super.init(context: context, title: FullGramGuideContent.screenTitle) { theme in
-            FullGramAntiScamGuideUIViewController(theme: theme)
-        }
-    }
-
-    required init(coder aDecoder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-}
-
-// MARK: - Главный экран вкладки «Анти-скам» (Карточка 1, 2, 3 + доп. защита)
-
-private final class FullGramAntiScamUIViewController: UIViewController {
-    private let context: AccountContext
-    private let theme: PresentationTheme
-
-    private let antiOfferSwitch = UISwitch()
-    private let antiOtcSwitch = UISwitch()
-    private let mainSwitch = UISwitch()
-    private let linksSwitch = UISwitch()
-    private let shortenersSwitch = UISwitch()
-    private let filesSwitch = UISwitch()
-    private let statsLabel = UILabel()
-    private var observer: NSObjectProtocol?
-
-    init(context: AccountContext, theme: PresentationTheme) {
-        self.context = context
-        self.theme = theme
-        super.init(nibName: nil, bundle: nil)
-        self.title = "Анти-скам"
-    }
-
-    required init?(coder: NSCoder) { return nil }
-
-    deinit {
-        if let observer = self.observer {
-            NotificationCenter.default.removeObserver(observer)
-        }
-    }
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        self.view.backgroundColor = self.theme.list.blocksBackgroundColor
-
-        let scroll = UIScrollView()
-        scroll.alwaysBounceVertical = true
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        self.view.addSubview(scroll)
-
-        let stack = UIStackView()
-        stack.axis = .vertical
-        stack.spacing = 12.0
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        scroll.addSubview(stack)
-
-        NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.topAnchor),
-            scroll.bottomAnchor.constraint(equalTo: self.view.bottomAnchor),
-            scroll.leadingAnchor.constraint(equalTo: self.view.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: self.view.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 16.0),
-            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -28.0),
-            stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: 16.0),
-            stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -16.0)
-        ])
-
-        // Карточка 1: Гайд «Не попадись» (название в одну строку с усечением …, кнопка «Открыть»)
-        stack.addArrangedSubview(self.makeGuideCard())
-
-        // Карточка 2: Анти-офер
-        stack.addArrangedSubview(self.makeToggleCard(
-            iconName: "exclamationmark.shield.fill",
-            iconTint: UIColor.systemOrange,
-            title: "Анти-офер",
-            description: "Предупреждает, если оффер ненастоящий",
-            detail: "Проверяет офферы со ссылками, пересланные сообщения от неизвестных и через ботов.",
-            toggle: self.antiOfferSwitch,
-            action: #selector(self.antiOfferToggled)
-        ))
-
-        // Карточка 3: Анти-OTC
-        stack.addArrangedSubview(self.makeToggleCard(
-            iconName: "hand.raised.fill",
-            iconTint: UIColor.systemRed,
-            title: "Анти-OTC",
-            description: "Предупреждает о гаранте",
-            detail: "При OTC-сделке выводит предупреждение о риске скама со стороны гаранта.",
-            toggle: self.antiOtcSwitch,
-            action: #selector(self.antiOtcToggled)
-        ))
-
-        // Дополнительная защита
-        let extraHeader = UILabel()
-        extraHeader.text = "ДОПОЛНИТЕЛЬНАЯ ЗАЩИТА"
-        extraHeader.font = .systemFont(ofSize: 12.0, weight: .semibold)
-        extraHeader.textColor = self.theme.list.freeTextColor
-        stack.addArrangedSubview(extraHeader)
-
-        stack.addArrangedSubview(self.makeExtraControlsCard())
-
-        self.statsLabel.font = .systemFont(ofSize: 12.5)
-        self.statsLabel.textColor = self.theme.list.freeTextColor
-        self.statsLabel.numberOfLines = 0
-        stack.addArrangedSubview(self.statsLabel)
-
-        var checkCfg = UIButton.Configuration.filled()
-        checkCfg.title = "Проверить ссылку или текст вручную"
-        checkCfg.baseBackgroundColor = self.theme.list.itemBlocksBackgroundColor
-        checkCfg.baseForegroundColor = self.theme.list.itemAccentColor
-        checkCfg.cornerStyle = .medium
-        let checkBtn = UIButton(configuration: checkCfg)
-        checkBtn.heightAnchor.constraint(equalToConstant: 44.0).isActive = true
-        checkBtn.addTarget(self, action: #selector(self.manualCheckTapped), for: .touchUpInside)
-        stack.addArrangedSubview(checkBtn)
-
-        self.observer = NotificationCenter.default.addObserver(forName: FullGramAntiScam.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.refresh()
-        }
-        self.refresh()
-    }
-
-    private func makeCard() -> UIView {
-        let view = UIView()
-        view.backgroundColor = self.theme.list.itemBlocksBackgroundColor
-        view.layer.cornerRadius = 16.0
-        return view
-    }
-
-    private func makeGuideCard() -> UIView {
-        let card = self.makeCard()
-
-        let iconWrap = UIView()
-        iconWrap.backgroundColor = self.theme.list.itemAccentColor.withAlphaComponent(0.14)
-        iconWrap.layer.cornerRadius = 12.0
-        iconWrap.translatesAutoresizingMaskIntoConstraints = false
-        let icon = UIImageView(image: UIImage(systemName: "book.closed.fill"))
-        icon.tintColor = self.theme.list.itemAccentColor
-        icon.contentMode = .scaleAspectFit
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        iconWrap.addSubview(icon)
-
-        let titleLabel = UILabel()
-        titleLabel.text = "Гайд «Не попадись»"
-        titleLabel.font = .systemFont(ofSize: 17.0, weight: .semibold)
-        titleLabel.textColor = self.theme.list.itemPrimaryTextColor
-        titleLabel.numberOfLines = 1
-        titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        let subtitleLabel = UILabel()
-        subtitleLabel.text = "Пошаговая инструкция для новичков"
-        subtitleLabel.font = .systemFont(ofSize: 13.5)
-        subtitleLabel.textColor = self.theme.list.itemSecondaryTextColor
-        subtitleLabel.numberOfLines = 0
-        subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        var cfg = UIButton.Configuration.filled()
-        cfg.title = "Открыть"
-        cfg.baseBackgroundColor = self.theme.list.itemAccentColor
-        cfg.baseForegroundColor = .white
-        cfg.cornerStyle = .capsule
-        cfg.contentInsets = NSDirectionalEdgeInsets(top: 7.0, leading: 14.0, bottom: 7.0, trailing: 14.0)
-        let openButton = UIButton(configuration: cfg)
-        openButton.setContentCompressionResistancePriority(.required, for: .horizontal)
-        openButton.setContentHuggingPriority(.required, for: .horizontal)
-        openButton.addTarget(self, action: #selector(self.openGuideTapped), for: .touchUpInside)
-        openButton.translatesAutoresizingMaskIntoConstraints = false
-
-        card.addSubview(iconWrap)
-        card.addSubview(titleLabel)
-        card.addSubview(subtitleLabel)
-        card.addSubview(openButton)
-
-        NSLayoutConstraint.activate([
-            iconWrap.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14.0),
-            iconWrap.centerYAnchor.constraint(equalTo: card.centerYAnchor),
-            iconWrap.widthAnchor.constraint(equalToConstant: 42.0),
-            iconWrap.heightAnchor.constraint(equalToConstant: 42.0),
-
-            icon.centerXAnchor.constraint(equalTo: iconWrap.centerXAnchor),
-            icon.centerYAnchor.constraint(equalTo: iconWrap.centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 22.0),
-            icon.heightAnchor.constraint(equalToConstant: 22.0),
-
-            titleLabel.topAnchor.constraint(equalTo: card.topAnchor, constant: 14.0),
-            titleLabel.leadingAnchor.constraint(equalTo: iconWrap.trailingAnchor, constant: 12.0),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: openButton.leadingAnchor, constant: -10.0),
-
-            subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 3.0),
-            subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            subtitleLabel.trailingAnchor.constraint(equalTo: openButton.leadingAnchor, constant: -10.0),
-            subtitleLabel.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -14.0),
-
-            openButton.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14.0),
-            openButton.centerYAnchor.constraint(equalTo: card.centerYAnchor)
-        ])
-        return card
-    }
-
-    private func makeToggleCard(
-        iconName: String,
-        iconTint: UIColor,
-        title: String,
-        description: String,
-        detail: String,
-        toggle: UISwitch,
-        action: Selector
-    ) -> UIView {
-        let card = self.makeCard()
-
-        let iconWrap = UIView()
-        iconWrap.backgroundColor = iconTint.withAlphaComponent(0.14)
-        iconWrap.layer.cornerRadius = 12.0
-        iconWrap.translatesAutoresizingMaskIntoConstraints = false
-        let icon = UIImageView(image: UIImage(systemName: iconName))
-        icon.tintColor = iconTint
-        icon.contentMode = .scaleAspectFit
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        iconWrap.addSubview(icon)
-
-        let titleLabel = UILabel()
-        titleLabel.text = title
-        titleLabel.font = .systemFont(ofSize: 17.0, weight: .semibold)
-        titleLabel.textColor = self.theme.list.itemPrimaryTextColor
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        let descLabel = UILabel()
-        descLabel.text = description
-        descLabel.font = .systemFont(ofSize: 14.0, weight: .medium)
-        descLabel.textColor = self.theme.list.itemPrimaryTextColor
-        descLabel.numberOfLines = 0
-        descLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        let detailLabel = UILabel()
-        detailLabel.text = detail
-        detailLabel.font = .systemFont(ofSize: 12.5)
-        detailLabel.textColor = self.theme.list.itemSecondaryTextColor
-        detailLabel.numberOfLines = 0
-        detailLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        toggle.onTintColor = self.theme.list.itemAccentColor
-        toggle.addTarget(self, action: action, for: .valueChanged)
-        toggle.translatesAutoresizingMaskIntoConstraints = false
-
-        card.addSubview(iconWrap)
-        card.addSubview(titleLabel)
-        card.addSubview(descLabel)
-        card.addSubview(detailLabel)
-        card.addSubview(toggle)
-
-        NSLayoutConstraint.activate([
-            iconWrap.topAnchor.constraint(equalTo: card.topAnchor, constant: 14.0),
-            iconWrap.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14.0),
-            iconWrap.widthAnchor.constraint(equalToConstant: 40.0),
-            iconWrap.heightAnchor.constraint(equalToConstant: 40.0),
-
-            icon.centerXAnchor.constraint(equalTo: iconWrap.centerXAnchor),
-            icon.centerYAnchor.constraint(equalTo: iconWrap.centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 21.0),
-            icon.heightAnchor.constraint(equalToConstant: 21.0),
-
-            titleLabel.centerYAnchor.constraint(equalTo: iconWrap.centerYAnchor),
-            titleLabel.leadingAnchor.constraint(equalTo: iconWrap.trailingAnchor, constant: 12.0),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -10.0),
-
-            toggle.centerYAnchor.constraint(equalTo: iconWrap.centerYAnchor),
-            toggle.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14.0),
-
-            descLabel.topAnchor.constraint(equalTo: iconWrap.bottomAnchor, constant: 10.0),
-            descLabel.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14.0),
-            descLabel.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14.0),
-
-            detailLabel.topAnchor.constraint(equalTo: descLabel.bottomAnchor, constant: 4.0),
-            detailLabel.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14.0),
-            detailLabel.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14.0),
-            detailLabel.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -14.0)
-        ])
-        return card
-    }
-
-    private func makeExtraControlsCard() -> UIView {
-        let card = self.makeCard()
-        let rows: [(String, UISwitch, Selector)] = [
-            ("Общая защита Анти-скам", self.mainSwitch, #selector(self.mainToggled)),
-            ("Проверка фишинговых ссылок", self.linksSwitch, #selector(self.linksToggled)),
-            ("Предупреждать о сокращателях URL", self.shortenersSwitch, #selector(self.shortenersToggled)),
-            ("Защита от опасных файлов", self.filesSwitch, #selector(self.filesToggled))
-        ]
-        let list = UIStackView()
-        list.axis = .vertical
-        list.translatesAutoresizingMaskIntoConstraints = false
-        card.addSubview(list)
-        NSLayoutConstraint.activate([
-            list.topAnchor.constraint(equalTo: card.topAnchor),
-            list.bottomAnchor.constraint(equalTo: card.bottomAnchor),
-            list.leadingAnchor.constraint(equalTo: card.leadingAnchor),
-            list.trailingAnchor.constraint(equalTo: card.trailingAnchor)
-        ])
-
-        for (idx, item) in rows.enumerated() {
-            let row = UIView()
-            let label = UILabel()
-            label.text = item.0
-            label.font = .systemFont(ofSize: 15.5)
-            label.textColor = self.theme.list.itemPrimaryTextColor
-            label.translatesAutoresizingMaskIntoConstraints = false
-            item.1.onTintColor = self.theme.list.itemAccentColor
-            item.1.addTarget(self, action: item.2, for: .valueChanged)
-            item.1.translatesAutoresizingMaskIntoConstraints = false
-            row.addSubview(label)
-            row.addSubview(item.1)
-            NSLayoutConstraint.activate([
-                label.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 14.0),
-                label.centerYAnchor.constraint(equalTo: row.centerYAnchor),
-                label.trailingAnchor.constraint(lessThanOrEqualTo: item.1.leadingAnchor, constant: -10.0),
-                item.1.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -14.0),
-                item.1.topAnchor.constraint(equalTo: row.topAnchor, constant: 10.0),
-                item.1.bottomAnchor.constraint(equalTo: row.bottomAnchor, constant: -10.0)
-            ])
-            list.addArrangedSubview(row)
-            if idx + 1 < rows.count {
-                let sep = UIView()
-                sep.backgroundColor = self.theme.list.itemPlainSeparatorColor
-                sep.heightAnchor.constraint(equalToConstant: 1.0 / UIScreen.main.scale).isActive = true
-                list.addArrangedSubview(sep)
+            switch block {
+            case let .heading(text):
+                sectionIndex += 1
+                itemIndex = 1
+                entries.append(.header(sectionIndex * 100, text.uppercased()))
+            case let .placeholder(text):
+                entries.append(.text(sectionIndex * 100 + itemIndex, text))
+                itemIndex += 1
+            case let .important(title, text):
+                entries.append(.text(sectionIndex * 100 + itemIndex, "⚠️ \(title)\n\n\(text)"))
+                itemIndex += 1
+            case let .example(title, text):
+                entries.append(.text(sectionIndex * 100 + itemIndex, "\(title)\n\(text)"))
+                itemIndex += 1
+            case let .step(number, title, text):
+                entries.append(.text(sectionIndex * 100 + itemIndex, "\(number). \(title)\n\(text)"))
+                itemIndex += 1
             }
         }
-        return card
+
+        let data = ItemListPresentationData(presentationData)
+        let state = ItemListControllerState(
+            presentationData: data,
+            title: .text(FullGramGuideContent.screenTitle),
+            leftNavigationButton: nil,
+            rightNavigationButton: nil,
+            backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back)
+        )
+        let listState = ItemListNodeState(presentationData: data, entries: entries, style: .blocks)
+        return (state, (listState, ()))
     }
+    return ItemListController(context: context, state: signal)
+}
 
-    private func refresh() {
-        let antiScam = FullGramAntiScam.shared
-        self.antiOfferSwitch.isOn = antiScam.antiOfferEnabled
-        self.antiOtcSwitch.isOn = antiScam.antiOtcEnabled
-        self.mainSwitch.isOn = antiScam.isEnabled
-        self.linksSwitch.isOn = antiScam.checkLinks
-        self.shortenersSwitch.isOn = antiScam.warnShorteners
-        self.filesSwitch.isOn = antiScam.protectDangerFiles
-        self.statsLabel.text = "Предотвращено угроз локально: \(antiScam.blockedCount)."
-    }
+// MARK: - Главный раздел «Анти-скам» (нативный ItemListController)
 
-    @objc private func openGuideTapped() {
-        if let parent = self.parent as? FullGramAntiScamContainerController {
-            parent.pushGuide()
-        }
-    }
+private enum FullGramAntiScamToggle: Int32 {
+    case antiOffer = 1
+    case antiOtc = 2
+    case mainEnabled = 3
+    case checkLinks = 4
+    case warnShorteners = 5
+    case protectFiles = 6
+    case markScamMessages = 7
+}
 
-    @objc private func antiOfferToggled() { FullGramAntiScam.shared.antiOfferEnabled = self.antiOfferSwitch.isOn }
-    @objc private func antiOtcToggled() { FullGramAntiScam.shared.antiOtcEnabled = self.antiOtcSwitch.isOn }
-    @objc private func mainToggled() { FullGramAntiScam.shared.isEnabled = self.mainSwitch.isOn }
-    @objc private func linksToggled() { FullGramAntiScam.shared.checkLinks = self.linksSwitch.isOn }
-    @objc private func shortenersToggled() { FullGramAntiScam.shared.warnShorteners = self.shortenersSwitch.isOn }
-    @objc private func filesToggled() { FullGramAntiScam.shared.protectDangerFiles = self.filesSwitch.isOn }
+private final class FullGramAntiScamArguments {
+    let openGuide: () -> Void
+    let toggle: (FullGramAntiScamToggle, Bool) -> Void
+    let manualCheck: () -> Void
+    let clearWhitelist: () -> Void
 
-    @objc private func manualCheckTapped() {
-        let alert = UIAlertController(title: "Проверка на скам", message: "Вставьте ссылку, имя файла или текст оффера/сделки", preferredStyle: .alert)
-        alert.addTextField { tf in
-            tf.placeholder = "https://... или текст"
-            tf.autocapitalizationType = .none
-            tf.autocorrectionType = .no
-        }
-        alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Проверить", style: .default) { [weak self] _ in
-            guard let self else { return }
-            let input = alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !input.isEmpty else { return }
-            let offerVerdict = FullGramAntiScam.shared.inspectOffer(text: input, isForwarded: false, fromUnknownAuthor: false, viaBot: false, forceCheck: true)
-            let otcVerdict = FullGramAntiScam.shared.inspectOTC(text: input, forceCheck: true) ?? FullGramAntiScam.shared.inspectOTCUrl(input, forceCheck: true)
-            let urlVerdict = FullGramAntiScam.shared.inspectURL(input, forceCheck: true)
-            let msgVerdict = FullGramAntiScam.shared.inspectIncomingMessage(input, forceCheck: true)
-            let fileReason = FullGramAntiScam.shared.inspectFileName(input, forceCheck: true)
-
-            let title: String
-            let body: String
-            if let otcVerdict {
-                title = "⚠️ Анти-OTC"
-                body = otcVerdict
-            } else if let v = offerVerdict ?? urlVerdict ?? msgVerdict {
-                title = v.severity == .high ? "⛔️ Высокий риск" : "⚠️ Подозрительно"
-                body = v.summary + "\n\n" + v.reasons.map { "• " + $0 }.joined(separator: "\n")
-            } else if let f = fileReason {
-                title = "⚠️ Опасный файл"
-                body = f
-            } else {
-                title = "✅ Угроз не обнаружено"
-                body = "Локальный анализатор не выявил признаков фишинга или скама."
-            }
-            let resultAlert = UIAlertController(title: title, message: body, preferredStyle: .alert)
-            resultAlert.addAction(UIAlertAction(title: "OK", style: .default))
-            self.present(resultAlert, animated: true)
-        })
-        self.present(alert, animated: true)
+    init(
+        openGuide: @escaping () -> Void,
+        toggle: @escaping (FullGramAntiScamToggle, Bool) -> Void,
+        manualCheck: @escaping () -> Void,
+        clearWhitelist: @escaping () -> Void
+    ) {
+        self.openGuide = openGuide
+        self.toggle = toggle
+        self.manualCheck = manualCheck
+        self.clearWhitelist = clearWhitelist
     }
 }
 
-private final class FullGramAntiScamContainerController: FullGramHostedViewController<FullGramAntiScamUIViewController> {
-    init(context: AccountContext) {
-        super.init(context: context, title: "Анти-скам") { theme in
-            FullGramAntiScamUIViewController(context: context, theme: theme)
+private enum FullGramAntiScamEntry: ItemListNodeEntry {
+    case guideHeader(String)
+    case guideLink(String, String)
+    case guideInfo(String)
+    case coreHeader(String)
+    case antiOfferToggle(Bool)
+    case antiOfferInfo(String)
+    case antiOtcToggle(Bool)
+    case antiOtcInfo(String)
+    case extraHeader(String)
+    case extraToggle(FullGramAntiScamToggle, String, Bool)
+    case toolsHeader(String)
+    case manualCheck(String)
+    case clearWhitelist(String)
+    case stats(String)
+
+    var section: ItemListSectionId {
+        switch self {
+        case .guideHeader, .guideLink, .guideInfo: return 0
+        case .coreHeader, .antiOfferToggle, .antiOfferInfo, .antiOtcToggle, .antiOtcInfo: return 1
+        case .extraHeader, .extraToggle: return 2
+        case .toolsHeader, .manualCheck, .clearWhitelist, .stats: return 3
         }
     }
 
-    required init(coder aDecoder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
+    var stableId: Int32 {
+        switch self {
+        case .guideHeader: return 0
+        case .guideLink: return 1
+        case .guideInfo: return 2
+        case .coreHeader: return 10
+        case .antiOfferToggle: return 11
+        case .antiOfferInfo: return 12
+        case .antiOtcToggle: return 13
+        case .antiOtcInfo: return 14
+        case .extraHeader: return 20
+        case let .extraToggle(opt, _, _): return 20 + opt.rawValue
+        case .toolsHeader: return 40
+        case .manualCheck: return 41
+        case .clearWhitelist: return 42
+        case .stats: return 43
+        }
     }
 
-    func pushGuide() {
-        self.push(FullGramAntiScamGuideContainerController(context: self.accountContext))
+    static func < (lhs: FullGramAntiScamEntry, rhs: FullGramAntiScamEntry) -> Bool {
+        return lhs.stableId < rhs.stableId
+    }
+
+    func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
+        let args = arguments as! FullGramAntiScamArguments
+        switch self {
+        case let .guideHeader(text), let .coreHeader(text), let .extraHeader(text), let .toolsHeader(text):
+            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+        case let .guideLink(title, label):
+            let icon = UIImage(systemName: "book.closed.fill")?.withTintColor(UIColor(rgb: 0x007AFF), renderingMode: .alwaysOriginal)
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openGuide)
+        case let .guideInfo(text), let .antiOfferInfo(text), let .antiOtcInfo(text), let .stats(text):
+            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
+        case let .antiOfferToggle(value):
+            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Анти-офер", value: value, sectionId: self.section, style: .blocks, updated: { args.toggle(.antiOffer, $0) })
+        case let .antiOtcToggle(value):
+            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Анти-OTC", value: value, sectionId: self.section, style: .blocks, updated: { args.toggle(.antiOtc, $0) })
+        case let .extraToggle(opt, title, value):
+            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, sectionId: self.section, style: .blocks, updated: { args.toggle(opt, $0) })
+        case let .manualCheck(title):
+            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.manualCheck)
+        case let .clearWhitelist(title):
+            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .destructive, alignment: .natural, sectionId: self.section, style: .blocks, action: args.clearWhitelist)
+        }
     }
 }
 
 func fullGramAntiScamController(context: AccountContext) -> ViewController {
-    return FullGramAntiScamContainerController(context: context)
+    var pushImpl: ((ViewController) -> Void)?
+    var presentNativeImpl: ((UIViewController) -> Void)?
+
+    let changed = ValuePromise<Int>(0, ignoreRepeated: false)
+    var version = 0
+    let observer = NotificationCenter.default.addObserver(forName: FullGramAntiScam.didChangeNotification, object: nil, queue: .main) { _ in
+        version += 1
+        changed.set(version)
+    }
+
+    let args = FullGramAntiScamArguments(
+        openGuide: {
+            pushImpl?(fullGramAntiScamGuideController(context: context))
+        },
+        toggle: { opt, value in
+            switch opt {
+            case .antiOffer: FullGramAntiScam.shared.antiOfferEnabled = value
+            case .antiOtc: FullGramAntiScam.shared.antiOtcEnabled = value
+            case .mainEnabled: FullGramAntiScam.shared.isEnabled = value
+            case .checkLinks: FullGramAntiScam.shared.checkLinks = value
+            case .warnShorteners: FullGramAntiScam.shared.warnShorteners = value
+            case .protectFiles: FullGramAntiScam.shared.protectDangerFiles = value
+            case .markScamMessages: FullGramAntiScam.shared.markScamMessages = value
+            }
+        },
+        manualCheck: {
+            let alert = UIAlertController(title: "Проверка на скам", message: "Вставьте ссылку, имя файла или текст оффера/сделки", preferredStyle: .alert)
+            alert.addTextField { tf in
+                tf.placeholder = "https://... или текст"
+                tf.autocapitalizationType = .none
+                tf.autocorrectionType = .no
+            }
+            alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            alert.addAction(UIAlertAction(title: "Проверить", style: .default) { _ in
+                let input = alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard !input.isEmpty else { return }
+                let offerVerdict = FullGramAntiScam.shared.inspectOffer(text: input, isForwarded: false, fromUnknownAuthor: false, viaBot: false, forceCheck: true)
+                let otcVerdict = FullGramAntiScam.shared.inspectOTC(text: input, forceCheck: true) ?? FullGramAntiScam.shared.inspectOTCUrl(input, forceCheck: true)
+                let urlVerdict = FullGramAntiScam.shared.inspectURL(input, forceCheck: true)
+                let msgVerdict = FullGramAntiScam.shared.inspectIncomingMessage(input, forceCheck: true)
+                let fileReason = FullGramAntiScam.shared.inspectFileName(input, forceCheck: true)
+
+                let title: String
+                let body: String
+                if let otcVerdict {
+                    title = "⚠️ Анти-OTC"
+                    body = otcVerdict
+                } else if let v = offerVerdict ?? urlVerdict ?? msgVerdict {
+                    title = v.severity == .high ? "⛔️ Высокий риск" : "⚠️ Подозрительно"
+                    body = v.summary + "\n\n" + v.reasons.map { "• " + $0 }.joined(separator: "\n")
+                } else if let f = fileReason {
+                    title = "⚠️ Опасный файл"
+                    body = f
+                } else {
+                    title = "✅ Угроз не обнаружено"
+                    body = "Локальный анализатор не выявил признаков фишинга или скама."
+                }
+                let resultAlert = UIAlertController(title: title, message: body, preferredStyle: .alert)
+                resultAlert.addAction(UIAlertAction(title: "OK", style: .default))
+                presentNativeImpl?(resultAlert)
+            })
+            presentNativeImpl?(alert)
+        },
+        clearWhitelist: {
+            FullGramAntiScam.shared.clearWhitelist()
+            let done = UIAlertController(title: "Белый список очищен", message: "Все доверенные домены сброшены.", preferredStyle: .alert)
+            done.addAction(UIAlertAction(title: "OK", style: .default))
+            presentNativeImpl?(done)
+        }
+    )
+
+    let signal = combineLatest(context.sharedContext.presentationData, changed.get())
+    |> deliverOnMainQueue
+    |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
+        let antiScam = FullGramAntiScam.shared
+        var entries: [FullGramAntiScamEntry] = [
+            .guideHeader("МАНУАЛ И ГАЙД"),
+            .guideLink("Не попадись: антискам-мануал", "Открыть"),
+            .guideInfo("Разбор актуальных схем (фейк-офферы, бизнес-боты, подставные гаранты OTC, фишинг) и чек-лист защиты."),
+
+            .coreHeader("МОДУЛИ АНТИ-СКАМА"),
+            .antiOfferToggle(antiScam.antiOfferEnabled),
+            .antiOfferInfo("Анти-офер: проверяет офферы со ссылками, пересланные сообщения от неизвестных и через ботов."),
+            .antiOtcToggle(antiScam.antiOtcEnabled),
+            .antiOtcInfo("Анти-OTC: при OTC-сделке и подозрительных гарантах выводит предупреждение о риске скама."),
+
+            .extraHeader("ДОПОЛНИТЕЛЬНАЯ ЗАЩИТА"),
+            .extraToggle(.mainEnabled, "Общая защита Анти-скам", antiScam.isEnabled),
+            .extraToggle(.checkLinks, "Проверка фишинговых ссылок", antiScam.checkLinks),
+            .extraToggle(.warnShorteners, "Предупреждать о сокращателях URL", antiScam.warnShorteners),
+            .extraToggle(.protectFiles, "Защита от опасных файлов", antiScam.protectDangerFiles),
+            .extraToggle(.markScamMessages, "Помечать скам-сообщения в чатах", antiScam.markScamMessages),
+
+            .toolsHeader("ПРОВЕРКА И СТАТИСТИКА"),
+            .manualCheck("Проверить ссылку, файл или текст")
+        ]
+
+        let whitelistCount = antiScam.whitelistDomains.count
+        if whitelistCount > 0 {
+            entries.append(.clearWhitelist("Очистить белый список доменов (\(whitelistCount))"))
+        }
+        entries.append(.stats("Предотвращено угроз локально: \(antiScam.blockedCount)."))
+
+        let data = ItemListPresentationData(presentationData)
+        let state = ItemListControllerState(
+            presentationData: data,
+            title: .text("Анти-скам"),
+            leftNavigationButton: nil,
+            rightNavigationButton: nil,
+            backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back)
+        )
+        let listState = ItemListNodeState(presentationData: data, entries: entries, style: .blocks, animateChanges: false)
+        return (state, (listState, args))
+    }
+    |> afterDisposed {
+        NotificationCenter.default.removeObserver(observer)
+    }
+
+    let controller = ItemListController(context: context, state: signal)
+    pushImpl = { [weak controller] c in controller?.push(c) }
+    presentNativeImpl = { [weak controller] vc in controller?.present(vc, animated: true) }
+    return controller
 }

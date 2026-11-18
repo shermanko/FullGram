@@ -945,7 +945,7 @@ public final class ChatTitleView: UIView, NavigationBarTitleView {
             if let customEmojiId = badge.customEmojiId {
                 titleCredibilityContent = .animation(content: .customEmoji(fileId: customEmojiId), size: CGSize(width: 32.0, height: 32.0), placeholderColor: self.theme.list.mediaPlaceholderColor, themeColor: self.theme.list.itemAccentColor, loopMode: .count(2))
             } else {
-                titleCredibilityContent = .text(color: badge.uiColor, string: badge.chipText)
+                titleCredibilityContent = .fullGramBadge(color: badge.uiColor, string: badge.chipText)
             }
         }
         
@@ -967,7 +967,7 @@ public final class ChatTitleView: UIView, NavigationBarTitleView {
             if let customEmojiId = badge.customEmojiId {
                 titleVerifiedContent = .animation(content: .customEmoji(fileId: customEmojiId), size: CGSize(width: 32.0, height: 32.0), placeholderColor: self.theme.list.mediaPlaceholderColor, themeColor: self.theme.list.itemAccentColor, loopMode: .count(2))
             } else {
-                titleVerifiedContent = .text(color: badge.uiColor, string: badge.chipText)
+                titleVerifiedContent = .fullGramBadge(color: badge.uiColor, string: badge.chipText)
             }
         }
         

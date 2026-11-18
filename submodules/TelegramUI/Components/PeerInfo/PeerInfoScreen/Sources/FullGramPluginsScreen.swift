@@ -405,7 +405,18 @@ private final class FullGramPluginEditorViewController: UIViewController {
         testBar.axis = .horizontal
         testBar.spacing = 8.0
         self.testInputField.placeholder = "Ввод (напр. .shrug тест или .calc 6*7)"
-        self.testInputField.text = ".shrug тест"
+        switch self.descriptor.id {
+        case "fg_chat_info":
+            self.testInputField.text = ".plug info-chat"
+        case "fg_inline_calc":
+            self.testInputField.text = ".calc 6*7"
+        case "fg_python_formatter":
+            self.testInputField.text = ".upper fullgram"
+        case "fg_message_counter":
+            self.testInputField.text = ".stats"
+        default:
+            self.testInputField.text = ".shrug тест"
+        }
         self.testInputField.font = .systemFont(ofSize: 14.0)
         self.testInputField.textColor = self.theme.list.itemPrimaryTextColor
         self.testInputField.backgroundColor = self.theme.list.itemBlocksBackgroundColor
@@ -512,6 +523,10 @@ private final class FullGramPluginEditorViewController: UIViewController {
         self.saveTappedQuietly()
         guard let url = FullGramPluginManager.shared.exportFileURL(forPluginId: self.descriptor.id) else { return }
         let activity = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        if let pop = activity.popoverPresentationController {
+            pop.sourceView = self.view
+            pop.sourceRect = CGRect(x: self.view.bounds.midX, y: self.view.bounds.midY, width: 1.0, height: 1.0)
+        }
         self.present(activity, animated: true)
     }
 
@@ -540,7 +555,7 @@ private final class FullGramPluginEditorContainerController: FullGramHostedViewC
             FullGramPluginEditorViewController(theme: theme, descriptor: descriptor, isNew: isNew, onChanged: onChanged)
         }
         self.hosted.onClose = { [weak self] in
-            self?.navigationController?.popViewController(animated: true)
+            self?.dismiss()
         }
     }
 

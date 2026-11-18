@@ -1035,7 +1035,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
                     emojiRegularStatusContent = .animation(content: .customEmoji(fileId: customEmojiId), size: CGSize(width: 80.0, height: 80.0), placeholderColor: presentationData.theme.list.mediaPlaceholderColor, themeColor: navigationContentsAccentColor, loopMode: .forever)
                     emojiExpandedStatusContent = .animation(content: .customEmoji(fileId: customEmojiId), size: CGSize(width: 80.0, height: 80.0), placeholderColor: navigationContentsAccentColor, themeColor: navigationContentsAccentColor, loopMode: .forever)
                 } else {
-                    emojiRegularStatusContent = .text(color: badge.uiColor, string: badge.chipText)
+                    emojiRegularStatusContent = .fullGramBadge(color: badge.uiColor, string: badge.chipText)
                     emojiExpandedStatusContent = emojiRegularStatusContent
                 }
             }
@@ -1310,7 +1310,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
                 title = "" //"\u{00A0}"
             }
             if title.isEmpty {
-                if case let .user(user) = peer, let phone = user.phone {
+                if case let .user(user) = peer, let phone = user.phone, !(user.id == self.context.account.peerId && FullGramExtras.shared.hidePhoneNumber) {
                     title = formatPhoneNumber(context: self.context, number: phone)
                 } else if let addressName = peer.addressName {
                     title = "@\(addressName)"

@@ -3963,6 +3963,17 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                             NotificationCenter.default.post(name: FullGramAINotifications.openWindow, object: nil, userInfo: info)
                             return
                         }
+                        if action == .plugins {
+                            var info: [AnyHashable: Any] = ["showPicker": true]
+                            if let pid = self.chatLocation.peerId?.toInt64() {
+                                info["peerId"] = pid
+                            }
+                            if let peer = self.chatPresentationInterfaceState.renderedPeer?.peer {
+                                info["title"] = EnginePeer(peer).compactDisplayTitle
+                            }
+                            NotificationCenter.default.post(name: FullGramPluginNotifications.runCommandInChatRequested, object: nil, userInfo: info)
+                            return
+                        }
                         if action == .clear {
                             if panel.performNativeFormatShortcut(.clearFormatting) { return }
                             if panel.performLegacyFormatShortcut({ chatTextInputClearFormattingAttributes($0) }) { return }
@@ -3990,7 +4001,7 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                         case .spoiler:
                             nativeRan = panel.performNativeFormatShortcut(.spoiler)
                             attr = ChatTextInputAttributes.spoiler
-                        case .ai, .clear:
+                        case .ai, .plugins, .clear:
                             return
                         }
                         if nativeRan { return }

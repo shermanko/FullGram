@@ -984,6 +984,94 @@ final class FullGramAIOverlayCoordinator {
                 win.layoutInHost(bounds: host.bounds, safeInsets: host.safeAreaInsets)
             }
         })
+
+        self.observers.append(nc.addObserver(forName: FullGramPluginNotifications.runCommandInChatRequested, object: nil, queue: .main) { [weak self] note in
+            guard let self else { return }
+            let peerRaw = note.userInfo?["peerId"] as? Int64
+            let targetPeerId = peerRaw.map { PeerId($0) } ?? self.activeChatController()?.chatLocation.peerId
+            let chatTitle = (note.userInfo?["title"] as? String) ?? "Чат"
+            let showPicker = (note.userInfo?["showPicker"] as? Bool) ?? false
+            let command = note.userInfo?["command"] as? String
+            if showPicker {
+                self.presentPluginActionsPicker(peerId: targetPeerId, chatTitle: chatTitle)
+            } else if let command, !command.isEmpty {
+                self.executePluginCommand(command, peerId: targetPeerId, chatTitle: chatTitle)
+            }
+        })
+    }
+
+    private func presentPluginActionsPicker(peerId: PeerId?, chatTitle: String) {
+        guard let root = self.rootController else { return }
+        let sheet = UIAlertController(title: "Плагины и ИИ FullGram", message: chatTitle, preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "✨ Сводка чата (ИИ)", style: .default) { [weak self] _ in
+            self?.openWindow(
+                initialPrompt: "Сделай подробную краткую сводку этого чата по последним сообщениям",
+                explicitPeerId: peerId,
+                autoSend: true
+            )
+        })
+        if FullGramPluginManager.shared.isSystemEnabled {
+            let commands = FullGramPluginManager.shared.availableCommands()
+            for item in commands {
+                let title = ".\(item.command) — \(item.pluginName)"
+                sheet.addAction(UIAlertAction(title: title, style: .default) { [weak self] _ in
+                    self?.executePluginCommand(".\(item.command)", peerId: peerId, chatTitle: chatTitle)
+                })
+            }
+        }
+        sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+        if let pop = sheet.popoverPresentationController {
+            pop.sourceView = root.view
+            pop.sourceRect = CGRect(x: root.view.bounds.midX, y: root.view.bounds.midY, width: 1.0, height: 1.0)
+        }
+        root.present(sheet, animated: true)
+    }
+
+    private func executePluginCommand(_ rawCommand: String, peerId: PeerId?, chatTitle: String) {
+        let trimmed = rawCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let commandText = trimmed.hasPrefix(".") ? trimmed : ".\(trimmed)"
+        let lower = commandText.lowercased()
+        let needsStats = lower.hasPrefix(".plug") || lower.hasPrefix(".info-chat")
+
+        let statsSignal: Signal<[String: FullGramPluginValue]?, NoError>
+        if needsStats, let peerId {
+            statsSignal = fullGramBuildChatStatsSignal(context: self.context, peerId: peerId, chatTitle: chatTitle)
+        } else {
+            statsSignal = .single(nil)
+        }
+
+        let targetPeerRaw = peerId?.toInt64() ?? 0
+        let _ = (statsSignal
+        |> deliverOnMainQueue).startStandalone(next: { [weak self] chatStats in
+            Queue.concurrentDefaultQueue().async {
+                let decision = FullGramPluginManager.shared.processOutgoingMessage(
+                    text: commandText,
+                    peerId: targetPeerRaw,
+                    isGroup: false,
+                    isChannel: peerId?.namespace == Namespaces.Peer.CloudChannel,
+                    chatStats: chatStats
+                )
+                DispatchQueue.main.async {
+                    guard let self, let root = self.rootController else { return }
+                    let resultText: String
+                    switch decision {
+                    case let .replaceText(text):
+                        resultText = text
+                    case let .cancel(toast):
+                        resultText = toast ?? "Команда выполнена."
+                    case .pass:
+                        resultText = "Плагин не вернул результат (возможно, команда требует аргументов, например: \(commandText) текст)."
+                    }
+                    let alert = UIAlertController(title: commandText, message: resultText, preferredStyle: .alert)
+                    alert.addAction(UIAlertAction(title: "Скопировать", style: .default) { _ in
+                        UIPasteboard.general.string = resultText
+                    })
+                    alert.addAction(UIAlertAction(title: "OK", style: .cancel))
+                    root.present(alert, animated: true)
+                }
+            }
+        })
     }
 
     private func hostContainerView() -> UIView? {

@@ -2049,22 +2049,77 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         }))
     }
 
-    private var fullGramSwitcherBlurView: UIView?
+    private final class FullGramSwitcherCoveringView: WindowCoveringView {
+        private let stack = UIStackView()
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            self.backgroundColor = UIColor(rgb: 0x26272B)
+
+            let iconView = UIImageView(image: UIImage(named: "FullGramIcon_FullGramDefault") ?? UIImage(named: "FullGramMascotPortrait") ?? UIImage(named: "AppIcon"))
+            iconView.contentMode = .scaleAspectFill
+            iconView.layer.cornerRadius = 20.0
+            iconView.clipsToBounds = true
+            iconView.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                iconView.widthAnchor.constraint(equalToConstant: 84.0),
+                iconView.heightAnchor.constraint(equalToConstant: 84.0)
+            ])
+
+            let titleLabel = UILabel()
+            titleLabel.text = "FullGram"
+            titleLabel.font = UIFont.systemFont(ofSize: 22.0, weight: .semibold)
+            titleLabel.textColor = .white
+            titleLabel.textAlignment = .center
+
+            self.stack.axis = .vertical
+            self.stack.alignment = .center
+            self.stack.spacing = 14.0
+            self.stack.addArrangedSubview(iconView)
+            self.stack.addArrangedSubview(titleLabel)
+            self.stack.translatesAutoresizingMaskIntoConstraints = false
+            self.addSubview(self.stack)
+
+            NSLayoutConstraint.activate([
+                self.stack.centerXAnchor.constraint(equalTo: self.centerXAnchor),
+                self.stack.centerYAnchor.constraint(equalTo: self.centerYAnchor)
+            ])
+        }
+
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override func updateLayout(_ size: CGSize) {
+            self.frame = CGRect(origin: .zero, size: size)
+        }
+    }
+
+    private var fullGramSwitcherBlurView: FullGramSwitcherCoveringView?
 
     private func fullGramUpdateSwitcherBlur(active: Bool) {
-        if active, FullGramExtras.shared.blurInAppSwitcher, self.fullGramSwitcherBlurView == nil, let window = self.window {
-            let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterial))
-            blur.frame = window.bounds
-            blur.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            window.addSubview(blur)
-            self.fullGramSwitcherBlurView = blur
-        } else if !active, let blur = self.fullGramSwitcherBlurView {
+        if active, FullGramExtras.shared.blurInAppSwitcher, self.fullGramSwitcherBlurView == nil {
+            let bounds = self.window?.bounds ?? UIScreen.main.bounds
+            let cover = FullGramSwitcherCoveringView(frame: bounds)
+            cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            if let mainWindow = self.mainWindow, mainWindow.coveringView == nil {
+                mainWindow.coveringView = cover
+            } else if let window = self.window {
+                window.addSubview(cover)
+                window.bringSubviewToFront(cover)
+            }
+            self.fullGramSwitcherBlurView = cover
+        } else if !active, let cover = self.fullGramSwitcherBlurView {
             self.fullGramSwitcherBlurView = nil
-            UIView.animate(withDuration: 0.2, animations: {
-                blur.alpha = 0.0
-            }, completion: { _ in
-                blur.removeFromSuperview()
-            })
+            if let mainWindow = self.mainWindow, mainWindow.coveringView === cover {
+                mainWindow.coveringView = nil
+            } else {
+                UIView.animate(withDuration: 0.2, animations: {
+                    cover.alpha = 0.0
+                }, completion: { _ in
+                    cover.removeFromSuperview()
+                })
+            }
         }
     }
 

@@ -1318,7 +1318,7 @@ public final class ChatTitleComponent: Component {
                     if let customEmojiId = badge.customEmojiId {
                         return .animation(content: .customEmoji(fileId: customEmojiId), size: CGSize(width: 32.0, height: 32.0), placeholderColor: component.theme.list.mediaPlaceholderColor, themeColor: component.theme.list.itemAccentColor, loopMode: .count(2))
                     }
-                    return .text(color: badge.uiColor, string: badge.chipText)
+                    return .fullGramBadge(color: badge.uiColor, string: badge.chipText)
                 }
             }
             

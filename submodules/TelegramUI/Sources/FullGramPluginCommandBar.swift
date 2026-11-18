@@ -98,7 +98,8 @@ final class FullGramPluginCommandBarView: UIView {
 
 enum FullGramFormattingAction: Int, CaseIterable {
     case ai = 0
-    case bold = 1
+    case plugins = 1
+    case bold = 2
     case italic
     case underline
     case strikethrough
@@ -109,6 +110,7 @@ enum FullGramFormattingAction: Int, CaseIterable {
     var shortTitle: String {
         switch self {
         case .ai: return "✨ ИИ"
+        case .plugins: return "⚡ Плагины"
         case .bold: return "Ж"
         case .italic: return "К"
         case .underline: return "Ч"
@@ -122,6 +124,7 @@ enum FullGramFormattingAction: Int, CaseIterable {
     var accessibilityName: String {
         switch self {
         case .ai: return "Спросить ИИ-ассистента"
+        case .plugins: return "Плагины и сводка чата"
         case .bold: return "Жирный"
         case .italic: return "Курсив"
         case .underline: return "Подчёркнутый"
@@ -194,7 +197,7 @@ final class FullGramFormattingBarView: UIView {
             var cfg = UIButton.Configuration.filled()
             var attrTitle = AttributedString(action.shortTitle)
             switch action {
-            case .ai:
+            case .ai, .plugins:
                 attrTitle.font = .systemFont(ofSize: 12.5, weight: .semibold)
             case .bold:
                 attrTitle.font = .systemFont(ofSize: 13.0, weight: .bold)

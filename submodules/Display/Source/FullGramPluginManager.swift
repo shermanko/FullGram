@@ -4,6 +4,7 @@ import UIKit
 public enum FullGramPluginNotifications {
     public static let pluginsDidChange = Notification.Name("FullGram.PluginsDidChange")
     public static let toastRequested = Notification.Name("FullGram.PluginToastRequested")
+    public static let runCommandInChatRequested = Notification.Name("FullGram.PluginRunCommandInChatRequested")
 }
 
 public struct FullGramRemotePluginItem: Codable, Equatable {

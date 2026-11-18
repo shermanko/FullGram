@@ -15,6 +15,7 @@ import PeerNameColorItem
 import WalletContext
 
 enum SettingsSection: Int, CaseIterable {
+    case fullgram
     case edit
     case phone
     case accounts
@@ -29,6 +30,22 @@ enum SettingsSection: Int, CaseIterable {
     case support
 }
 
+private func fullGramSettingsMenuIcon() -> UIImage? {
+    let size = CGSize(width: 29.0, height: 29.0)
+    let renderer = UIGraphicsImageRenderer(size: size)
+    return renderer.image { _ in
+        let rect = CGRect(origin: .zero, size: size)
+        let path = UIBezierPath(roundedRect: rect, cornerRadius: 7.0)
+        path.addClip()
+        if let raw = UIImage(named: "FullGramIcon_FullGramDefault") ?? UIImage(named: "FullGramMascotPortrait") ?? UIImage(named: "AppIcon") {
+            raw.draw(in: rect)
+        } else {
+            UIColor(rgb: 0x007AFF).setFill()
+            path.fill()
+        }
+    }
+}
+
 func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentationData: PresentationData, interaction: PeerInfoInteraction, isExpanded: Bool) -> [(AnyHashable, [PeerInfoScreenItem])] {
     guard let data = data else {
         return []
@@ -39,6 +56,10 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
         items[section] = []
     }
     
+    items[.fullgram]!.append(PeerInfoScreenDisclosureItem(id: 0, text: "FullGram", icon: fullGramSettingsMenuIcon(), action: {
+        interaction.openSettings(.fullgram)
+    }))
+
     let setPhotoTitle: String
     if let peer = data.peer, !peer.profileImageRepresentations.isEmpty {
         setPhotoTitle = presentationData.strings.Settings_ChangeProfilePhoto
@@ -87,7 +108,7 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
             items[.phone]!.append(PeerInfoScreenActionItem(id: 1, text: "Restore Subscription", action: {
                 interaction.openSettings(.premiumManagement)
             }))
-        } else if settings.suggestPhoneNumberConfirmation, case let .user(peer) = data.peer {
+        } else if settings.suggestPhoneNumberConfirmation, case let .user(peer) = data.peer, !FullGramExtras.shared.hidePhoneNumber {
             let phoneNumber = formatPhoneNumber(context: context, number: peer.phone ?? "")
             items[.phone]!.append(PeerInfoScreenInfoItem(id: 0, title: presentationData.strings.Settings_CheckPhoneNumberTitle(phoneNumber).string, text: .markdown(presentationData.strings.Settings_CheckPhoneNumberText), linkAction: { link in
                 if case .tap = link {
@@ -356,9 +377,6 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
     items[.support]!.append(PeerInfoScreenDisclosureItem(id: 2, text: presentationData.strings.Settings_Tips, icon: PresentationResourcesSettings.tips, action: {
         interaction.openSettings(.tips)
     }))
-    items[.support]!.append(PeerInfoScreenDisclosureItem(id: 3, text: "FullGram", icon: PresentationResourcesSettings.support, action: {
-        interaction.openSettings(.fullgram)
-    }))
     
     var result: [(AnyHashable, [PeerInfoScreenItem])] = []
     for section in SettingsSection.allCases {
@@ -479,7 +497,11 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
     }
     
     if case let .user(user) = data.peer {
-        items[.info]!.append(PeerInfoScreenDisclosureItem(id: ItemPhoneNumber, label: .text(user.phone.flatMap({ formatPhoneNumber(context: context, number: $0) }) ?? ""), text: presentationData.strings.Settings_PhoneNumber, icon: PresentationResourcesSettings.recentCalls, action: {
+        let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+        let phoneLabel = FullGramExtras.shared.hidePhoneNumber
+            ? (ru ? "Скрыт" : "Hidden")
+            : (user.phone.flatMap({ formatPhoneNumber(context: context, number: $0) }) ?? "")
+        items[.info]!.append(PeerInfoScreenDisclosureItem(id: ItemPhoneNumber, label: .text(phoneLabel), text: presentationData.strings.Settings_PhoneNumber, icon: PresentationResourcesSettings.recentCalls, action: {
             interaction.openSettings(.phoneNumber)
         }))
     }

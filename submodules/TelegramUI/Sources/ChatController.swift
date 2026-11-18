@@ -6494,7 +6494,48 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
                         return items
                     }
                 default:
-                    items = .single([])
+                    if case let .peer(peerId) = strongSelf.chatLocation {
+                        let targetPeerId = peerId.toInt64()
+                        let chatTitle = strongSelf.presentationInterfaceState.renderedPeer?.peer.map { EnginePeer($0).compactDisplayTitle } ?? "Чат"
+                        var fgItems: [ContextMenuItem] = []
+                        fgItems.append(.action(ContextMenuActionItem(text: strongSelf.presentationData.strings.Conversation_Search, icon: { theme in
+                            return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Search"), color: theme.actionSheet.primaryTextColor)
+                        }, action: { _, f in
+                            f(.dismissWithoutContent)
+                            self?.interfaceInteraction?.beginMessageSearch(.everything, "")
+                        })))
+                        fgItems.append(.action(ContextMenuActionItem(text: "Сводка чата (ИИ)", icon: { theme in
+                            UIImage(systemName: "sparkles")?.withTintColor(theme.contextMenu.primaryColor, renderingMode: .alwaysOriginal)
+                        }, action: { _, f in
+                            f(.dismissWithoutContent)
+                            NotificationCenter.default.post(
+                                name: FullGramAINotifications.openWindow,
+                                object: nil,
+                                userInfo: [
+                                    "peerId": targetPeerId,
+                                    "prompt": "Сделай подробную краткую сводку этого чата по последним сообщениям",
+                                    "autoSend": true
+                                ]
+                            )
+                        })))
+                        fgItems.append(.action(ContextMenuActionItem(text: "Плагины FullGram", icon: { theme in
+                            UIImage(systemName: "puzzlepiece.extension.fill")?.withTintColor(theme.contextMenu.primaryColor, renderingMode: .alwaysOriginal)
+                        }, action: { _, f in
+                            f(.dismissWithoutContent)
+                            NotificationCenter.default.post(
+                                name: FullGramPluginNotifications.runCommandInChatRequested,
+                                object: nil,
+                                userInfo: [
+                                    "peerId": targetPeerId,
+                                    "title": chatTitle,
+                                    "showPicker": true
+                                ]
+                            )
+                        })))
+                        items = .single(fgItems)
+                    } else {
+                        items = .single([])
+                    }
                 }
                 
                 strongSelf.chatDisplayNode.messageTransitionNode.dismissMessageReactionContexts()
@@ -7985,6 +8026,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
 
     override public func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        self.fullGramApplyChatLock()
         self.forwardSideListAppearance(.didAppear, animated: animated)
         
         self.didAppear = true
