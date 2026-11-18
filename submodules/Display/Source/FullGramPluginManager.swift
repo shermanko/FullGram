@@ -85,6 +85,7 @@ public final class FullGramPluginManager {
     }()
     private static let commandHintRegex = try? NSRegularExpression(pattern: #"(?:command|cmd)\s*==\s*["']([a-zA-Z0-9_-]+)["']"#)
     private static let plugSubcommandRegex = try? NSRegularExpression(pattern: #"subcommand\s*==\s*["']([a-zA-Z0-9_-]+)["']"#)
+    private let vmLock = NSRecursiveLock()
 
     public var catalogURL: String {
         get {
@@ -632,6 +633,8 @@ public final class FullGramPluginManager {
         var dict = payload
         dict["action"] = .string(action)
         let ctx = FullGramPluginTableBox(dict: dict)
+        self.vmLock.lock()
+        defer { self.vmLock.unlock() }
         do {
             if let lua = holder.luaVM, lua.hasFunction("on_ui_event") {
                 return try lua.callFunction("on_ui_event", args: [.table(ctx)])
@@ -692,6 +695,9 @@ public final class FullGramPluginManager {
             }
             return commandArgs.lowercased()
         }()
+
+        self.vmLock.lock()
+        defer { self.vmLock.unlock() }
 
         for plugin in orderedPlugins {
             if let cmd = commandName, plugin.hasCommandHook {
