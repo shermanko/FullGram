@@ -529,29 +529,30 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
         self.theme = theme
         super.init(frame: .zero)
 
-        self.layer.cornerRadius = 18.0
-        self.layer.borderWidth = 0.5
+        self.layer.cornerRadius = 22.0
+        self.layer.borderWidth = 0.75
         self.layer.shadowColor = UIColor.black.cgColor
-        self.layer.shadowOpacity = 0.25
-        self.layer.shadowRadius = 16.0
-        self.layer.shadowOffset = CGSize(width: 0.0, height: 8.0)
+        self.layer.shadowOpacity = 0.28
+        self.layer.shadowRadius = 20.0
+        self.layer.shadowOffset = CGSize(width: 0.0, height: 10.0)
 
         self.headerView.clipsToBounds = true
-        self.headerView.layer.cornerRadius = 18.0
+        self.headerView.layer.cornerRadius = 22.0
         self.headerView.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
         self.addSubview(self.headerView)
 
         self.avatarView.image = UIImage(named: "FullGramMascotPortrait") ?? UIImage(named: "FullGramMascotPet")
         self.avatarView.contentMode = .scaleAspectFill
         self.avatarView.layer.cornerRadius = 15.0
+        self.avatarView.layer.borderWidth = 1.25
         self.avatarView.clipsToBounds = true
         self.headerView.addSubview(self.avatarView)
 
-        self.titleLabel.text = "ИИ Ассистент"
-        self.titleLabel.font = .systemFont(ofSize: 14.5, weight: .semibold)
+        self.titleLabel.text = "FullGram AI"
+        self.titleLabel.font = .systemFont(ofSize: 14.5, weight: .bold)
         self.headerView.addSubview(self.titleLabel)
 
-        self.subtitleLabel.font = .systemFont(ofSize: 11.0)
+        self.subtitleLabel.font = .systemFont(ofSize: 11.0, weight: .medium)
         self.headerView.addSubview(self.subtitleLabel)
 
         self.setupHeaderButton(self.petButton, systemName: "pawprint.fill", action: #selector(self.petTapped))
@@ -609,8 +610,10 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
     required init?(coder: NSCoder) { return nil }
 
     private func setupHeaderButton(_ btn: UIButton, systemName: String, action: Selector) {
-        let cfg = UIImage.SymbolConfiguration(pointSize: 13.0, weight: .semibold)
+        let cfg = UIImage.SymbolConfiguration(pointSize: 12.0, weight: .semibold)
         btn.setImage(UIImage(systemName: systemName, withConfiguration: cfg), for: .normal)
+        btn.layer.cornerRadius = 14.0
+        btn.clipsToBounds = true
         btn.addTarget(self, action: action, for: .touchUpInside)
         self.headerView.addSubview(btn)
     }
@@ -650,7 +653,8 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
 
         self.backgroundColor = bgColor
         self.headerView.backgroundColor = secondaryBg
-        self.layer.borderColor = theme.list.itemPlainSeparatorColor.cgColor
+        self.layer.borderColor = accent.withAlphaComponent(0.28).cgColor
+        self.avatarView.layer.borderColor = accent.withAlphaComponent(0.55).cgColor
 
         self.titleLabel.textColor = theme.list.itemPrimaryTextColor
         self.subtitleLabel.textColor = theme.list.itemSecondaryTextColor
@@ -658,12 +662,20 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
         self.footerSeparator.backgroundColor = theme.list.itemPlainSeparatorColor
         self.emptyHintLabel.textColor = theme.list.itemSecondaryTextColor
 
+        let pillBg = accent.withAlphaComponent(0.10)
+        self.resizeButton.backgroundColor = pillBg
+        self.minimizeButton.backgroundColor = pillBg
+        self.closeButton.backgroundColor = theme.list.itemSecondaryTextColor.withAlphaComponent(0.12)
+        self.petButton.backgroundColor = FullGramAIStore.shared.showFloatingPet ? accent.withAlphaComponent(0.18) : pillBg
+
         self.resizeButton.tintColor = theme.list.itemPrimaryTextColor
         self.minimizeButton.tintColor = theme.list.itemPrimaryTextColor
         self.closeButton.tintColor = theme.list.itemSecondaryTextColor
         self.petButton.tintColor = FullGramAIStore.shared.showFloatingPet ? accent : theme.list.itemSecondaryTextColor
 
         self.inputField.backgroundColor = secondaryBg
+        self.inputField.layer.borderWidth = 0.5
+        self.inputField.layer.borderColor = theme.list.itemPlainSeparatorColor.cgColor
         self.inputField.textColor = theme.list.itemPrimaryTextColor
         self.inputField.attributedPlaceholder = NSAttributedString(
             string: "Задать вопрос или команду…",

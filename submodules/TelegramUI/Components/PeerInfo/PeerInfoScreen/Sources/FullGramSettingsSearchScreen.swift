@@ -363,9 +363,9 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
         // Оформление
         FullGramSearchItem(
             id: 30,
-            title: "Шрифты",
+            title: "Шрифты (50+ шрифтов с GitHub)",
             subtitle: "Оформление",
-            keywords: "шрифт font minecraft jetbrains dream локальные",
+            keywords: "шрифт font minecraft jetbrains dream локальные github каталог roboto inter montserrat",
             destination: { fullGramFontsController(context: $0) }
         ),
         FullGramSearchItem(
@@ -384,10 +384,17 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
         ),
         FullGramSearchItem(
             id: 33,
-            title: "Дизайн (Старый дизайн, реакции)",
+            title: "Дизайн (Удаление стекла, реакции)",
             subtitle: "Оформление",
-            keywords: "старый дизайн telegram классический светящиеся реакции замедление анимаций",
+            keywords: "удаление стекла убрать стекло заливка цвет старый дизайн telegram классический светящиеся реакции замедление анимаций",
             destination: { fullGramDesignController(context: $0) }
+        ),
+        FullGramSearchItem(
+            id: 35,
+            title: "Удаление стекла (сплошная заливка)",
+            subtitle: "Оформление → Дизайн",
+            keywords: "стекло убрать удалить без стекла заливка цвет плоские панели",
+            toggle: ({ FullGramExtras.shared.removeGlass }, { FullGramExtras.shared.removeGlass = $0 })
         ),
         FullGramSearchItem(
             id: 34,

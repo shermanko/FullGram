@@ -589,6 +589,7 @@ public class GlassBackgroundView: UIView {
 
     public static var useCustomGlassImpl: Bool = false
     public static var flatMode: Bool = false
+    public static var flatFillColor: UIColor?
 
     /// The backdrop luminance native glass sees (`EffectSettingsContainerView`'s limits, applied to every luma UIKit
     /// reports by the `backdropLayer:didChangeLuma:` override in UIKitRuntimeUtils): the whole range on the theme's
@@ -856,14 +857,20 @@ public class GlassBackgroundView: UIView {
                     }
                 }
                 if GlassBackgroundView.flatMode {
+                    let defaultFlat = isDark ? UIColor(rgb: 0x1c1c1d) : UIColor(rgb: 0xf7f7f7)
+                    let customFlat = GlassBackgroundView.flatFillColor
                     let flatColor: UIColor
                     switch tintColor.kind {
                     case .panel, .untinted:
-                        flatColor = isDark ? UIColor(rgb: 0x1c1c1d) : UIColor(rgb: 0xf7f7f7)
+                        flatColor = customFlat ?? defaultFlat
                     case .clear:
-                        flatColor = UIColor(white: 0.0, alpha: isDark ? 0.45 : 0.25)
+                        flatColor = customFlat?.withAlphaComponent(isDark ? 0.82 : 0.78) ?? UIColor(white: 0.0, alpha: isDark ? 0.45 : 0.25)
                     case let .custom(_, color):
-                        flatColor = color.cgColor.alpha < 0.01 ? UIColor(white: 0.0, alpha: 0.25) : color.withAlphaComponent(1.0)
+                        if let customFlat {
+                            flatColor = color.cgColor.alpha < 0.01 ? customFlat.withAlphaComponent(0.75) : customFlat
+                        } else {
+                            flatColor = color.cgColor.alpha < 0.01 ? UIColor(white: 0.0, alpha: 0.25) : color.withAlphaComponent(1.0)
+                        }
                     }
                     let radii: CornerRadii
                     switch shape {

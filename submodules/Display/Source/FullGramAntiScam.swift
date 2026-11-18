@@ -355,13 +355,38 @@ public final class FullGramAntiScam {
         return matches.compactMap { $0.url?.absoluteString }
     }
 
-    // MARK: - Карточка 2: Анти-офер
+    // MARK: - Карточка 2: Анти-офер (контекстно-смысловой анализатор)
 
-    private static let offerKeywords: [String] = [
-        "оффер", "офер", "offer", "предложение", "предлагаю", "сделка", "купить", "куплю",
-        "продам", "продажа", "цена", "прайс", "обмен", "gift", "подарок", "fragment",
-        "nft", "stars", "звезд", "ton", "usdt", "канал", "юзернейм", "username"
+    private static let offerAssetKeywords: [String] = [
+        "nft", "нфт", "gift", "подарок", "подарк", "fragment", "фрагмент",
+        "stars", "звезд", "ton", "тон", "usdt", "канал", "юзернейм", "username",
+        "аккаунт", "акк", "скин", "токен", "крипт", "ваучер", "чек"
     ]
+
+    private static let offerSentenceRegexes: [NSRegularExpression] = [
+        "(?:предлагаю|сделаю|есть|готов\\s+(?:дать|сделать|купить|продать|обменять))\\s+(?:тебе\\s+|вам\\s+)?(?:выгодн\\w+\\s+)?(?:оф+ер|сделк|цену|обмен|выкуп)",
+        "(?:куплю|продам|скупаю|выкуплю|обменяю|отдам)\\s+(?:срочно\\s+)?(?:твой|ваш|любой|редк\\w+|нфт|nft|подар|канал|акк|звезд|ton|usdt)",
+        "(?:успей|торопись|только\\s+сегодня|ограниченн\\w+\\s+предложени|забери\\s+(?:свой\\s+)?(?:подарок|приз|бонус|выигрыш))",
+        "(?:без\\s+предоплат|по\\s+предоплат|скинь\\s+первым|кидай\\s+первым|оплата\\s+(?:на\\s+карту|после|впер[е]?д)|чек\\s+(?:скину|в\\s+лс))",
+        "(?:переходи\\s+(?:в\\s+)?бот|подтверди\\s+(?:сделку|в\\s+боте|кошелек)|подключи\\s+кошелек|авторизуй)",
+        "(?:доход|заработок|профит)\\s+(?:от\\s+)?\\d+",
+        "(?:пиши|обращайся|ответь)\\s+в\\s+(?:лс|личк|директ)",
+        "(?:good\\s+offer|special\\s+offer|limited\\s+offer|want\\s+to\\s+(?:buy|sell|trade)|claim\\s+your\\s+(?:gift|reward|bonus)|send\\s+first)"
+    ].compactMap { try? NSRegularExpression(pattern: $0) }
+
+    private static let offerPriceRegex = try? NSRegularExpression(
+        pattern: #"(?:\b\d[\d\s.,]{0,12}\s*(?:ton|usdt|stars?|зв[е]?зд\w*|руб\w*|₽|\$|€|rub|btc|eth|trx|sol)\b|(?:цена|прайс|бюджет|отдам\s+за|куплю\s+за|продам\s+за)\s*[:\-]?\s*\d)"#
+    )
+
+    private static let offerUrgencyOrPressureKeywords: [String] = [
+        "предоплат", "гарант", "escrow", "срочно", "только сейчас", "только сегодня",
+        "скинь первым", "кидай первым", "договор", "оформлю", "бронирую",
+        "выкуп", "выгодн", "гарантир", "удво", "airdrop", "аирдроп", "claim"
+    ]
+
+    private static let offerContactDiversionRegex = try? NSRegularExpression(
+        pattern: #"(?:@[a-z0-9_]{4,}|в\s+лс\b|в\s+личк|\bdm\s+me\b)"#
+    )
 
     public func inspectOffer(
         text: String,
@@ -374,37 +399,86 @@ public final class FullGramAntiScam {
             guard self.isEnabled && self.antiOfferEnabled else { return nil }
         }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard trimmed.count >= 6 else { return nil }
         let normalized = trimmed.lowercased().replacingOccurrences(of: "ё", with: "е")
+        let fullRange = NSRange(location: 0, length: (normalized as NSString).length)
 
-        let looksLikeOffer = Self.offerKeywords.contains { normalized.contains($0) }
         let detectedLinks = self.extractLinks(in: trimmed)
-
         let hasDangerousUrl = detectedLinks.contains { self.inspectURL($0, forceCheck: true) != nil }
-        guard looksLikeOffer || hasDangerousUrl else { return nil }
+        let hasExternalLink = detectedLinks.contains { link in
+            guard let host = URL(string: link)?.host?.lowercased() else { return true }
+            return !Self.officialTelegramDomains.contains(host) && !self.isWhitelisted(host: host)
+        }
 
+        let hasOfferSentence = Self.offerSentenceRegexes.contains { $0.firstMatch(in: normalized, range: fullRange) != nil }
+        let matchedAssets = Self.offerAssetKeywords.filter { normalized.contains($0) }.count
+        let hasAsset = matchedAssets > 0
+        let hasPrice = Self.offerPriceRegex?.firstMatch(in: normalized, range: fullRange) != nil
+        let hasPressure = Self.offerUrgencyOrPressureKeywords.contains { normalized.contains($0) }
+        let hasDiversion = Self.offerContactDiversionRegex?.firstMatch(in: normalized, range: fullRange) != nil
+        let mentionsOfferWord = normalized.contains("офер") || normalized.contains("оффер") || normalized.contains("offer") || normalized.contains("сделк")
+
+        var score = 0
         var reasons: [String] = []
-        if hasDangerousUrl || (!detectedLinks.isEmpty && looksLikeOffer) {
-            let hasSuspiciousHost = detectedLinks.contains { link in
-                guard let host = URL(string: link)?.host?.lowercased() else { return true }
-                return !Self.officialTelegramDomains.contains(host) && !self.isWhitelisted(host: host)
-            }
-            if hasDangerousUrl || hasSuspiciousHost {
-                reasons.append("подозрительная ссылка")
-            }
+
+        if hasDangerousUrl {
+            score += 4
+            reasons.append("опасная/подозрительная ссылка")
+        } else if hasExternalLink && (hasOfferSentence || hasAsset || hasPrice || mentionsOfferWord) {
+            score += 2
+            reasons.append("внешняя ссылка в коммерческом контексте")
         }
-        if isForwarded {
-            reasons.append(fromUnknownAuthor ? "пересланное сообщение от неизвестного" : "пересланное сообщение")
+
+        if hasOfferSentence {
+            score += 3
+            reasons.append("формулировка коммерческого оффера")
+        } else if mentionsOfferWord && (hasAsset || hasPrice || hasPressure || hasDiversion || isForwarded) {
+            score += 2
+            reasons.append("упоминание оффера/сделки")
         }
-        if viaBot {
+
+        if hasPrice {
+            score += 1
+            reasons.append("указана цена или сумма")
+        }
+        if hasAsset && (hasPrice || hasOfferSentence || hasPressure || hasDiversion || matchedAssets >= 2) {
+            score += 1
+            reasons.append("упоминание подарка/NFT/крипты/актива")
+        }
+        if hasPressure {
+            score += 2
+            reasons.append("признаки срочности или предоплаты")
+        }
+        if hasDiversion && (hasOfferSentence || hasAsset || hasPrice || hasPressure) {
+            score += 1
+            reasons.append("увод диалога в ЛС или к стороннему контакту")
+        }
+        if isForwarded && (score >= 2 || hasAsset || hasPrice) {
+            score += 1
+            reasons.append(fromUnknownAuthor ? "переслано от неизвестного источника" : "пересланное предложение")
+        }
+        // Не срабатываем просто из-за того, что сообщение от бота — бот лишь повышает риск при наличии реальных признаков сделки.
+        if viaBot && score >= 3 {
             reasons.append("отправлено через бота")
         }
 
-        guard !reasons.isEmpty else { return nil }
+        let strongSignals = (hasDangerousUrl ? 1 : 0)
+            + (hasOfferSentence ? 1 : 0)
+            + (hasPrice ? 1 : 0)
+            + (hasPressure ? 1 : 0)
+            + (hasAsset ? 1 : 0)
+
+        guard hasDangerousUrl || (score >= 3 && strongSignals >= 2) else {
+            return nil
+        }
+
+        let summary = hasOfferSentence
+            ? "Обнаружено предложение сделки / оффер в тексте"
+            : "Возможен подозрительный оффер"
         return FullGramAntiScamVerdict(
-            severity: (hasDangerousUrl || reasons.count >= 2) ? .high : .warning,
+            severity: (hasDangerousUrl || score >= 4) ? .high : .warning,
             host: nil,
-            summary: "Возможен поддельный оффер",
+            summary: summary,
             reasons: reasons
         )
     }

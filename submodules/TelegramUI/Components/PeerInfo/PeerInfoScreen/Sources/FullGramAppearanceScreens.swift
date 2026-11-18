@@ -9,33 +9,58 @@ import ItemListUI
 import PresentationDataUtils
 import TelegramPresentationData
 
-// MARK: - 2.1. Шрифты (локальные в сурскоде приложения)
+// MARK: - 2.1. Шрифты (локальные + 50 шрифтов из GitHub-каталога FullGram)
+
+private final class FullGramFontDownloadState: @unchecked Sendable {
+    var downloadingId: String?
+    var lastError: String?
+}
 
 private struct FullGramFontsArguments {
-    let select: (String) -> Void
+    let select: (FullGramFonts.Option) -> Void
+    let clearCache: () -> Void
 }
 
 private enum FullGramFontsEntry: ItemListNodeEntry {
-    case header(String)
-    case font(Int32, FullGramFonts.Option, Bool)
+    case builtInHeader(String)
+    case builtInFont(Int32, FullGramFonts.Option, Bool)
+    case remoteHeader(String)
+    case remoteFont(Int32, FullGramFonts.Option, String, Bool)
+    case cacheHeader(String)
+    case clearCache(String)
     case info(String)
 
     var section: ItemListSectionId {
-        return 0
+        switch self {
+        case .builtInHeader, .builtInFont:
+            return 0
+        case .remoteHeader, .remoteFont:
+            return 1
+        case .cacheHeader, .clearCache, .info:
+            return 2
+        }
     }
 
     var stableId: Int32 {
         switch self {
-        case .header: return 0
-        case let .font(idx, _, _): return 10 + idx
-        case .info: return 100
+        case .builtInHeader: return 0
+        case let .builtInFont(idx, _, _): return 1 + idx
+        case .remoteHeader: return 100
+        case let .remoteFont(idx, _, _, _): return 101 + idx
+        case .cacheHeader: return 500
+        case .clearCache: return 501
+        case .info: return 502
         }
     }
 
     static func ==(lhs: FullGramFontsEntry, rhs: FullGramFontsEntry) -> Bool {
         switch (lhs, rhs) {
-        case let (.header(a), .header(b)): return a == b
-        case let (.font(ai, ao, ac), .font(bi, bo, bc)): return ai == bi && ao.id == bo.id && ac == bc
+        case let (.builtInHeader(a), .builtInHeader(b)): return a == b
+        case let (.builtInFont(ai, ao, ac), .builtInFont(bi, bo, bc)): return ai == bi && ao.id == bo.id && ac == bc
+        case let (.remoteHeader(a), .remoteHeader(b)): return a == b
+        case let (.remoteFont(ai, ao, asub, ac), .remoteFont(bi, bo, bsub, bc)): return ai == bi && ao.id == bo.id && asub == bsub && ac == bc
+        case let (.cacheHeader(a), .cacheHeader(b)): return a == b
+        case let (.clearCache(a), .clearCache(b)): return a == b
         case let (.info(a), .info(b)): return a == b
         default: return false
         }
@@ -48,9 +73,9 @@ private enum FullGramFontsEntry: ItemListNodeEntry {
     func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
         let args = arguments as! FullGramFontsArguments
         switch self {
-        case let .header(text):
+        case let .builtInHeader(text), let .remoteHeader(text), let .cacheHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
-        case let .font(_, option, selected):
+        case let .builtInFont(_, option, selected):
             return ItemListCheckboxItem(
                 presentationData: presentationData,
                 systemStyle: .glass,
@@ -60,8 +85,32 @@ private enum FullGramFontsEntry: ItemListNodeEntry {
                 zeroSeparatorInsets: false,
                 sectionId: self.section,
                 action: {
-                    args.select(option.id)
+                    args.select(option)
                 }
+            )
+        case let .remoteFont(_, option, statusLabel, selected):
+            return ItemListDisclosureItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                title: option.title,
+                label: selected ? "✓ Выбран" : statusLabel,
+                sectionId: self.section,
+                style: .blocks,
+                disclosureStyle: selected ? .none : .arrow,
+                action: {
+                    args.select(option)
+                }
+            )
+        case let .clearCache(title):
+            return ItemListActionItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                title: title,
+                kind: .destructive,
+                alignment: .natural,
+                sectionId: self.section,
+                style: .blocks,
+                action: args.clearCache
             )
         case let .info(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
@@ -70,30 +119,82 @@ private enum FullGramFontsEntry: ItemListNodeEntry {
 }
 
 func fullGramFontsController(context: AccountContext) -> ViewController {
+    var presentNativeImpl: ((UIViewController) -> Void)?
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
-    var version = 0
-    let observer = NotificationCenter.default.addObserver(forName: FullGramFonts.didChangeNotification, object: nil, queue: .main) { _ in
-        version += 1
-        changed.set(version)
+    let version = Atomic<Int>(value: 0)
+    let dlState = FullGramFontDownloadState()
+
+    let bump: () -> Void = {
+        changed.set(version.modify { $0 + 1 })
     }
 
-    let args = FullGramFontsArguments(select: { id in
-        FullGramFonts.selectedId = id
-    })
+    let observer = NotificationCenter.default.addObserver(forName: FullGramFonts.didChangeNotification, object: nil, queue: .main) { _ in
+        bump()
+    }
+
+    let args = FullGramFontsArguments(
+        select: { option in
+            if !option.isRemote || FullGramFonts.isDownloaded(option) {
+                _ = FullGramFonts.registerFontFileIfNeeded(option: option)
+                FullGramFonts.selectedId = option.id
+                return
+            }
+            guard dlState.downloadingId == nil else { return }
+            dlState.downloadingId = option.id
+            dlState.lastError = nil
+            bump()
+            FullGramFonts.downloadAndSelect(option: option) { result in
+                dlState.downloadingId = nil
+                switch result {
+                case .success:
+                    dlState.lastError = nil
+                    bump()
+                case let .failure(error):
+                    dlState.lastError = error.localizedDescription
+                    bump()
+                    let alert = UIAlertController(title: "Ошибка загрузки шрифта", message: error.localizedDescription, preferredStyle: .alert)
+                    alert.addAction(UIAlertAction(title: "OK", style: .default))
+                    presentNativeImpl?(alert)
+                }
+            }
+        },
+        clearCache: {
+            FullGramFonts.clearDownloadedCache()
+            bump()
+        }
+    )
 
     let signal = combineLatest(context.sharedContext.presentationData, changed.get())
     |> deliverOnMainQueue
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
-        var entries: [FullGramFontsEntry] = [
-            .header("ВСТРОЕННЫЕ ШРИФТЫ")
-        ]
         let selected = FullGramFonts.selectedId
-        for (index, option) in FullGramFonts.options.enumerated() {
-            entries.append(.font(Int32(index), option, option.id == selected))
+        var entries: [FullGramFontsEntry] = [
+            .builtInHeader("ВСТРОЕННЫЕ И СИСТЕМНЫЕ (\(FullGramFonts.builtInOptions.count))")
+        ]
+        for (index, option) in FullGramFonts.builtInOptions.enumerated() {
+            entries.append(.builtInFont(Int32(index), option, option.id == selected))
+        }
+        entries.append(.remoteHeader("КАТАЛОГ GITHUB (\(FullGramFonts.remoteOptions.count) ШРИФТОВ)"))
+        for (index, option) in FullGramFonts.remoteOptions.enumerated() {
+            let status: String
+            if dlState.downloadingId == option.id {
+                status = "Загрузка…"
+            } else if FullGramFonts.isDownloaded(option) {
+                status = "Загружен"
+            } else {
+                let kb = max(1, option.sizeBytes / 1024)
+                status = "↓ \(kb) КБ"
+            }
+            entries.append(.remoteFont(Int32(index), option, status, option.id == selected))
+        }
+        let downloadedCount = FullGramFonts.remoteOptions.filter { FullGramFonts.isDownloaded($0) }.count
+        entries.append(.cacheHeader("КЭШ ШРИФТОВ"))
+        if downloadedCount > 0 {
+            entries.append(.clearCache("Удалить скачанные шрифты (\(downloadedCount))"))
         }
         let note = FullGramFonts.needsRelaunch
             ? "Выбран новый шрифт. Перезапустите приложение, чтобы применить его ко всему интерфейсу."
-            : "Все шрифты хранятся локально в приложении. Новый шрифт применяется после перезапуска."
+            : "50 дополнительных шрифтов загружаются напрямую с GitHub (не расходуют лимиты Cloudflare) и кэшируются локально. Применяются после перезапуска."
         entries.append(.info(note))
 
         let data = ItemListPresentationData(presentationData)
@@ -111,7 +212,11 @@ func fullGramFontsController(context: AccountContext) -> ViewController {
         NotificationCenter.default.removeObserver(observer)
     }
 
-    return ItemListController(context: context, state: signal)
+    let controller = ItemListController(context: context, state: signal)
+    presentNativeImpl = { vc in
+        context.sharedContext.applicationBindings.presentNativeController(vc)
+    }
+    return controller
 }
 
 // MARK: - 2.2. Темы (без вложенных мини-вкладок, + OLED режим, + Красная/Золотая, + Своя тема с предпросмотром)
@@ -363,20 +468,18 @@ private enum FullGramThemesEntry: ItemListNodeEntry {
 }
 
 private final class FullGramColorPickerDelegate: NSObject, UIColorPickerViewControllerDelegate {
-    private let slot: FullGramThemeColors.Slot
+    private let onColor: (String) -> Void
     private var retainedSelf: FullGramColorPickerDelegate?
 
-    init(slot: FullGramThemeColors.Slot) {
-        self.slot = slot
+    init(onColor: @escaping (String) -> Void) {
+        self.onColor = onColor
         super.init()
         self.retainedSelf = self
     }
 
     @available(iOS 14.0, *)
     func colorPickerViewControllerDidSelectColor(_ viewController: UIColorPickerViewController) {
-        let hex = Self.hexString(from: viewController.selectedColor)
-        FullGramThemeColors.markCustom()
-        FullGramThemeColors.set(self.slot, hex: hex)
+        self.onColor(Self.hexString(from: viewController.selectedColor))
     }
 
     @available(iOS 14.0, *)
@@ -397,14 +500,12 @@ private final class FullGramColorPickerDelegate: NSObject, UIColorPickerViewCont
 func fullGramThemesController(context: AccountContext) -> ViewController {
     var presentNativeImpl: ((UIViewController) -> Void)?
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
-    var version = 0
+    let version = Atomic<Int>(value: 0)
     let obs1 = NotificationCenter.default.addObserver(forName: FullGramThemeColors.didChangeNotification, object: nil, queue: .main) { _ in
-        version += 1
-        changed.set(version)
+        changed.set(version.modify { $0 + 1 })
     }
     let obs2 = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { _ in
-        version += 1
-        changed.set(version)
+        changed.set(version.modify { $0 + 1 })
     }
 
     let args = FullGramThemesArguments(
@@ -421,7 +522,10 @@ func fullGramThemesController(context: AccountContext) -> ViewController {
                     let picker = UIColorPickerViewController()
                     picker.supportsAlpha = false
                     picker.selectedColor = FullGramThemeColors.color(slot) ?? .systemBlue
-                    let delegate = FullGramColorPickerDelegate(slot: slot)
+                    let delegate = FullGramColorPickerDelegate { hex in
+                        FullGramThemeColors.markCustom()
+                        FullGramThemeColors.set(slot, hex: hex)
+                    }
                     picker.delegate = delegate
                     presentNativeImpl?(picker)
                 }))
@@ -506,17 +610,20 @@ func fullGramThemesController(context: AccountContext) -> ViewController {
 
 private enum FullGramDesignToggle: Int32 {
     case classicDesign = 1
-    case glowingReactions = 2
+    case removeGlass = 2
+    case glowingReactions = 3
 }
 
 private struct FullGramDesignArguments {
     let toggle: (FullGramDesignToggle, Bool) -> Void
+    let pickGlassColor: () -> Void
     let pickSlowMotion: () -> Void
 }
 
 private enum FullGramDesignEntry: ItemListNodeEntry {
     case header(String)
     case toggle(FullGramDesignToggle, String, Bool)
+    case flatColor(String, String)
     case slowMotion(String, String)
     case info(String)
 
@@ -526,8 +633,9 @@ private enum FullGramDesignEntry: ItemListNodeEntry {
         switch self {
         case .header: return 0
         case let .toggle(opt, _, _): return opt.rawValue
-        case .slowMotion: return 10
-        case .info: return 20
+        case .flatColor: return 10
+        case .slowMotion: return 20
+        case .info: return 30
         }
     }
 
@@ -535,6 +643,7 @@ private enum FullGramDesignEntry: ItemListNodeEntry {
         switch (lhs, rhs) {
         case let (.header(a), .header(b)): return a == b
         case let (.toggle(ao, at, av), .toggle(bo, bt, bv)): return ao == bo && at == bt && av == bv
+        case let (.flatColor(at, al), .flatColor(bt, bl)): return at == bt && al == bl
         case let (.slowMotion(at, al), .slowMotion(bt, bl)): return at == bt && al == bl
         case let (.info(a), .info(b)): return a == b
         default: return false
@@ -560,6 +669,17 @@ private enum FullGramDesignEntry: ItemListNodeEntry {
                 style: .blocks,
                 updated: { args.toggle(opt, $0) }
             )
+        case let .flatColor(title, label):
+            return ItemListDisclosureItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                title: title,
+                label: label,
+                sectionId: self.section,
+                style: .blocks,
+                disclosureStyle: .arrow,
+                action: args.pickGlassColor
+            )
         case let .slowMotion(title, label):
             return ItemListDisclosureItem(
                 presentationData: presentationData,
@@ -579,11 +699,11 @@ private enum FullGramDesignEntry: ItemListNodeEntry {
 
 func fullGramDesignController(context: AccountContext) -> ViewController {
     var presentControllerImpl: ((ViewController) -> Void)?
+    var presentNativeImpl: ((UIViewController) -> Void)?
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
-    var version = 0
+    let version = Atomic<Int>(value: 0)
     let observer = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { _ in
-        version += 1
-        changed.set(version)
+        changed.set(version.modify { $0 + 1 })
     }
 
     let args = FullGramDesignArguments(
@@ -591,9 +711,60 @@ func fullGramDesignController(context: AccountContext) -> ViewController {
             switch opt {
             case .classicDesign:
                 FullGramExtras.shared.classicDesign = value
+            case .removeGlass:
+                FullGramExtras.shared.removeGlass = value
             case .glowingReactions:
                 FullGramExtras.shared.glowingReactions = value
             }
+        },
+        pickGlassColor: {
+            let sheet = UIAlertController(title: "Цвет заливки вместо стекла", message: "Выберите сплошной цвет для панелей, вкладок и кнопок", preferredStyle: .actionSheet)
+            if #available(iOS 14.0, *) {
+                sheet.addAction(UIAlertAction(title: "Палитра цветов", style: .default, handler: { _ in
+                    let picker = UIColorPickerViewController()
+                    picker.supportsAlpha = false
+                    if let hex = FullGramExtras.shared.removeGlassColorHex, let rgb = FullGramThemeColors.parse(hex) {
+                        picker.selectedColor = UIColor(rgb: rgb)
+                    } else {
+                        picker.selectedColor = context.sharedContext.currentPresentationData.with { $0 }.theme.list.itemBlocksBackgroundColor
+                    }
+                    let delegate = FullGramColorPickerDelegate { hex in
+                        FullGramExtras.shared.removeGlassColorHex = hex
+                        if !FullGramExtras.shared.removeGlass {
+                            FullGramExtras.shared.removeGlass = true
+                        }
+                    }
+                    picker.delegate = delegate
+                    presentNativeImpl?(picker)
+                }))
+            }
+            sheet.addAction(UIAlertAction(title: "Ввести HEX-код", style: .default, handler: { _ in
+                let alert = UIAlertController(title: "Цвет заливки", message: "Введите цвет в формате #RRGGBB", preferredStyle: .alert)
+                alert.addTextField { tf in
+                    tf.placeholder = "#1C1C1E"
+                    tf.text = FullGramExtras.shared.removeGlassColorHex
+                    tf.autocapitalizationType = .allCharacters
+                    tf.autocorrectionType = .no
+                }
+                alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+                alert.addAction(UIAlertAction(title: "Применить", style: .default, handler: { [weak alert] _ in
+                    let text = alert?.textFields?.first?.text ?? ""
+                    if let parsed = FullGramThemeColors.parse(text) {
+                        FullGramExtras.shared.removeGlassColorHex = String(format: "#%06X", parsed)
+                        if !FullGramExtras.shared.removeGlass {
+                            FullGramExtras.shared.removeGlass = true
+                        }
+                    }
+                }))
+                presentNativeImpl?(alert)
+            }))
+            if FullGramExtras.shared.removeGlassColorHex != nil {
+                sheet.addAction(UIAlertAction(title: "Авто (цвет темы)", style: .destructive, handler: { _ in
+                    FullGramExtras.shared.removeGlassColorHex = nil
+                }))
+            }
+            sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            presentNativeImpl?(sheet)
         },
         pickSlowMotion: {
             let presentationData = context.sharedContext.currentPresentationData.with { $0 }
@@ -603,8 +774,7 @@ func fullGramDesignController(context: AccountContext) -> ViewController {
                 return ActionSheetButtonItem(title: label, color: .accent, action: { [weak sheet] in
                     sheet?.dismissAnimated()
                     FullGramAnimationSpeed.factor = step
-                    version += 1
-                    changed.set(version)
+                    changed.set(version.modify { $0 + 1 })
                 })
             }
             sheet.setItemGroups([
@@ -624,12 +794,15 @@ func fullGramDesignController(context: AccountContext) -> ViewController {
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let factor = FullGramAnimationSpeed.factor
         let slowLabel = factor <= 1.0 ? "Выкл." : "\(Int(factor))×"
+        let glassColorLabel = FullGramExtras.shared.removeGlassColorHex ?? "Авто"
         let entries: [FullGramDesignEntry] = [
             .header("ДИЗАЙН"),
+            .toggle(.removeGlass, "Удаление стекла", FullGramExtras.shared.removeGlass),
+            .flatColor("Цвет заливки вместо стекла", glassColorLabel),
             .toggle(.classicDesign, "Старый дизайн Telegram", FullGramExtras.shared.classicDesign),
             .toggle(.glowingReactions, "Светящиеся реакции", FullGramExtras.shared.glowingReactions),
             .slowMotion("Замедление анимаций", slowLabel),
-            .info("«Старый дизайн Telegram» отключает жидкое стекло и применяет классические плоские панели после перезапуска.")
+            .info("«Удаление стекла» полностью убирает эффект жидкого стекла и заливает панели выбранным сплошным цветом. Изменения интерфейса вступают в силу после перезапуска.")
         ]
 
         let data = ItemListPresentationData(presentationData)
@@ -650,6 +823,9 @@ func fullGramDesignController(context: AccountContext) -> ViewController {
     let controller = ItemListController(context: context, state: signal)
     presentControllerImpl = { [weak controller] c in
         controller?.present(c, in: .window(.root))
+    }
+    presentNativeImpl = { vc in
+        context.sharedContext.applicationBindings.presentNativeController(vc)
     }
     return controller
 }

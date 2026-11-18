@@ -55,16 +55,204 @@ private final class FullGramAIScreenArguments {
     }
 }
 
+private final class FullGramAIHeroItem: ListViewItem, ItemListItem {
+    let theme: PresentationTheme
+    let sectionId: ItemListSectionId
+    let isEnabled: Bool
+    let providerTitle: String
+    let modelName: String
+    let hasKey: Bool
+    let openChat: () -> Void
+    let isAlwaysPlain: Bool = true
+
+    init(
+        theme: PresentationTheme,
+        sectionId: ItemListSectionId,
+        isEnabled: Bool,
+        providerTitle: String,
+        modelName: String,
+        hasKey: Bool,
+        openChat: @escaping () -> Void
+    ) {
+        self.theme = theme
+        self.sectionId = sectionId
+        self.isEnabled = isEnabled
+        self.providerTitle = providerTitle
+        self.modelName = modelName
+        self.hasKey = hasKey
+        self.openChat = openChat
+    }
+
+    func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
+        async {
+            let node = FullGramAIHeroItemNode()
+            let (layout, apply) = node.asyncLayout()(self, params)
+            node.contentSize = layout.contentSize
+            node.insets = layout.insets
+            Queue.mainQueue().async {
+                completion(node, { return (nil, { _ in apply() }) })
+            }
+        }
+    }
+
+    func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
+        Queue.mainQueue().async {
+            if let nodeValue = node() as? FullGramAIHeroItemNode {
+                let makeLayout = nodeValue.asyncLayout()
+                async {
+                    let (layout, apply) = makeLayout(self, params)
+                    Queue.mainQueue().async {
+                        completion(layout, { _ in apply() })
+                    }
+                }
+            }
+        }
+    }
+
+    var selectable: Bool { return false }
+}
+
+private final class FullGramAIHeroItemNode: ListViewItemNode {
+    private let cardView = UIView()
+    private let gradientLayer = CAGradientLayer()
+    private let avatarRing = UIView()
+    private let avatarView = UIImageView()
+    private let titleLabel = UILabel()
+    private let statusPill = UILabel()
+    private let modelLabel = UILabel()
+    private let openChatButton = UIButton(type: .system)
+    private var openChatAction: (() -> Void)?
+
+    init() {
+        super.init(layerBacked: false)
+        self.cardView.layer.cornerRadius = 20.0
+        self.cardView.clipsToBounds = true
+        self.cardView.layer.borderWidth = 0.5
+        self.cardView.layer.insertSublayer(self.gradientLayer, at: 0)
+
+        self.avatarRing.layer.cornerRadius = 28.0
+        self.avatarRing.layer.borderWidth = 1.5
+        self.cardView.addSubview(self.avatarRing)
+
+        self.avatarView.image = UIImage(named: "FullGramMascotPortrait") ?? UIImage(named: "FullGramMascotPet") ?? UIImage(systemName: "sparkles")
+        self.avatarView.contentMode = .scaleAspectFill
+        self.avatarView.layer.cornerRadius = 25.0
+        self.avatarView.clipsToBounds = true
+        self.avatarRing.addSubview(self.avatarView)
+
+        self.titleLabel.text = "FullGram AI"
+        self.titleLabel.font = Font.bold(19.0)
+        self.cardView.addSubview(self.titleLabel)
+
+        self.statusPill.font = Font.semibold(11.0)
+        self.statusPill.textAlignment = .center
+        self.statusPill.layer.cornerRadius = 9.0
+        self.statusPill.clipsToBounds = true
+        self.cardView.addSubview(self.statusPill)
+
+        self.modelLabel.font = Font.regular(13.0)
+        self.modelLabel.numberOfLines = 1
+        self.cardView.addSubview(self.modelLabel)
+
+        self.openChatButton.addTarget(self, action: #selector(self.openChatTapped), for: .touchUpInside)
+        self.cardView.addSubview(self.openChatButton)
+
+        self.view.addSubview(self.cardView)
+    }
+
+    @objc private func openChatTapped() {
+        self.openChatAction?()
+    }
+
+    func asyncLayout() -> (FullGramAIHeroItem, ListViewItemLayoutParams) -> (ListViewItemNodeLayout, () -> Void) {
+        return { [weak self] item, params in
+            let height: CGFloat = 148.0
+            let layout = ListViewItemNodeLayout(
+                contentSize: CGSize(width: params.width, height: height),
+                insets: UIEdgeInsets(top: 6.0, left: 0.0, bottom: 6.0, right: 0.0)
+            )
+            let apply: () -> Void = {
+                guard let self else { return }
+                self.openChatAction = item.openChat
+                let inset = params.leftInset + 16.0
+                let cardW = max(240.0, params.width - inset * 2.0)
+                let cardFrame = CGRect(x: inset, y: 6.0, width: cardW, height: height - 12.0)
+                self.cardView.frame = cardFrame
+                self.gradientLayer.frame = self.cardView.bounds
+
+                let accent = item.theme.list.itemAccentColor
+                let dark = item.theme.overallDarkAppearance
+                let c1 = dark ? UIColor(rgb: 0x1E1B3A) : UIColor(rgb: 0xF1EEFF)
+                let c2 = dark ? UIColor(rgb: 0x132038) : UIColor(rgb: 0xE7F4FF)
+                self.gradientLayer.colors = [c1.cgColor, c2.cgColor]
+                self.gradientLayer.startPoint = CGPoint(x: 0.0, y: 0.0)
+                self.gradientLayer.endPoint = CGPoint(x: 1.0, y: 1.0)
+                self.cardView.layer.borderColor = accent.withAlphaComponent(0.28).cgColor
+
+                self.avatarRing.frame = CGRect(x: 16.0, y: 16.0, width: 56.0, height: 56.0)
+                self.avatarRing.layer.borderColor = accent.withAlphaComponent(0.55).cgColor
+                self.avatarRing.backgroundColor = accent.withAlphaComponent(0.12)
+                self.avatarView.frame = CGRect(x: 3.0, y: 3.0, width: 50.0, height: 50.0)
+
+                let badgeText: String
+                let badgeBg: UIColor
+                let badgeFg: UIColor
+                if !item.isEnabled {
+                    badgeText = "Выкл"
+                    badgeBg = UIColor.systemGray.withAlphaComponent(0.20)
+                    badgeFg = .systemGray
+                } else if item.hasKey {
+                    badgeText = "Готов"
+                    badgeBg = UIColor.systemGreen.withAlphaComponent(0.20)
+                    badgeFg = .systemGreen
+                } else {
+                    badgeText = "Нет ключа"
+                    badgeBg = UIColor.systemOrange.withAlphaComponent(0.22)
+                    badgeFg = .systemOrange
+                }
+                self.statusPill.text = badgeText
+                self.statusPill.backgroundColor = badgeBg
+                self.statusPill.textColor = badgeFg
+                let pillW: CGFloat = max(56.0, self.statusPill.sizeThatFits(CGSize(width: 120.0, height: 18.0)).width + 16.0)
+                self.statusPill.frame = CGRect(x: cardW - 16.0 - pillW, y: 20.0, width: pillW, height: 18.0)
+
+                let textX: CGFloat = 84.0
+                let textW = max(80.0, self.statusPill.frame.minX - textX - 8.0)
+                self.titleLabel.textColor = item.theme.list.itemPrimaryTextColor
+                self.titleLabel.frame = CGRect(x: textX, y: 18.0, width: textW, height: 22.0)
+
+                self.modelLabel.text = "\(item.providerTitle) · \(item.modelName)"
+                self.modelLabel.textColor = item.theme.list.itemSecondaryTextColor
+                self.modelLabel.frame = CGRect(x: textX, y: 44.0, width: cardW - textX - 16.0, height: 18.0)
+
+                var cfg = UIButton.Configuration.filled()
+                var titleAttr = AttributedString("Открыть чат с ИИ")
+                titleAttr.font = Font.semibold(14.5)
+                cfg.attributedTitle = titleAttr
+                cfg.image = UIImage(systemName: "sparkles", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13.0, weight: .semibold))
+                cfg.imagePadding = 7.0
+                cfg.cornerStyle = .capsule
+                cfg.baseBackgroundColor = accent
+                cfg.baseForegroundColor = .white
+                self.openChatButton.configuration = cfg
+                self.openChatButton.frame = CGRect(x: 16.0, y: 86.0, width: cardW - 32.0, height: 36.0)
+            }
+            return (layout, apply)
+        }
+    }
+}
+
 private enum FullGramAISection: Int32 {
+    case hero
     case main
     case connection
     case security
 }
 
 private enum FullGramAIEntry: ItemListNodeEntry {
+    case hero(PresentationTheme, Bool, String, String, Bool)
     case mainHeader(String)
     case enabled(Bool)
-    case openWindow(String)
     case floatingPet(Bool)
     case mainFooter(String)
 
@@ -86,7 +274,9 @@ private enum FullGramAIEntry: ItemListNodeEntry {
 
     var section: ItemListSectionId {
         switch self {
-        case .mainHeader, .enabled, .openWindow, .floatingPet, .mainFooter:
+        case .hero:
+            return FullGramAISection.hero.rawValue
+        case .mainHeader, .enabled, .floatingPet, .mainFooter:
             return FullGramAISection.main.rawValue
         case .connectionHeader, .provider, .apiKey, .model, .endpoint, .testConnection, .connectionFooter:
             return FullGramAISection.connection.rawValue
@@ -97,11 +287,11 @@ private enum FullGramAIEntry: ItemListNodeEntry {
 
     var stableId: Int32 {
         switch self {
-        case .mainHeader: return 0
-        case .enabled: return 1
-        case .openWindow: return 2
-        case .floatingPet: return 3
-        case .mainFooter: return 4
+        case .hero: return 0
+        case .mainHeader: return 10
+        case .enabled: return 11
+        case .floatingPet: return 12
+        case .mainFooter: return 13
 
         case .connectionHeader: return 100
         case .provider: return 101
@@ -121,6 +311,32 @@ private enum FullGramAIEntry: ItemListNodeEntry {
         }
     }
 
+    static func == (lhs: FullGramAIEntry, rhs: FullGramAIEntry) -> Bool {
+        switch (lhs, rhs) {
+        case let (.hero(lt, le, lp, lm, lk), .hero(rt, re, rp, rm, rk)):
+            return lt === rt && le == re && lp == rp && lm == rm && lk == rk
+        case let (.mainHeader(a), .mainHeader(b)): return a == b
+        case let (.enabled(a), .enabled(b)): return a == b
+        case let (.floatingPet(a), .floatingPet(b)): return a == b
+        case let (.mainFooter(a), .mainFooter(b)): return a == b
+        case let (.connectionHeader(a), .connectionHeader(b)): return a == b
+        case let (.provider(at, av), .provider(bt, bv)): return at == bt && av == bv
+        case let (.apiKey(at, av), .apiKey(bt, bv)): return at == bt && av == bv
+        case let (.model(at, av), .model(bt, bv)): return at == bt && av == bv
+        case let (.endpoint(at, av), .endpoint(bt, bv)): return at == bt && av == bv
+        case let (.testConnection(at, ak), .testConnection(bt, bk)): return at == bt && ak == bk
+        case let (.connectionFooter(a), .connectionFooter(b)): return a == b
+        case let (.securityHeader(a), .securityHeader(b)): return a == b
+        case let (.allowReadChat(a), .allowReadChat(b)): return a == b
+        case let (.allowChatList(a), .allowChatList(b)): return a == b
+        case let (.allowDrafts(a), .allowDrafts(b)): return a == b
+        case let (.customPrompt(at, av), .customPrompt(bt, bv)): return at == bt && av == bv
+        case let (.viewSecurityPrompt(a), .viewSecurityPrompt(b)): return a == b
+        case let (.securityFooter(a), .securityFooter(b)): return a == b
+        default: return false
+        }
+    }
+
     static func < (lhs: FullGramAIEntry, rhs: FullGramAIEntry) -> Bool {
         return lhs.stableId < rhs.stableId
     }
@@ -128,27 +344,93 @@ private enum FullGramAIEntry: ItemListNodeEntry {
     func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
         let args = arguments as! FullGramAIScreenArguments
         switch self {
+        case let .hero(theme, isEnabled, providerTitle, modelName, hasKey):
+            return FullGramAIHeroItem(
+                theme: theme,
+                sectionId: self.section,
+                isEnabled: isEnabled,
+                providerTitle: providerTitle,
+                modelName: modelName,
+                hasKey: hasKey,
+                openChat: args.openAIChatWindow
+            )
         case let .mainHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .enabled(val):
-            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Включить ИИ-ассистента (.ai и окно)", value: val, sectionId: self.section, style: .blocks, updated: args.toggleEnabled)
-        case let .openWindow(title):
-            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.openAIChatWindow)
+            return ItemListSwitchItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                icon: FullGramSettingsIcons.symbol("power", color: UIColor(rgb: 0x34C759)),
+                title: "Включить ИИ (.ai и окно)",
+                value: val,
+                sectionId: self.section,
+                style: .blocks,
+                updated: args.toggleEnabled
+            )
         case let .floatingPet(val):
-            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Питомец (маскот) поверх экрана", value: val, sectionId: self.section, style: .blocks, updated: args.toggleFloatingPet)
+            return ItemListSwitchItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                icon: FullGramSettingsIcons.symbol("pawprint.fill", color: UIColor(rgb: 0xAF52DE)),
+                title: "Питомец поверх экрана",
+                value: val,
+                sectionId: self.section,
+                style: .blocks,
+                updated: args.toggleFloatingPet
+            )
         case let .mainFooter(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
 
         case let .connectionHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .provider(title, value):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.pickProvider)
+            return ItemListDisclosureItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                icon: FullGramSettingsIcons.symbol("cpu", color: UIColor(rgb: 0x5856D6)),
+                title: title,
+                label: value,
+                sectionId: self.section,
+                style: .blocks,
+                disclosureStyle: .arrow,
+                action: args.pickProvider
+            )
         case let .apiKey(title, value):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.editApiKey)
+            return ItemListDisclosureItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                icon: FullGramSettingsIcons.symbol("key.fill", color: UIColor(rgb: 0xFF9500)),
+                title: title,
+                label: value,
+                sectionId: self.section,
+                style: .blocks,
+                disclosureStyle: .arrow,
+                action: args.editApiKey
+            )
         case let .model(title, value):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.editModel)
+            return ItemListDisclosureItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                icon: FullGramSettingsIcons.symbol("cube.fill", color: UIColor(rgb: 0x007AFF)),
+                title: title,
+                label: value,
+                sectionId: self.section,
+                style: .blocks,
+                disclosureStyle: .arrow,
+                action: args.editModel
+            )
         case let .endpoint(title, value):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.editEndpoint)
+            return ItemListDisclosureItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                icon: FullGramSettingsIcons.symbol("network", color: UIColor(rgb: 0x32ADE6)),
+                title: title,
+                label: value,
+                sectionId: self.section,
+                style: .blocks,
+                disclosureStyle: .arrow,
+                action: args.editEndpoint
+            )
         case let .testConnection(title, kind):
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: kind, alignment: .center, sectionId: self.section, style: .blocks, action: args.testConnection)
         case let .connectionFooter(text):
@@ -157,18 +439,82 @@ private enum FullGramAIEntry: ItemListNodeEntry {
         case let .securityHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .allowReadChat(val):
-            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Изучать открытый чат и даты", value: val, sectionId: self.section, style: .blocks, updated: args.toggleAllowReadChat)
+            return ItemListSwitchItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                icon: FullGramSettingsIcons.symbol("message.fill", color: UIColor(rgb: 0x007AFF)),
+                title: "Изучать открытый чат",
+                value: val,
+                sectionId: self.section,
+                style: .blocks,
+                updated: args.toggleAllowReadChat
+            )
         case let .allowChatList(val):
-            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Видеть список последних диалогов", value: val, sectionId: self.section, style: .blocks, updated: args.toggleAllowChatList)
+            return ItemListSwitchItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                icon: FullGramSettingsIcons.symbol("list.bullet.rectangle.portrait.fill", color: UIColor(rgb: 0x34C759)),
+                title: "Видеть список диалогов",
+                value: val,
+                sectionId: self.section,
+                style: .blocks,
+                updated: args.toggleAllowChatList
+            )
         case let .allowDrafts(val):
-            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Вставлять черновики в поле ввода", value: val, sectionId: self.section, style: .blocks, updated: args.toggleAllowDrafts)
+            return ItemListSwitchItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                icon: FullGramSettingsIcons.symbol("square.and.pencil", color: UIColor(rgb: 0xFF9500)),
+                title: "Вставлять черновики",
+                value: val,
+                sectionId: self.section,
+                style: .blocks,
+                updated: args.toggleAllowDrafts
+            )
         case let .customPrompt(title, value):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.editCustomPrompt)
+            return ItemListDisclosureItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                icon: FullGramSettingsIcons.symbol("text.badge.star", color: UIColor(rgb: 0xAF52DE)),
+                title: title,
+                label: value,
+                sectionId: self.section,
+                style: .blocks,
+                disclosureStyle: .arrow,
+                action: args.editCustomPrompt
+            )
         case let .viewSecurityPrompt(title):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openSecurityPrompt)
+            return ItemListDisclosureItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                icon: FullGramSettingsIcons.symbol("lock.shield.fill", color: UIColor(rgb: 0xFF3B30)),
+                title: title,
+                label: "",
+                sectionId: self.section,
+                style: .blocks,
+                disclosureStyle: .arrow,
+                action: args.openSecurityPrompt
+            )
         case let .securityFooter(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         }
+    }
+}
+
+private func fullGramModelPresets(for provider: FullGramAIProvider) -> [String] {
+    switch provider {
+    case .gemini:
+        return ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"]
+    case .openAI:
+        return ["gpt-4o-mini", "gpt-4.1", "gpt-4o"]
+    case .anthropic:
+        return ["claude-3-7-sonnet-latest", "claude-3-5-haiku-latest"]
+    case .groq:
+        return ["llama-3.3-70b-versatile", "mixtral-8x7b-32768"]
+    case .openRouter:
+        return ["deepseek/deepseek-chat", "anthropic/claude-3.7-sonnet", "openai/gpt-4o-mini"]
+    case .custom:
+        return [provider.defaultModel, "llama3.2", "qwen2.5:14b"]
     }
 }
 
@@ -177,12 +523,11 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
     var presentNativeImpl: ((UIViewController) -> Void)?
 
     let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
-    var tick = 0
-    var isTestingConnection = false
+    let tick = Atomic<Int>(value: 0)
+    let testingState = Atomic<Bool>(value: false)
 
     let bump: () -> Void = {
-        tick += 1
-        refresh.set(tick)
+        refresh.set(tick.modify { $0 + 1 })
     }
 
     let observer = NotificationCenter.default.addObserver(forName: FullGramAINotifications.settingsChanged, object: nil, queue: .main) { _ in
@@ -201,7 +546,7 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
         },
         pickProvider: {
             let current = FullGramAIStore.shared.provider
-            let alert = UIAlertController(title: "Провайдер ИИ", message: nil, preferredStyle: .actionSheet)
+            let alert = UIAlertController(title: "Провайдер ИИ", message: "Выберите движок модели", preferredStyle: .actionSheet)
             for provider in FullGramAIProvider.allCases {
                 let mark = provider == current ? " ✓" : ""
                 alert.addAction(UIAlertAction(title: "\(provider.title)\(mark)", style: .default, handler: { _ in
@@ -243,22 +588,34 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
         },
         editModel: {
             let provider = FullGramAIStore.shared.provider
-            let alert = UIAlertController(
-                title: "Модель ИИ",
-                message: "Оставьте пустым для значения по умолчанию (\(provider.defaultModel)).",
-                preferredStyle: .alert
-            )
-            alert.addTextField { tf in
-                tf.text = FullGramAIStore.shared.modelName
-                tf.placeholder = provider.defaultModel
-                tf.autocorrectionType = .no
-                tf.autocapitalizationType = .none
+            let current = FullGramAIStore.shared.effectiveModel
+            let sheet = UIAlertController(title: "Модель (\(provider.title))", message: "Выберите пресет или задайте вручную", preferredStyle: .actionSheet)
+            for preset in fullGramModelPresets(for: provider) {
+                let mark = preset == current ? " ✓" : ""
+                sheet.addAction(UIAlertAction(title: "\(preset)\(mark)", style: .default, handler: { _ in
+                    FullGramAIStore.shared.modelName = preset == provider.defaultModel ? "" : preset
+                }))
             }
-            alert.addAction(UIAlertAction(title: "Сохранить", style: .default, handler: { _ in
-                FullGramAIStore.shared.modelName = alert.textFields?.first?.text ?? ""
+            sheet.addAction(UIAlertAction(title: "Ввести вручную…", style: .default, handler: { _ in
+                let alert = UIAlertController(
+                    title: "Модель ИИ",
+                    message: "Оставьте пустым для значения по умолчанию (\(provider.defaultModel)).",
+                    preferredStyle: .alert
+                )
+                alert.addTextField { tf in
+                    tf.text = FullGramAIStore.shared.modelName
+                    tf.placeholder = provider.defaultModel
+                    tf.autocorrectionType = .no
+                    tf.autocapitalizationType = .none
+                }
+                alert.addAction(UIAlertAction(title: "Сохранить", style: .default, handler: { _ in
+                    FullGramAIStore.shared.modelName = alert.textFields?.first?.text ?? ""
+                }))
+                alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+                presentNativeImpl?(alert)
             }))
-            alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            presentNativeImpl?(alert)
+            sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            presentNativeImpl?(sheet)
         },
         editEndpoint: {
             let provider = FullGramAIStore.shared.provider
@@ -281,11 +638,11 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
             presentNativeImpl?(alert)
         },
         testConnection: {
-            guard !isTestingConnection else { return }
-            isTestingConnection = true
+            let wasTesting = testingState.swap(true)
+            guard !wasTesting else { return }
             bump()
             FullGramAIStore.shared.testConnection { result in
-                isTestingConnection = false
+                _ = testingState.swap(false)
                 bump()
                 let title: String
                 let message: String
@@ -312,20 +669,36 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
             FullGramAIStore.shared.allowDraftInsert = val
         },
         editCustomPrompt: {
-            let alert = UIAlertController(
-                title: "Свои инструкции для ИИ",
-                message: "Дополнительные пожелания по стилю ответов (системные правила безопасности всегда остаются активными).",
-                preferredStyle: .alert
-            )
-            alert.addTextField { tf in
-                tf.text = FullGramAIStore.shared.customInstructions
-                tf.placeholder = "Например: Отвечай максимально коротко по пунктам"
+            let sheet = UIAlertController(title: "Стиль ответов ИИ", message: "Быстрый пресет или свои инструкции", preferredStyle: .actionSheet)
+            let presets: [(String, String)] = [
+                ("Коротко и по делу", "Отвечай максимально коротко, чётко и по пунктам."),
+                ("Подробный разбор", "Давай развёрнутый анализ с примерами и выводами."),
+                ("Дружелюбный тон", "Общайся тепло, кратко и понятно."),
+                ("Сбросить инструкции", "")
+            ]
+            for (label, value) in presets {
+                sheet.addAction(UIAlertAction(title: label, style: value.isEmpty ? .destructive : .default, handler: { _ in
+                    FullGramAIStore.shared.customInstructions = value
+                }))
             }
-            alert.addAction(UIAlertAction(title: "Сохранить", style: .default, handler: { _ in
-                FullGramAIStore.shared.customInstructions = alert.textFields?.first?.text ?? ""
+            sheet.addAction(UIAlertAction(title: "Написать свой промпт…", style: .default, handler: { _ in
+                let alert = UIAlertController(
+                    title: "Свои инструкции для ИИ",
+                    message: "Дополнительные пожелания по стилю ответов (системные правила безопасности всегда остаются активными).",
+                    preferredStyle: .alert
+                )
+                alert.addTextField { tf in
+                    tf.text = FullGramAIStore.shared.customInstructions
+                    tf.placeholder = "Например: Отвечай максимально коротко по пунктам"
+                }
+                alert.addAction(UIAlertAction(title: "Сохранить", style: .default, handler: { _ in
+                    FullGramAIStore.shared.customInstructions = alert.textFields?.first?.text ?? ""
+                }))
+                alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+                presentNativeImpl?(alert)
             }))
-            alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            presentNativeImpl?(alert)
+            sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            presentNativeImpl?(sheet)
         },
         openSecurityPrompt: {
             pushImpl?(fullGramAISecurityPromptController(context: context))
@@ -337,31 +710,34 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let store = FullGramAIStore.shared
         let provider = store.provider
-        let endpointDisplay = store.customEndpoint.isEmpty ? "По умолчанию" : String(store.customEndpoint.suffix(26))
-        let promptSummary = store.customInstructions.isEmpty ? "Не заданы" : String(store.customInstructions.prefix(20))
+        let endpointDisplay = store.customEndpoint.isEmpty ? "По умолчанию" : String(store.customEndpoint.suffix(24))
+        let promptSummary = store.customInstructions.isEmpty ? "Стандартный" : String(store.customInstructions.prefix(18))
+        let hasKey = !FullGramAIKeychain.apiKey(for: provider).isEmpty
+        let isTesting = testingState.with { $0 }
 
         let entries: [FullGramAIEntry] = [
-            .mainHeader("ИИ АССИСТЕНТ И ПИТОМЕЦ"),
-            .enabled(store.isEnabled),
-            .openWindow("💬 Открыть плавающее окно ИИ-чата"),
-            .floatingPet(store.showFloatingPet),
-            .mainFooter("Пишите прямо в любом чате «.ai привет изучи чат и напиши сколько сообщений было 15.05.2026», открывайте сворачиваемое окно в теме приложения или включите питомца-маскота поверх экрана."),
+            .hero(presentationData.theme, store.isEnabled, provider.title, store.effectiveModel, hasKey),
 
-            .connectionHeader("ПОДКЛЮЧЕНИЕ ПО API-КЛЮЧУ"),
+            .mainHeader("ОСНОВНОЕ"),
+            .enabled(store.isEnabled),
+            .floatingPet(store.showFloatingPet),
+            .mainFooter("В любом чате напишите «.ai вопрос» или откройте плавающее окно кнопкой сверху."),
+
+            .connectionHeader("МОДЕЛЬ И API"),
             .provider("Провайдер", provider.title),
             .apiKey("API-ключ", FullGramAIKeychain.maskedKey(for: provider)),
             .model("Модель", store.effectiveModel),
             .endpoint("URL API", endpointDisplay),
-            .testConnection(isTestingConnection ? "⏳ Проверка подключения…" : "🔌 Проверить подключение", isTestingConnection ? .neutral : .generic),
-            .connectionFooter("Поддерживаются OpenAI, OpenRouter, Groq, Anthropic Claude, Google Gemini и любой OpenAI-совместимый сервер (включая локальный Ollama)."),
+            .testConnection(isTesting ? "Проверка подключения…" : "Проверить подключение", isTesting ? .neutral : .generic),
+            .connectionFooter("Поддерживаются OpenAI, OpenRouter, Groq, Anthropic Claude, Google Gemini и локальный Ollama."),
 
-            .securityHeader("БЕЗОПАСНОСТЬ И ДОСТУП К TELEGRAM"),
+            .securityHeader("ПРИВАТНОСТЬ И СТИЛЬ"),
             .allowReadChat(store.allowReadCurrentChat),
             .allowChatList(store.allowReadChatList),
             .allowDrafts(store.allowDraftInsert),
-            .customPrompt("Свои инструкции стиля", promptSummary),
-            .viewSecurityPrompt("🛡 Внутренний промпт безопасности"),
-            .securityFooter("Встроенная защита от Prompt Injection: чужие сообщения изолируются в теге [UNTRUSTED_CHAT_DATA], API-ключи лежат в Keychain, а отправка сообщений и изменение настроек возможны только по вашему нажатию.")
+            .customPrompt("Стиль ответов", promptSummary),
+            .viewSecurityPrompt("Промпт безопасности"),
+            .securityFooter("Защита от Prompt Injection: чужие сообщения изолируются в [UNTRUSTED_CHAT_DATA], ключи хранятся в iOS Keychain.")
         ]
 
         let data = ItemListPresentationData(presentationData)

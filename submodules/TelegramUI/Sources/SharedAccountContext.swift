@@ -311,6 +311,7 @@ public final class SharedAccountContextImpl: SharedAccountContext {
         return self.immediateExperimentalUISettingsValue.with { $0 }
     }
     private var experimentalUISettingsDisposable: Disposable?
+    private var fullGramExtrasObserver: NSObjectProtocol?
     
     public var presentGlobalController: (ViewController, Any?) -> Void = { _, _ in }
     public var presentCrossfadeController: () -> Void = {}
@@ -555,9 +556,10 @@ public final class SharedAccountContextImpl: SharedAccountContext {
         let immediateExperimentalUISettingsValue = self.immediateExperimentalUISettingsValue
         let _ = immediateExperimentalUISettingsValue.swap(initialPresentationDataAndSettings.experimentalUISettings)
         
-        let fullGramClassic = FullGramExtras.shared.classicDesign
-        GlassBackgroundView.useCustomGlassImpl = immediateExperimentalUISettingsValue.with({ $0.fakeGlass }) || fullGramClassic
-        GlassBackgroundView.flatMode = fullGramClassic
+        let fullGramFlat = FullGramExtras.shared.classicDesign || FullGramExtras.shared.removeGlass
+        GlassBackgroundView.useCustomGlassImpl = immediateExperimentalUISettingsValue.with({ $0.fakeGlass }) || fullGramFlat
+        GlassBackgroundView.flatMode = fullGramFlat
+        GlassBackgroundView.flatFillColor = FullGramExtras.shared.removeGlassColorHex.flatMap { FullGramThemeColors.parse($0) }.map { UIColor(rgb: $0) }
         ManagedAudioSessionImpl.respectsSystemRecordingInput = immediateExperimentalUISettingsValue.with({ $0.respectSystemMicrophone })
         MediaEditorVideoExport.forceLegacyStoryWriter = immediateExperimentalUISettingsValue.with({ $0.storyLegacyVideoWriter })
         MediaEditorVideoExport.forceLegacyChatWriter = immediateExperimentalUISettingsValue.with({ $0.chatLegacyVideoWriter })
@@ -568,12 +570,22 @@ public final class SharedAccountContextImpl: SharedAccountContext {
                 let _ = immediateExperimentalUISettingsValue.swap(settings)
                 
                 flatBuffers_checkedGet = settings.checkSerializedData
-                GlassBackgroundView.useCustomGlassImpl = settings.fakeGlass || FullGramExtras.shared.classicDesign
+                let isFlat = FullGramExtras.shared.classicDesign || FullGramExtras.shared.removeGlass
+                GlassBackgroundView.useCustomGlassImpl = settings.fakeGlass || isFlat
+                GlassBackgroundView.flatMode = isFlat
+                GlassBackgroundView.flatFillColor = FullGramExtras.shared.removeGlassColorHex.flatMap { FullGramThemeColors.parse($0) }.map { UIColor(rgb: $0) }
                 ManagedAudioSessionImpl.respectsSystemRecordingInput = settings.respectSystemMicrophone
                 MediaEditorVideoExport.forceLegacyStoryWriter = settings.storyLegacyVideoWriter
                 MediaEditorVideoExport.forceLegacyChatWriter = settings.chatLegacyVideoWriter
             }
         })
+        self.fullGramExtrasObserver = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { _ in
+            let isFlat = FullGramExtras.shared.classicDesign || FullGramExtras.shared.removeGlass
+            let settings = immediateExperimentalUISettingsValue.with { $0 }
+            GlassBackgroundView.useCustomGlassImpl = settings.fakeGlass || isFlat
+            GlassBackgroundView.flatMode = isFlat
+            GlassBackgroundView.flatFillColor = FullGramExtras.shared.removeGlassColorHex.flatMap { FullGramThemeColors.parse($0) }.map { UIColor(rgb: $0) }
+        }
         
         let _ = self.contactDataManager?.personNameDisplayOrder().start(next: { order in
             let _ = updateContactSettingsInteractively(accountManager: accountManager, { settings in
@@ -1156,6 +1168,9 @@ public final class SharedAccountContextImpl: SharedAccountContext {
         assertionFailure("SharedAccountContextImpl is not supposed to be deallocated")
         self.registeredNotificationTokensDisposable.dispose()
         self.presentationDataDisposable.dispose()
+        if let observer = self.fullGramExtrasObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
         self.automaticMediaDownloadSettingsDisposable.dispose()
         self.currentAutodownloadSettingsDisposable.dispose()
         self.inAppNotificationSettingsDisposable?.dispose()

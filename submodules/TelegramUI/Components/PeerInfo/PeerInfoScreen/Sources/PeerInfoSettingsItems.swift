@@ -15,7 +15,6 @@ import PeerNameColorItem
 import WalletContext
 
 enum SettingsSection: Int, CaseIterable {
-    case fullgram
     case edit
     case phone
     case accounts
@@ -31,11 +30,11 @@ enum SettingsSection: Int, CaseIterable {
 }
 
 private func fullGramSettingsMenuIcon() -> UIImage? {
-    let size = CGSize(width: 29.0, height: 29.0)
+    let size = CGSize(width: 30.0, height: 30.0)
     let renderer = UIGraphicsImageRenderer(size: size)
     return renderer.image { _ in
         let rect = CGRect(origin: .zero, size: size)
-        let path = UIBezierPath(roundedRect: rect, cornerRadius: 7.0)
+        let path = UIBezierPath(roundedRect: rect, cornerRadius: 8.0)
         path.addClip()
         if let raw = UIImage(named: "FullGramIcon_FullGramDefault") ?? UIImage(named: "FullGramMascotPortrait") ?? UIImage(named: "AppIcon") {
             raw.draw(in: rect)
@@ -55,10 +54,6 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
     for section in SettingsSection.allCases {
         items[section] = []
     }
-    
-    items[.fullgram]!.append(PeerInfoScreenDisclosureItem(id: 0, text: "FullGram", icon: fullGramSettingsMenuIcon(), action: {
-        interaction.openSettings(.fullgram)
-    }))
 
     let setPhotoTitle: String
     if let peer = data.peer, !peer.profileImageRepresentations.isEmpty {
@@ -243,6 +238,9 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
         }
     }
     
+    items[.shortcuts]!.append(PeerInfoScreenDisclosureItem(id: 0, text: "FullGram", icon: fullGramSettingsMenuIcon(), action: {
+        interaction.openSettings(.fullgram)
+    }))
     items[.shortcuts]!.append(PeerInfoScreenDisclosureItem(id: 1, text: presentationData.strings.Settings_SavedMessages, icon: PresentationResourcesSettings.savedMessages, action: {
         interaction.openSettings(.savedMessages)
     }))

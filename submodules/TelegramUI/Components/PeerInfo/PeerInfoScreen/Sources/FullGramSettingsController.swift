@@ -86,6 +86,81 @@ internal class FullGramHostedViewController<Content: UIViewController>: ViewCont
     }
 }
 
+enum FullGramSettingsIcons {
+    private static let iconSize = CGSize(width: 30.0, height: 30.0)
+    private static let cornerRadius: CGFloat = 8.0
+    private static let cache: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.countLimit = 128
+        return c
+    }()
+
+    static func bundleGlyph(_ bundleName: String, color: UIColor, side: CGFloat = 20.0, fallbackSystemName: String? = nil) -> UIImage? {
+        let key = "fg:\(bundleName):\(color.description):\(side)" as NSString
+        if let cached = self.cache.object(forKey: key) {
+            return cached
+        }
+        let img = generateImage(Self.iconSize, rotatedContext: { size, ctx in
+            let bounds = CGRect(origin: .zero, size: size)
+            ctx.clear(bounds)
+            ctx.addPath(UIBezierPath(roundedRect: bounds, cornerRadius: Self.cornerRadius).cgPath)
+            ctx.setFillColor(color.cgColor)
+            ctx.fillPath()
+            let glyph = UIImage(bundleImageName: bundleName)?.withTintColor(.white, renderingMode: .alwaysOriginal)
+                ?? fallbackSystemName.flatMap { UIImage(systemName: $0)?.withTintColor(.white, renderingMode: .alwaysOriginal) }
+            if let glyph {
+                UIGraphicsPushContext(ctx)
+                let rect = CGRect(
+                    x: (size.width - side) * 0.5,
+                    y: (size.height - side) * 0.5,
+                    width: side,
+                    height: side
+                )
+                glyph.draw(in: rect)
+                UIGraphicsPopContext()
+            }
+        })
+        if let img {
+            self.cache.setObject(img, forKey: key)
+        }
+        return img
+    }
+
+    static func symbol(_ systemName: String, color: UIColor, pointSize: CGFloat = 15.0) -> UIImage? {
+        let key = "sym:\(systemName):\(color.description):\(pointSize)" as NSString
+        if let cached = self.cache.object(forKey: key) {
+            return cached
+        }
+        let cfg = UIImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
+        let img = generateImage(Self.iconSize, rotatedContext: { size, ctx in
+            let bounds = CGRect(origin: .zero, size: size)
+            ctx.clear(bounds)
+            ctx.addPath(UIBezierPath(roundedRect: bounds, cornerRadius: Self.cornerRadius).cgPath)
+            ctx.setFillColor(color.cgColor)
+            ctx.fillPath()
+            if let sym = UIImage(systemName: systemName, withConfiguration: cfg)?.withTintColor(.white, renderingMode: .alwaysOriginal) {
+                UIGraphicsPushContext(ctx)
+                let symSize = sym.size
+                let maxSide: CGFloat = 20.0
+                let scale = min(1.0, min(maxSide / max(1.0, symSize.width), maxSide / max(1.0, symSize.height)))
+                let drawSize = CGSize(width: symSize.width * scale, height: symSize.height * scale)
+                let rect = CGRect(
+                    x: (size.width - drawSize.width) * 0.5,
+                    y: (size.height - drawSize.height) * 0.5,
+                    width: drawSize.width,
+                    height: drawSize.height
+                )
+                sym.draw(in: rect)
+                UIGraphicsPopContext()
+            }
+        })
+        if let img {
+            self.cache.setObject(img, forKey: key)
+        }
+        return img
+    }
+}
+
 public enum FullGramCategory: Int32, CaseIterable {
     case privacy = 0
     case chats = 1
@@ -123,23 +198,23 @@ public enum FullGramCategory: Int32, CaseIterable {
     var icon: UIImage? {
         switch self {
         case .privacy:
-            return PresentationResourcesSettings.security
+            return FullGramSettingsIcons.bundleGlyph("FullGram/Ghost", color: UIColor(rgb: 0x34C759), side: 20.0, fallbackSystemName: "hand.raised.fill")
         case .chats:
-            return PresentationResourcesSettings.privateChats
+            return FullGramSettingsIcons.bundleGlyph("FullGram/Chats", color: UIColor(rgb: 0x007AFF), side: 20.0, fallbackSystemName: "bubble.left.and.bubble.right.fill")
         case .mediaAndAudio:
-            return PresentationResourcesSettings.photos
+            return FullGramSettingsIcons.symbol("waveform", color: UIColor(rgb: 0xFF2D55))
         case .appearance:
-            return PresentationResourcesSettings.appearance
+            return FullGramSettingsIcons.symbol("paintbrush.fill", color: UIColor(rgb: 0xAF52DE))
         case .security:
-            return PresentationResourcesSettings.devices
+            return FullGramSettingsIcons.bundleGlyph("FullGram/GhostOutline", color: UIColor(rgb: 0xFF9500), side: 20.0, fallbackSystemName: "lock.fill")
         case .antiScam:
-            return UIImage(systemName: "shield.lefthalf.filled")?.withTintColor(UIColor(rgb: 0xFF9500), renderingMode: .alwaysOriginal) ?? PresentationResourcesSettings.security
+            return FullGramSettingsIcons.bundleGlyph("FullGram/Filter", color: UIColor(rgb: 0xFF3B30), side: 20.0, fallbackSystemName: "shield.lefthalf.filled")
         case .other:
-            return PresentationResourcesSettings.dataAndStorage
+            return FullGramSettingsIcons.bundleGlyph("FullGram/MediaArchive", color: UIColor(rgb: 0x32ADE6), side: 20.0, fallbackSystemName: "folder.fill")
         case .plugins:
-            return PresentationResourcesSettings.stickers
+            return FullGramSettingsIcons.bundleGlyph("FullGram/Plugins", color: UIColor(rgb: 0x5856D6), side: 20.0, fallbackSystemName: "puzzlepiece.extension.fill")
         case .aiAssistant:
-            return UIImage(systemName: "sparkles")?.withTintColor(UIColor(rgb: 0x5856d6), renderingMode: .alwaysOriginal) ?? PresentationResourcesSettings.stickers
+            return FullGramSettingsIcons.symbol("sparkles", color: UIColor(rgb: 0x6750A4))
         }
     }
 }
@@ -266,8 +341,8 @@ private enum FullGramSettingsEntry: ItemListNodeEntry {
         switch self {
         case .header:
             return FullGramHeaderItem(theme: presentationData.theme, sectionId: self.section)
-        case let .search(theme):
-            let icon = UIImage(systemName: "magnifyingglass")?.withTintColor(theme.list.itemAccentColor, renderingMode: .alwaysOriginal)
+        case .search:
+            let icon = FullGramSettingsIcons.symbol("magnifyingglass", color: UIColor(rgb: 0x007AFF))
             return ItemListDisclosureItem(
                 presentationData: presentationData,
                 systemStyle: .glass,

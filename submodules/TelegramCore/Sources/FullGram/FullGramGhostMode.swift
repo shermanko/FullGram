@@ -1453,6 +1453,26 @@ public final class FullGramExtras {
         set { setBool("classicDesign", newValue) }
     }
 
+    public var removeGlass: Bool {
+        get { bool("removeGlass", default: false) }
+        set { setBool("removeGlass", newValue) }
+    }
+
+    public var removeGlassColorHex: String? {
+        get {
+            let raw = defaults.string(forKey: prefix + "removeGlassColorHex") ?? ""
+            return raw.isEmpty ? nil : raw
+        }
+        set {
+            if let value = newValue?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+                defaults.set(value, forKey: prefix + "removeGlassColorHex")
+            } else {
+                defaults.removeObject(forKey: prefix + "removeGlassColorHex")
+            }
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: "removeGlassColorHex")
+        }
+    }
+
     public var glowingReactions: Bool {
         get { bool("glowingReactions", default: true) }
         set { setBool("glowingReactions", newValue) }
