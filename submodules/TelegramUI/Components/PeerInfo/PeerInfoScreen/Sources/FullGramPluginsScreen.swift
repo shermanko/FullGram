@@ -13,6 +13,7 @@ import AccountContext
 
 private final class FullGramPluginsArguments {
     let toggleSystem: (Bool) -> Void
+    let chooseLayoutFixerMode: () -> Void
     let createPlugin: (FullGramPluginLanguage) -> Void
     let importFromFile: () -> Void
     let openRemoteCatalog: () -> Void
@@ -21,6 +22,7 @@ private final class FullGramPluginsArguments {
 
     init(
         toggleSystem: @escaping (Bool) -> Void,
+        chooseLayoutFixerMode: @escaping () -> Void,
         createPlugin: @escaping (FullGramPluginLanguage) -> Void,
         importFromFile: @escaping () -> Void,
         openRemoteCatalog: @escaping () -> Void,
@@ -28,6 +30,7 @@ private final class FullGramPluginsArguments {
         openApiDocs: @escaping () -> Void
     ) {
         self.toggleSystem = toggleSystem
+        self.chooseLayoutFixerMode = chooseLayoutFixerMode
         self.createPlugin = createPlugin
         self.importFromFile = importFromFile
         self.openRemoteCatalog = openRemoteCatalog
@@ -44,6 +47,7 @@ private enum FullGramPluginsSection: Int32 {
 
 private enum FullGramPluginsEntry: ItemListNodeEntry {
     case systemSwitch(Bool)
+    case layoutFixerMode(String)
     case systemInfo(String)
     case remoteCatalog(String)
     case createLua
@@ -55,7 +59,7 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
 
     var section: ItemListSectionId {
         switch self {
-        case .systemSwitch, .systemInfo: return FullGramPluginsSection.system.rawValue
+        case .systemSwitch, .layoutFixerMode, .systemInfo: return FullGramPluginsSection.system.rawValue
         case .remoteCatalog, .createLua, .createPython, .importFile, .apiDocs: return FullGramPluginsSection.actions.rawValue
         case .listHeader, .pluginItem: return FullGramPluginsSection.list.rawValue
         }
@@ -64,7 +68,8 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
     var stableId: Int32 {
         switch self {
         case .systemSwitch: return 0
-        case .systemInfo: return 1
+        case .layoutFixerMode: return 1
+        case .systemInfo: return 2
         case .remoteCatalog: return 9
         case .createLua: return 10
         case .createPython: return 11
@@ -84,6 +89,8 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
         switch self {
         case let .systemSwitch(value):
             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Включить систему плагинов", value: value, sectionId: self.section, style: .blocks, updated: args.toggleSystem)
+        case let .layoutFixerMode(label):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: "⌨️ Исправление раскладки (.fix)", label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.chooseLayoutFixerMode)
         case let .systemInfo(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         case let .remoteCatalog(label):
@@ -142,6 +149,27 @@ func fullGramPluginsController(context: AccountContext) -> ViewController {
         toggleSystem: { enabled in
             FullGramPluginManager.shared.isSystemEnabled = enabled
             bump()
+        },
+        chooseLayoutFixerMode: {
+            let sheet = UIAlertController(
+                title: "Направление раскладки (.fix)",
+                message: "По умолчанию команда .fix переводит с русского на английский. Выберите направление:",
+                preferredStyle: .actionSheet
+            )
+            sheet.addAction(UIAlertAction(title: "Русский → Английский (по умолчанию)", style: .default) { _ in
+                FullGramPluginManager.shared.layoutFixerMode = "ru2en"
+                bump()
+            })
+            sheet.addAction(UIAlertAction(title: "Английский → Русский", style: .default) { _ in
+                FullGramPluginManager.shared.layoutFixerMode = "en2ru"
+                bump()
+            })
+            sheet.addAction(UIAlertAction(title: "Авто (Рус ↔ Англ)", style: .default) { _ in
+                FullGramPluginManager.shared.layoutFixerMode = "auto"
+                bump()
+            })
+            sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            presentNativeImpl?(sheet)
         },
         createPlugin: { language in
             let template: String
@@ -234,7 +262,8 @@ def on_outgoing_message(ctx):
 
         var entries: [FullGramPluginsEntry] = [
             .systemSwitch(manager.isSystemEnabled),
-            .systemInfo("Как использовать плагины:\n• В чате введите точку «.» (появятся подсказки) или нажмите «⚡ Плагины» над полем ввода.\n• В любом чате/канале: долгое нажатие на аватар вверху или в профиле «...» → «Плагины FullGram».\n• Нажмите на любой плагин ниже, чтобы открыть код, команды и тест."),
+            .layoutFixerMode(manager.layoutFixerModeTitle),
+            .systemInfo("Как использовать плагины:\n• В чате введите точку «.» (появятся подсказки) или нажмите «⚡ Плагины» над полем ввода.\n• Команды: .fix <текст> (раскладка), .slots / .roulette / .bal (казино), .dl add <срок> | <задача> (дедлайны).\n• Плагин «Анти-опечатки» работает автоматически при отправке каждого сообщения."),
             .remoteCatalog("Каталог"),
             .createLua,
             .createPython,

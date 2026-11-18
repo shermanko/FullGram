@@ -41,7 +41,407 @@ const DEFAULT_BADGES = {
 
 const DEFAULT_PLUGINS = {
   version: 1,
-  plugins: []
+  plugins: [
+    {
+      id: "fg_layout_fixer",
+      name: "Исправление раскладки (.fix)",
+      language: "python",
+      version: "1.0",
+      author: "FullGram",
+      description: "Команда .fix <текст>: переводит раскладку (по умолчанию Рус → Англ, направление меняется во вкладке Плагины).",
+      code: `# @name Исправление раскладки (.fix)
+# @id fg_layout_fixer
+# @version 1.0
+# @author FullGram
+# @description Команда .fix <текст>: переводит раскладку (по умолчанию Рус → Англ, меняется во вкладке Плагины)
+
+import fullgram
+
+RU_CHARS = "йцукенгшщзхъфывапролджэячсмитьбюёЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮЁ"
+EN_CHARS = "qwertyuiop[]asdfghjkl;'zxcvbnm,.\`QWERTYUIOP{}ASDFGHJKL:\\"ZXCVBNM<>~"
+
+def convert_text(text, direction):
+    out = ""
+    for ch in text:
+        if direction == "ru2en":
+            idx = RU_CHARS.find(ch)
+            out = out + (EN_CHARS[idx] if idx >= 0 else ch)
+        elif direction == "en2ru":
+            idx = EN_CHARS.find(ch)
+            out = out + (RU_CHARS[idx] if idx >= 0 else ch)
+    return out
+
+def on_command(ctx):
+    if ctx["command"] != "fix":
+        return None
+    raw = str(ctx["args"]).strip()
+    if not raw:
+        mode = str(fullgram.storage_get("mode", "ru2en"))
+        return {"cancel": True, "toast": f"Формат: .fix <текст> (режим: {mode})"}
+
+    lower_raw = raw.lower()
+    if lower_raw == "mode ru2en":
+        fullgram.storage_set("mode", "ru2en")
+        return {"cancel": True, "toast": "Раскладка .fix: Русский → Английский"}
+    elif lower_raw == "mode en2ru":
+        fullgram.storage_set("mode", "en2ru")
+        return {"cancel": True, "toast": "Раскладка .fix: Английский → Русский"}
+    elif lower_raw == "mode auto":
+        fullgram.storage_set("mode", "auto")
+        return {"cancel": True, "toast": "Раскладка .fix: Авто (Рус ↔ Англ)"}
+
+    mode = str(fullgram.storage_get("mode", "ru2en"))
+    direction = mode
+    if mode == "auto":
+        ru_count = 0
+        en_count = 0
+        for ch in raw:
+            if RU_CHARS.find(ch) >= 0:
+                ru_count = ru_count + 1
+            elif EN_CHARS.find(ch) >= 0:
+                en_count = en_count + 1
+        direction = "ru2en" if ru_count >= en_count else "en2ru"
+
+    return convert_text(raw, direction)
+`
+    },
+    {
+      id: "fg_casino",
+      name: "Казино (.slots / .roulette / .bal)",
+      language: "lua",
+      version: "1.0",
+      author: "FullGram",
+      description: "Слоты (.slots [ставка]), рулетка (.roulette red/black/green [ставка]), монетка (.coin) и баланс фишек (.bal).",
+      code: `-- @name Казино (.slots / .roulette / .bal)
+-- @id fg_casino
+-- @version 1.0
+-- @author FullGram
+-- @description Слоты (.slots [ставка]), рулетка (.roulette red/black/green [ставка]), монетка (.coin) и баланс фишек (.bal)
+
+function get_balance()
+    local b = tonumber(fullgram.storage_get("balance", 1000))
+    if b == nil then return 1000 end
+    return b
+end
+
+function set_balance(val)
+    fullgram.storage_set("balance", val)
+    local best = tonumber(fullgram.storage_get("best_balance", 1000)) or 1000
+    if val > best then
+        fullgram.storage_set("best_balance", val)
+    end
+end
+
+function on_command(ctx)
+    local cmd = ctx.command
+    local args = tostring(ctx.args or "")
+
+    if cmd == "bal" or cmd == "casino" then
+        local bal = get_balance()
+        local best = tonumber(fullgram.storage_get("best_balance", 1000)) or 1000
+        if args == "bonus" or bal < 50 then
+            bal = bal + 1000
+            set_balance(bal)
+            return "🎁 Бонус казино FullGram начислен: +1000 🪙\\n💰 Текущий баланс: " .. tostring(bal) .. " 🪙 (Рекорд: " .. tostring(best) .. " 🪙)"
+        end
+        return "🎰 Казино FullGram\\n💰 Баланс: " .. tostring(bal) .. " 🪙 (Рекорд: " .. tostring(best) .. " 🪙)\\nКоманды: .slots [ставка], .roulette red/black/green [ставка], .coin [ставка], .bal bonus"
+    end
+
+    if cmd == "slots" then
+        local bal = get_balance()
+        if bal <= 0 then
+            bal = 500
+            set_balance(bal)
+        end
+        local bet = tonumber(args) or 100
+        if bet < 10 then bet = 10 end
+        if bet > bal then bet = bal end
+
+        local symbols = {"🍒", "🍋", "🔔", "💎", "7️⃣"}
+        local r1 = math.random(1, 5)
+        local r2 = math.random(1, 5)
+        local r3 = math.random(1, 5)
+        local s1 = symbols[r1]
+        local s2 = symbols[r2]
+        local s3 = symbols[r3]
+
+        local mult = 0
+        local status = "❌ Мимо!"
+        if r1 == 5 and r2 == 5 and r3 == 5 then
+            mult = 15
+            status = "🔥 МЕГА ДЖЕКПОТ 777 (x15)!"
+        elseif r1 == r2 and r2 == r3 then
+            mult = 7
+            status = "🎉 ДЖЕКПОТ 3 В РЯД (x7)!"
+        elseif r1 == r2 or r2 == r3 or r1 == r3 then
+            mult = 2
+            status = "✨ Совпадение 2 из 3 (x2)!"
+        end
+
+        local delta = (mult > 0) and (bet * (mult - 1)) or (-bet)
+        bal = bal + delta
+        set_balance(bal)
+        local sign = (delta >= 0) and ("+" .. tostring(delta)) or tostring(delta)
+
+        return "🎰 Слоты FullGram | Ставка: " .. tostring(bet) .. " 🪙\\n"
+            .. "┏━━━━━━━━━━━┓\\n"
+            .. "┃  " .. s1 .. " │ " .. s2 .. " │ " .. s3 .. "  ┃\\n"
+            .. "┗━━━━━━━━━━━┛\\n"
+            .. status .. " (" .. sign .. " 🪙)\\n"
+            .. "💰 Баланс: " .. tostring(bal) .. " 🪙"
+    end
+
+    if cmd == "roulette" or cmd == "roul" then
+        local bal = get_balance()
+        if bal <= 0 then bal = 500 end
+        local choice = string.lower(ctx.subcommand or "red")
+        local bet_str = string.match(args, "%s+(%d+)$")
+        local bet = tonumber(bet_str) or 100
+        if bet > bal then bet = bal end
+
+        local num = math.random(0, 36)
+        local color = "black"
+        local badge = "⚫️ Чёрное"
+        if num == 0 then
+            color = "green"
+            badge = "🟢 Зеро (0)"
+        elseif num % 2 == 1 then
+            color = "red"
+            badge = "🔴 Красное"
+        end
+
+        local win = false
+        local mult = 2
+        if (choice == "green" or choice == "0" or choice == "зеленое" or choice == "зеро") and color == "green" then
+            win = true
+            mult = 14
+        elseif (choice == "red" or choice == "красное" or choice == "к") and color == "red" then
+            win = true
+        elseif (choice == "black" or choice == "черное" or choice == "ч") and color == "black" then
+            win = true
+        end
+
+        local delta = win and (bet * (mult - 1)) or (-bet)
+        bal = bal + delta
+        set_balance(bal)
+        local outcome = win and ("✅ Выигрыш: +" .. tostring(delta) .. " 🪙") or ("❌ Проигрыш: " .. tostring(delta) .. " 🪙")
+
+        return "🎡 Рулетка FullGram\\nВыпало: " .. badge .. " [" .. tostring(num) .. "]\\n" .. outcome .. "\\n💰 Баланс: " .. tostring(bal) .. " 🪙"
+    end
+
+    if cmd == "coin" then
+        local bal = get_balance()
+        if bal <= 0 then bal = 500 end
+        local bet = tonumber(args) or 100
+        if bet > bal then bet = bal end
+        local side = (math.random(1, 2) == 1) and "🦅 Орёл" or "🪙 Решка"
+        local win = (math.random(1, 2) == 1)
+        local delta = win and bet or (-bet)
+        bal = bal + delta
+        set_balance(bal)
+        local res = win and ("✅ Победа! +" .. tostring(bet) .. " 🪙") or ("❌ Не повезло: -" .. tostring(bet) .. " 🪙")
+        return "🪙 Монетка: выпал " .. side .. "\\n" .. res .. " (Баланс: " .. tostring(bal) .. " 🪙)"
+    end
+
+    return nil
+end
+`
+    },
+    {
+      id: "fg_anti_typos",
+      name: "Анти-опечатки",
+      language: "python",
+      version: "1.0",
+      author: "FullGram",
+      description: "Автоматически исправляет частые клавиатурные опечатки, двойные заглавные буквы и лишние пробелы перед знаками препинания.",
+      code: `# @name Анти-опечатки
+# @id fg_anti_typos
+# @version 1.0
+# @author FullGram
+# @description Автоматически исправляет клавиатурные опечатки, двойные заглавные буквы и пробелы у знаков препинания (без сленг-макросов)
+
+import re
+
+TYPOS = {
+    "привте": "привет",
+    "првиет": "привет",
+    "спсаибо": "спасибо",
+    "спаисбо": "спасибо",
+    "пожалусйта": "пожалуйста",
+    "пожалйста": "пожалуйста",
+    "сегодян": "сегодня",
+    "сейчса": "сейчас",
+    "хороош": "хорошо",
+    "хоршо": "хорошо",
+    "вообщше": "вообще",
+    "вобще": "вообще",
+    "кстти": "кстати",
+    "кстаит": "кстати",
+    "почмеу": "почему",
+    "ничгео": "ничего",
+    "коненчо": "конечно",
+    "протсо": "просто",
+    "толкьо": "только",
+    "склько": "сколько",
+    "извиин": "извини",
+    "поянл": "понял",
+    "будте": "будет",
+    "можте": "может",
+    "делате": "делает",
+    "нраивтся": "нравится",
+    "смотир": "смотри",
+    "каежтся": "кажется"
+}
+
+def fix_word(w):
+    if len(w) >= 3 and w[0] == w[0].upper() and w[1] == w[1].upper() and w[2] == w[2].lower() and w[0] != w[0].lower():
+        w = w[0] + w[1:].lower()
+    low = w.lower()
+    if low in TYPOS:
+        fixed = TYPOS[low]
+        if w[0] == w[0].upper() and w[0] != w[0].lower():
+            return fixed[0].upper() + fixed[1:]
+        return fixed
+    return w
+
+def clean_text(text):
+    if not text or text.startswith("."):
+        return text
+    out = re.sub(r"[ \\t]{2,}", " ", text)
+    out = re.sub(r"\\s+([,.:;!?])", r"\\1", out)
+    words = out.split(" ")
+    res = []
+    for w in words:
+        if not w:
+            continue
+        punct = ""
+        core = w
+        if len(w) > 1 and w[-1] in ",.!?:;":
+            punct = w[-1]
+            core = w[:-1]
+        res.append(fix_word(core) + punct)
+    return " ".join(res)
+
+def on_outgoing_message(ctx):
+    original = str(ctx["text"])
+    if not original or original.startswith("."):
+        return None
+    fixed = clean_text(original)
+    if fixed != original:
+        return fixed
+    return None
+
+def on_command(ctx):
+    if ctx["command"] == "typo":
+        sample = str(ctx["args"]).strip()
+        if sample:
+            return clean_text(sample)
+        return {"cancel": True, "toast": "Анти-опечатки активны! Проверьте: .typo ПРивте , сегодян хороош"}
+    return None
+`
+    },
+    {
+      id: "fg_deadlines",
+      name: "Дедлайны (.dl / .deadline)",
+      language: "python",
+      version: "1.0",
+      author: "FullGram",
+      description: "Управление сроками: .dl add <срок> | <задача>, .dl list, .dl done <№>, .dl send, .dl clear.",
+      code: `# @name Дедлайны (.dl / .deadline)
+# @id fg_deadlines
+# @version 1.0
+# @author FullGram
+# @description Управление сроками: .dl add <срок> | <задача>, .dl list, .dl done <№>, .dl send, .dl clear
+
+import fullgram
+import json
+
+def load_items():
+    raw = str(fullgram.storage_get("dl_json", "[]"))
+    data = json.loads(raw)
+    if data:
+        return data
+    return []
+
+def save_items(items):
+    fullgram.storage_set("dl_json", json.dumps(items))
+
+def format_list(items):
+    if len(items) == 0:
+        return "⏰ Дедлайнов пока нет.\\nДобавьте: .dl add Завтра 18:00 | Сдать проект"
+    lines = ["⏰ Список дедлайнов FullGram:", "━━━━━━━━━━━━━━━━━━━━"]
+    for idx, item in enumerate(items):
+        status = "✅" if item.get("done", False) else "⏳"
+        due = item.get("due", "Без срока")
+        task = item.get("task", "")
+        num = idx + 1
+        lines.append(f"{num}. {status} [{due}] — {task}")
+    return "\\n".join(lines)
+
+def on_command(ctx):
+    cmd = ctx["command"]
+    if cmd != "dl" and cmd != "deadline":
+        return None
+
+    raw = str(ctx["args"]).strip()
+    items = load_items()
+
+    if not raw or raw == "list":
+        return {"cancel": True, "toast": format_list(items)}
+
+    if raw == "send":
+        return format_list(items)
+
+    if raw == "clear":
+        save_items([])
+        return {"cancel": True, "toast": "Все дедлайны очищены."}
+
+    if raw.startswith("done "):
+        idx_str = raw[5:].strip()
+        idx = int(idx_str) - 1
+        if idx >= 0 and idx < len(items):
+            cur = items[idx]
+            updated = []
+            for i, it in enumerate(items):
+                if i == idx:
+                    updated.append({"due": cur.get("due", ""), "task": cur.get("task", ""), "done": True})
+                else:
+                    updated.append(it)
+            save_items(updated)
+            return {"cancel": True, "toast": f"✅ Дедлайн №{idx + 1} выполнен!"}
+        return {"cancel": True, "toast": "Неверный номер дедлайна."}
+
+    if raw.startswith("del "):
+        idx_str = raw[4:].strip()
+        idx = int(idx_str) - 1
+        if idx >= 0 and idx < len(items):
+            updated = []
+            for i, it in enumerate(items):
+                if i != idx:
+                    updated.append(it)
+            save_items(updated)
+            return {"cancel": True, "toast": f"🗑 Дедлайн №{idx + 1} удалён."}
+        return {"cancel": True, "toast": "Неверный номер дедлайна."}
+
+    body = raw[4:].strip() if raw.startswith("add ") else raw
+    due = "Срочно"
+    task = body
+    if "|" in body:
+        parts = body.split("|")
+        due = parts[0].strip()
+        task = parts[1].strip()
+    else:
+        words = body.split(" ")
+        if len(words) >= 2:
+            due = words[0]
+            task = " ".join(words[1:])
+
+    new_list = items + [{"due": due, "task": task, "done": False}]
+    save_items(new_list)
+    return {"cancel": True, "toast": f"⏰ Дедлайн добавлен: [{due}] {task}"}
+`
+    }
+  ]
 };
 
 function jsonResponse(data, status = 200) {
@@ -112,17 +512,22 @@ async function saveBadges(env, badges) {
 }
 
 async function loadPlugins(env) {
-  if (!env.FULLGRAM_KV) return structuredClone(DEFAULT_PLUGINS);
+  const base = structuredClone(DEFAULT_PLUGINS.plugins);
+  if (!env.FULLGRAM_KV) return { version: 1, plugins: base };
   const raw = await env.FULLGRAM_KV.get("plugins.json");
-  if (!raw) return structuredClone(DEFAULT_PLUGINS);
+  if (!raw) return { version: 1, plugins: base };
   try {
     const parsed = JSON.parse(raw);
+    const kvList = Array.isArray(parsed.plugins) ? parsed.plugins : [];
+    const byId = new Map();
+    for (const p of base) byId.set(p.id, p);
+    for (const p of kvList) byId.set(p.id, p);
     return {
       version: parsed.version || 1,
-      plugins: Array.isArray(parsed.plugins) ? parsed.plugins : []
+      plugins: Array.from(byId.values())
     };
   } catch {
-    return structuredClone(DEFAULT_PLUGINS);
+    return { version: 1, plugins: base };
   }
 }
 
@@ -486,7 +891,11 @@ export default {
       if (!id || id.includes("/")) {
         return new Response("Not Found", { status: 404 });
       }
-      const code = await env.FULLGRAM_KV.get(`script:${id}`);
+      let code = await env.FULLGRAM_KV.get(`script:${id}`);
+      if (code == null) {
+        const builtin = DEFAULT_PLUGINS.plugins.find((p) => p.id === id);
+        if (builtin && builtin.code) code = builtin.code;
+      }
       if (code == null) {
         return new Response("Not Found", { status: 404 });
       }
