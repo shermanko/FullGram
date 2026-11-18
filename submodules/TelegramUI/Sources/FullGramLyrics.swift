@@ -31,18 +31,23 @@ enum FullGramLyricsFetcher {
         return URLSession(configuration: config)
     }()
 
+    private static let extRegex = try? NSRegularExpression(pattern: #"\.(mp3|flac|m4a|wav|ogg|aac|opus)$"#, options: .caseInsensitive)
+    private static let tagRegex = try? NSRegularExpression(pattern: #"\s*[\(\[](?:official\s*(?:music\s*)?(?:video|audio|lyric\s*video)|lyrics?|hd|hq|4k|320\s*kbps|prod\.[^\)\]]*)[\)\]]"#, options: .caseInsensitive)
+
+    private static let cacheLock = NSLock()
+    private static var lyricsCache: [String: FullGramLyricsResult] = [:]
+    private static var lyricsCacheOrder: [String] = []
+
     private static func normalizeMetadata(rawTitle: String, rawArtist: String?) -> (title: String, artist: String?) {
         var title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         var artist = rawArtist?.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let extPattern = #"\.(mp3|flac|m4a|wav|ogg|aac|opus)$"#
-        if let extRegex = try? NSRegularExpression(pattern: extPattern, options: .caseInsensitive) {
+        if let extRegex = self.extRegex {
             let ns = title as NSString
             title = extRegex.stringByReplacingMatches(in: title, range: NSRange(location: 0, length: ns.length), withTemplate: "").trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
-        let tagPattern = #"\s*[\(\[](?:official\s*(?:music\s*)?(?:video|audio|lyric\s*video)|lyrics?|hd|hq|4k|320\s*kbps|prod\.[^\)\]]*)[\)\]]"#
-        if let tagRegex = try? NSRegularExpression(pattern: tagPattern, options: .caseInsensitive) {
+        if let tagRegex = self.tagRegex {
             let ns = title as NSString
             title = tagRegex.stringByReplacingMatches(in: title, range: NSRange(location: 0, length: ns.length), withTemplate: "").trimmingCharacters(in: .whitespacesAndNewlines)
         }
@@ -75,6 +80,14 @@ enum FullGramLyricsFetcher {
             return .single(.empty)
         }
         let cleanArtist = normalized.artist
+        let cacheKey = "\(cleanArtist?.lowercased() ?? "")|\(cleanTitle.lowercased())"
+
+        self.cacheLock.lock()
+        if let cached = self.lyricsCache[cacheKey] {
+            self.cacheLock.unlock()
+            return .single(cached)
+        }
+        self.cacheLock.unlock()
 
         return Signal { subscriber in
             var signals: [Signal<FullGramLyricsResult?, NoError>] = []
@@ -100,6 +113,18 @@ enum FullGramLyricsFetcher {
                 let d = sig.startStandalone(next: { item in
                     let decision = state.record(item: item)
                     if let finalResult = decision.finalResult {
+                        if finalResult != .empty {
+                            self.cacheLock.lock()
+                            if self.lyricsCache[cacheKey] == nil {
+                                self.lyricsCacheOrder.append(cacheKey)
+                                if self.lyricsCacheOrder.count > 32 {
+                                    let evict = self.lyricsCacheOrder.removeFirst()
+                                    self.lyricsCache.removeValue(forKey: evict)
+                                }
+                            }
+                            self.lyricsCache[cacheKey] = finalResult
+                            self.cacheLock.unlock()
+                        }
                         subscriber.putNext(finalResult)
                         subscriber.putCompletion()
                         if decision.shouldDisposeOthers {

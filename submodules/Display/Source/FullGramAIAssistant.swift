@@ -45,8 +45,17 @@ public enum FullGramAIProvider: String, CaseIterable, Codable {
 
 public enum FullGramAIKeychain {
     private static let service = "FullGram.AIAssistant.Keys"
+    private static let cacheLock = NSLock()
+    private static var cachedKeys: [FullGramAIProvider: String] = [:]
 
     public static func apiKey(for provider: FullGramAIProvider) -> String {
+        self.cacheLock.lock()
+        if let cached = self.cachedKeys[provider] {
+            self.cacheLock.unlock()
+            return cached
+        }
+        self.cacheLock.unlock()
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: self.service,
@@ -55,16 +64,26 @@ public enum FullGramAIKeychain {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data,
-              let str = String(data: data, encoding: .utf8) else {
-            return ""
+        let resolved: String
+        if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+           let data = result as? Data,
+           let str = String(data: data, encoding: .utf8) {
+            resolved = str
+        } else {
+            resolved = ""
         }
-        return str
+        self.cacheLock.lock()
+        self.cachedKeys[provider] = resolved
+        self.cacheLock.unlock()
+        return resolved
     }
 
     public static func setApiKey(_ value: String, for provider: FullGramAIProvider) {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.cacheLock.lock()
+        self.cachedKeys[provider] = trimmed
+        self.cacheLock.unlock()
+
         let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: self.service,
@@ -189,15 +208,31 @@ public final class FullGramAIStore {
     private let defaults = UserDefaults.standard
     private let lock = NSRecursiveLock()
     private var conversation: [FullGramAIChatMessage] = []
+    private var cachedIsEnabled: Bool?
+    private var cachedProvider: FullGramAIProvider?
+    private var cachedEndpoint: String?
+    private var cachedModelName: String?
 
     private init() {}
 
     public var isEnabled: Bool {
         get {
-            if self.defaults.object(forKey: "fullgram.ai.enabled") == nil { return true }
-            return self.defaults.bool(forKey: "fullgram.ai.enabled")
+            self.lock.lock()
+            if let v = self.cachedIsEnabled {
+                self.lock.unlock()
+                return v
+            }
+            let v = (self.defaults.object(forKey: "fullgram.ai.enabled") == nil)
+                ? true
+                : self.defaults.bool(forKey: "fullgram.ai.enabled")
+            self.cachedIsEnabled = v
+            self.lock.unlock()
+            return v
         }
         set {
+            self.lock.lock()
+            self.cachedIsEnabled = newValue
+            self.lock.unlock()
             self.defaults.set(newValue, forKey: "fullgram.ai.enabled")
             NotificationCenter.default.post(name: FullGramAINotifications.settingsChanged, object: nil)
         }
@@ -205,22 +240,49 @@ public final class FullGramAIStore {
 
     public var provider: FullGramAIProvider {
         get {
-            guard let raw = self.defaults.string(forKey: "fullgram.ai.provider"),
-                  let p = FullGramAIProvider(rawValue: raw) else {
-                return .openAI
+            self.lock.lock()
+            if let v = self.cachedProvider {
+                self.lock.unlock()
+                return v
             }
-            return p
+            let resolved: FullGramAIProvider
+            if let raw = self.defaults.string(forKey: "fullgram.ai.provider"),
+               let p = FullGramAIProvider(rawValue: raw) {
+                resolved = p
+            } else {
+                resolved = .openAI
+            }
+            self.cachedProvider = resolved
+            self.lock.unlock()
+            return resolved
         }
         set {
+            self.lock.lock()
+            self.cachedProvider = newValue
+            self.lock.unlock()
             self.defaults.set(newValue.rawValue, forKey: "fullgram.ai.provider")
             NotificationCenter.default.post(name: FullGramAINotifications.settingsChanged, object: nil)
         }
     }
 
     public var customEndpoint: String {
-        get { return self.defaults.string(forKey: "fullgram.ai.endpoint") ?? "" }
+        get {
+            self.lock.lock()
+            if let v = self.cachedEndpoint {
+                self.lock.unlock()
+                return v
+            }
+            let v = self.defaults.string(forKey: "fullgram.ai.endpoint") ?? ""
+            self.cachedEndpoint = v
+            self.lock.unlock()
+            return v
+        }
         set {
-            self.defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "fullgram.ai.endpoint")
+            let cleaned = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.lock.lock()
+            self.cachedEndpoint = cleaned
+            self.lock.unlock()
+            self.defaults.set(cleaned, forKey: "fullgram.ai.endpoint")
             NotificationCenter.default.post(name: FullGramAINotifications.settingsChanged, object: nil)
         }
     }
@@ -231,9 +293,23 @@ public final class FullGramAIStore {
     }
 
     public var modelName: String {
-        get { return self.defaults.string(forKey: "fullgram.ai.model") ?? "" }
+        get {
+            self.lock.lock()
+            if let v = self.cachedModelName {
+                self.lock.unlock()
+                return v
+            }
+            let v = self.defaults.string(forKey: "fullgram.ai.model") ?? ""
+            self.cachedModelName = v
+            self.lock.unlock()
+            return v
+        }
         set {
-            self.defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "fullgram.ai.model")
+            let cleaned = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.lock.lock()
+            self.cachedModelName = cleaned
+            self.lock.unlock()
+            self.defaults.set(cleaned, forKey: "fullgram.ai.model")
             NotificationCenter.default.post(name: FullGramAINotifications.settingsChanged, object: nil)
         }
     }

@@ -9,9 +9,27 @@ public enum FullGramNoiseReductionMode: String, CaseIterable {
     case aggressive
 
     public static let defaultsKey = "fullgram.media.noiseReductionMode"
+    private static let lock = NSLock()
+    private static var cached: FullGramNoiseReductionMode?
+
     public static var current: FullGramNoiseReductionMode {
-        get { return UserDefaults.standard.string(forKey: defaultsKey).flatMap(Self.init(rawValue:)) ?? .off }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey) }
+        get {
+            self.lock.lock()
+            if let v = self.cached {
+                self.lock.unlock()
+                return v
+            }
+            let v = UserDefaults.standard.string(forKey: defaultsKey).flatMap(Self.init(rawValue:)) ?? .off
+            self.cached = v
+            self.lock.unlock()
+            return v
+        }
+        set {
+            self.lock.lock()
+            self.cached = newValue
+            self.lock.unlock()
+            UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey)
+        }
     }
 
     public var isEnabled: Bool {
@@ -48,9 +66,27 @@ public enum FullGramVoiceMode: String, CaseIterable {
     case custom
 
     public static let defaultsKey = "fullgram.media.voiceMode"
+    private static let lock = NSLock()
+    private static var cached: FullGramVoiceMode?
+
     public static var current: FullGramVoiceMode {
-        get { return UserDefaults.standard.string(forKey: defaultsKey).flatMap(Self.init(rawValue:)) ?? .off }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey) }
+        get {
+            self.lock.lock()
+            if let v = self.cached {
+                self.lock.unlock()
+                return v
+            }
+            let v = UserDefaults.standard.string(forKey: defaultsKey).flatMap(Self.init(rawValue:)) ?? .off
+            self.cached = v
+            self.lock.unlock()
+            return v
+        }
+        set {
+            self.lock.lock()
+            self.cached = newValue
+            self.lock.unlock()
+            UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey)
+        }
     }
 
     public func title(_ ru: Bool) -> String {
@@ -151,9 +187,27 @@ public enum FullGramBleepSound: String, CaseIterable {
     case custom
 
     public static let defaultsKey = "fullgram.media.bleepSound"
+    private static let lock = NSLock()
+    private static var cached: FullGramBleepSound?
+
     public static var current: FullGramBleepSound {
-        get { return UserDefaults.standard.string(forKey: defaultsKey).flatMap(Self.init(rawValue:)) ?? .off }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey) }
+        get {
+            self.lock.lock()
+            if let v = self.cached {
+                self.lock.unlock()
+                return v
+            }
+            let v = UserDefaults.standard.string(forKey: defaultsKey).flatMap(Self.init(rawValue:)) ?? .off
+            self.cached = v
+            self.lock.unlock()
+            return v
+        }
+        set {
+            self.lock.lock()
+            self.cached = newValue
+            self.lock.unlock()
+            UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey)
+        }
     }
 
     public var isEnabled: Bool {
@@ -596,10 +650,26 @@ public enum FullGramMixer {
     private static let enabledKey = "fullgram.media.mixer.enabled"
     private static let gainsKey = "fullgram.media.mixer.gains"
     private static let presetKey = "fullgram.media.mixer.preset"
+    private static let stateLock = NSLock()
+    private static var cachedEnabled: Bool?
+    private static var cachedGains: [Float]?
 
     public static var isEnabled: Bool {
-        get { return UserDefaults.standard.bool(forKey: enabledKey) }
+        get {
+            self.stateLock.lock()
+            if let v = self.cachedEnabled {
+                self.stateLock.unlock()
+                return v
+            }
+            let v = UserDefaults.standard.bool(forKey: enabledKey)
+            self.cachedEnabled = v
+            self.stateLock.unlock()
+            return v
+        }
         set {
+            self.stateLock.lock()
+            self.cachedEnabled = newValue
+            self.stateLock.unlock()
             UserDefaults.standard.set(newValue, forKey: enabledKey)
             NotificationCenter.default.post(name: didChangeNotification, object: nil)
         }
@@ -612,14 +682,27 @@ public enum FullGramMixer {
 
     public static var gains: [Float] {
         get {
-            guard let stored = UserDefaults.standard.array(forKey: gainsKey) as? [NSNumber], stored.count == frequencies.count else {
-                return presets[0].gains
+            self.stateLock.lock()
+            if let v = self.cachedGains {
+                self.stateLock.unlock()
+                return v
             }
-            return stored.map { min(gainRange.upperBound, max(gainRange.lowerBound, $0.floatValue)) }
+            let resolved: [Float]
+            if let stored = UserDefaults.standard.array(forKey: gainsKey) as? [NSNumber], stored.count == frequencies.count {
+                resolved = stored.map { min(gainRange.upperBound, max(gainRange.lowerBound, $0.floatValue)) }
+            } else {
+                resolved = presets[0].gains
+            }
+            self.cachedGains = resolved
+            self.stateLock.unlock()
+            return resolved
         }
         set {
             let clamped = newValue.prefix(frequencies.count).map { min(gainRange.upperBound, max(gainRange.lowerBound, $0)) }
             let padded = clamped + Array(repeating: Float(0.0), count: max(0, frequencies.count - clamped.count))
+            self.stateLock.lock()
+            self.cachedGains = padded
+            self.stateLock.unlock()
             UserDefaults.standard.set(padded.map { NSNumber(value: $0) }, forKey: gainsKey)
             NotificationCenter.default.post(name: didChangeNotification, object: nil)
         }

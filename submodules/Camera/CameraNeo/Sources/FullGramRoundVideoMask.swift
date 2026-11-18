@@ -10,10 +10,12 @@ import Display
 final class FullGramRoundVideoMask {
     private let mask: FullGramRoundMask
     private let context = CIContext(options: [.cacheIntermediates: false])
+    private let faceRequest = VNDetectFaceRectanglesRequest()
     private var faces: [CGRect] = []
     private var frameIndex = 0
     private var cachedEmojiImage: CIImage?
     private var cachedMascotImage: CIImage?
+    private var cachedScaledMascot: (size: CGFloat, image: CIImage)?
 
     static func makeIfEnabled() -> FullGramRoundVideoMask? {
         let mask = FullGramRoundMask.current
@@ -26,12 +28,11 @@ final class FullGramRoundVideoMask {
     }
 
     private func updateFaces(_ buffer: CVPixelBuffer) {
-        let request = VNDetectFaceRectanglesRequest()
         let handler = VNImageRequestHandler(cvPixelBuffer: buffer, options: [:])
-        try? handler.perform([request])
+        try? handler.perform([self.faceRequest])
         let width = CGFloat(CVPixelBufferGetWidth(buffer))
         let height = CGFloat(CVPixelBufferGetHeight(buffer))
-        let found = (request.results ?? []).map { observation -> CGRect in
+        let found = (self.faceRequest.results ?? []).map { observation -> CGRect in
             let box = observation.boundingBox
             return CGRect(
                 x: box.minX * width,
@@ -61,6 +62,10 @@ final class FullGramRoundVideoMask {
     }
 
     private func mascotOverlay(size: CGFloat) -> CIImage? {
+        let targetSide = max(24.0, (size / 4.0).rounded() * 4.0)
+        if let scaled = self.cachedScaledMascot, abs(scaled.size - targetSide) < 2.0 {
+            return scaled.image
+        }
         let base: CIImage?
         if let cached = self.cachedMascotImage {
             base = cached
@@ -76,8 +81,10 @@ final class FullGramRoundVideoMask {
         guard let mascot = base, mascot.extent.width > 0.0, mascot.extent.height > 0.0 else {
             return nil
         }
-        let scale = max(24.0, size) / max(mascot.extent.width, mascot.extent.height)
-        return mascot.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let scale = targetSide / max(mascot.extent.width, mascot.extent.height)
+        let scaledImg = mascot.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        self.cachedScaledMascot = (targetSide, scaledImg)
+        return scaledImg
     }
 
     func renderInPlace(_ buffer: CVPixelBuffer) {
