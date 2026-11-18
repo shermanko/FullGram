@@ -3928,18 +3928,6 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                 if self.fullGramPluginCommandBar == nil && plainText.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(".") {
                     let bar = FullGramPluginCommandBarView(frame: CGRect(x: 8.0, y: 0.0, width: max(120.0, self.bounds.width - 16.0), height: 40.0))
                     bar.onSelectCommand = { [weak self] cmd in
-                        let clean = cmd.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                        if clean == ".casino" {
-                            self?.controller?.updateChatPresentationInterfaceState(animated: false, interactive: true, {
-                                $0.updatedInterfaceState { $0.withUpdatedComposeInputState(ChatTextInputState(inputText: NSAttributedString(string: ""), selectionRange: 0 ..< 0)) }
-                            })
-                            NotificationCenter.default.post(
-                                name: FullGramPluginNotifications.openUIRequested,
-                                object: nil,
-                                userInfo: ["kind": "casino", "pluginId": "fg_casino"]
-                            )
-                            return
-                        }
                         self?.controller?.updateChatPresentationInterfaceState(animated: false, interactive: true, {
                             $0.updatedInterfaceState { $0.withUpdatedComposeInputState(ChatTextInputState(inputText: NSAttributedString(string: cmd), selectionRange: cmd.utf16.count ..< cmd.utf16.count)) }
                         })

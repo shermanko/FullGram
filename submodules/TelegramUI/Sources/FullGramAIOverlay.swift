@@ -1164,12 +1164,6 @@ final class FullGramAIOverlayCoordinator {
         while let next = presenter.presentedViewController, !next.isBeingDismissed {
             presenter = next
         }
-        if let nav = presenter as? UINavigationController {
-            let kind = (spec["kind"] as? String)?.lowercased() ?? (spec["pluginId"] as? String)?.lowercased() ?? ""
-            if (kind.contains("casino") || kind.contains("slots") || kind.contains("roulette")) && (nav.topViewController is FullGramCasinoGUIViewController) {
-                return
-            }
-        }
         if presenter.isBeingDismissed || presenter.isBeingPresented {
             if retryCount < 4 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { [weak self] in
@@ -1180,7 +1174,6 @@ final class FullGramAIOverlayCoordinator {
         }
 
         let kind = (spec["kind"] as? String)?.lowercased() ?? (spec["pluginId"] as? String)?.lowercased() ?? ""
-        let initialTab = (spec["tab"] as? String)?.lowercased()
         let targetPeerId = self.activeChatController()?.chatLocation.peerId ?? self.currentPeerId
 
         let sendToChat: (String) -> Void = { [weak self] text in
@@ -1206,9 +1199,7 @@ final class FullGramAIOverlayCoordinator {
         }
 
         let vc: UIViewController
-        if kind.contains("casino") || kind.contains("slots") || kind.contains("roulette") {
-            vc = FullGramCasinoGUIViewController(initialTab: initialTab, onSendToChat: sendToChat)
-        } else if kind.contains("deadline") || kind.contains("dl") {
+        if kind.contains("deadline") || kind.contains("dl") {
             vc = FullGramDeadlinesGUIViewController(onSendToChat: sendToChat)
         } else {
             vc = FullGramCustomPluginGUIViewController(spec: spec, onSendToChat: sendToChat)
@@ -1228,9 +1219,6 @@ final class FullGramAIOverlayCoordinator {
                 explicitPeerId: peerId,
                 autoSend: true
             )
-        })
-        sheet.addAction(UIAlertAction(title: "🎰 Открыть Казино (Графический UI)", style: .default) { [weak self] _ in
-            self?.presentPluginGUI(spec: ["kind": "casino", "pluginId": "fg_casino"])
         })
         sheet.addAction(UIAlertAction(title: "⏰ Открыть Дедлайны (Графический UI)", style: .default) { [weak self] _ in
             self?.presentPluginGUI(spec: ["kind": "deadlines", "pluginId": "fg_deadlines"])
@@ -1670,1511 +1658,6 @@ func fullGramBuildChatStatsSignal(
 
 // MARK: - Graphical UI Engine for Lua & Python Plugins (`fullgram.open_ui`)
 
-private final class FullGramSpinStepBox: @unchecked Sendable {
-    var value: Int = 0
-}
-
-private final class FullGramCasinoGUIViewController: UIViewController {
-    private enum CasinoBrand: Int, CaseIterable {
-        case beton = 0
-        case pari = 1
-        case fullwin = 2
-        case olymp = 3
-
-        var title: String {
-            switch self {
-            case .beton: return "👑 BETON"
-            case .pari: return "🔥 PARI"
-            case .fullwin: return "💎 FULLWIN"
-            case .olymp: return "⚡ OLYMP"
-            }
-        }
-
-        var subtitle: String {
-            switch self {
-            case .beton: return "BETON CLUB • VIP"
-            case .pari: return "PARI LIVE • CASINO"
-            case .fullwin: return "FULLWIN • ORIGINAL"
-            case .olymp: return "OLYMPUS • ZEUS HALL"
-            }
-        }
-
-        var accentColor: UIColor {
-            switch self {
-            case .beton: return UIColor(rgb: 0x00E676)
-            case .pari: return UIColor(rgb: 0xFFE600)
-            case .fullwin: return UIColor(rgb: 0xAF52DE)
-            case .olymp: return UIColor(rgb: 0xFFD60A)
-            }
-        }
-
-        var buttonTextColor: UIColor {
-            switch self {
-            case .fullwin: return .white
-            case .beton, .pari, .olymp: return .black
-            }
-        }
-
-        var bgColor: UIColor {
-            switch self {
-            case .beton: return UIColor(rgb: 0x0D1311)
-            case .pari: return UIColor(rgb: 0x121212)
-            case .fullwin: return UIColor(rgb: 0x130E1F)
-            case .olymp: return UIColor(rgb: 0x0E1428)
-            }
-        }
-
-        var cardColor: UIColor {
-            switch self {
-            case .beton: return UIColor(rgb: 0x16211D)
-            case .pari: return UIColor(rgb: 0x1D1D21)
-            case .fullwin: return UIColor(rgb: 0x1E1730)
-            case .olymp: return UIColor(rgb: 0x18213D)
-            }
-        }
-    }
-
-    private enum GameTab: Int, CaseIterable {
-        case zeus = 0
-        case dogs = 1
-        case classic = 2
-        case crash = 3
-        case roulette = 4
-        case coin = 5
-
-        var title: String {
-            switch self {
-            case .zeus: return "⚡ Зевс"
-            case .dogs: return "🐶 Собаки"
-            case .classic: return "🎰 3 числа"
-            case .crash: return "🚀 Краш"
-            case .roulette: return "🎡 Рулетка"
-            case .coin: return "🪙 Монетка"
-            }
-        }
-
-        var rtpPercent: String {
-            switch self {
-            case .zeus: return "96.50%"
-            case .dogs: return "96.51%"
-            case .classic: return "96.20%"
-            case .crash: return "97.00%"
-            case .roulette: return "97.30%"
-            case .coin: return "98.00%"
-            }
-        }
-
-        var volatilityLabel: String {
-            switch self {
-            case .zeus, .dogs: return "Высокая (5/5)"
-            case .crash: return "Динамическая"
-            case .classic: return "Средняя (3/5)"
-            case .roulette, .coin: return "Низкая (1/5)"
-            }
-        }
-    }
-
-    private let onSendToChat: (String) -> Void
-    private var currentBrand: CasinoBrand = .beton
-    private var currentTab: GameTab = .zeus
-    private var bet: Int = 100
-    private var anteBetEnabled: Bool = false
-    private var freeSpinsLeft: Int = 0
-    private var bonusGlobalMult: Int = 1
-    private var bonusBetBase: Int = 100
-    private var rouletteChoice: String = "red"
-    private var coinChoice: String = "eagle"
-    private var isSpinning = false
-    private var crashActive = false
-    private var crashMultiplier: Double = 1.0
-    private var crashTarget: Double = 1.0
-    private var crashBet: Int = 0
-    private var crashHistory: [Double] = [1.84, 3.42, 1.00, 6.15, 2.09]
-    private var sessionRounds: Int = 0
-    private var sessionWins: Int = 0
-    private var sessionWagered: Int = 0
-    private var sessionReturned: Int = 0
-    private var spinTimer: Foundation.Timer?
-    private var lastShareSummary: String = ""
-
-    private let headerCard = UIView()
-    private let betCard = UIView()
-    private let balanceLabel = UILabel()
-    private let recordLabel = UILabel()
-    private let rtpBarCard = UIView()
-    private let rtpInfoLabel = UILabel()
-    private let rtpDetailsButton = UIButton(type: .system)
-    private let slotBonusRow = UIStackView()
-    private let anteButton = UIButton(type: .system)
-    private let buyBonusButton = UIButton(type: .system)
-    private let brandScroll = UIScrollView()
-    private let brandStack = UIStackView()
-    private var brandButtons: [CasinoBrand: UIButton] = [:]
-
-    private let modeScroll = UIScrollView()
-    private let modeStack = UIStackView()
-    private var modeButtons: [GameTab: UIButton] = [:]
-
-    private let stageCard = UIView()
-    private let gridContainer = UIView()
-    private var gridCells: [UILabel] = []
-    private let zeusBadgeLabel = UILabel()
-
-    private let classicStack = UIStackView()
-    private var classicReels: [UILabel] = []
-
-    private let crashContainer = UIView()
-    private let crashHistoryLabel = UILabel()
-    private let crashMultLabel = UILabel()
-    private let crashSubLabel = UILabel()
-
-    private let rouletteContainer = UIView()
-    private let rouletteBallLabel = UILabel()
-    private let rouletteChoiceStack = UIStackView()
-    private var rouletteButtons: [String: UIButton] = [:]
-
-    private let coinContainer = UIView()
-    private let coinEmojiLabel = UILabel()
-    private let coinChoiceStack = UIStackView()
-    private var coinButtons: [String: UIButton] = [:]
-
-    private let statusBannerLabel = UILabel()
-    private let betLabel = UILabel()
-    private let spinButton = UIButton(type: .system)
-    private let shareButton = UIButton(type: .system)
-
-    private static let balanceKey = "fullgram.plugin.store.fg_casino.balance"
-    private static let bestKey = "fullgram.plugin.store.fg_casino.best_balance"
-    private static let zeusSymbols = ["💎", "⏳", "🏆", "💍", "👑", "⚡"]
-    private static let zeusWeights: [(symbol: String, weight: Int)] = [
-        ("💎", 30), ("⏳", 23), ("🏆", 18), ("💍", 14), ("👑", 9), ("⚡", 6)
-    ]
-    private static let zeusAnteWeights: [(symbol: String, weight: Int)] = [
-        ("💎", 26), ("⏳", 21), ("🏆", 17), ("💍", 14), ("👑", 10), ("⚡", 12)
-    ]
-    private static let dogSymbols = ["🦴", "🐾", "🎾", "💎", "🐶", "🏠"]
-    private static let dogWeights: [(symbol: String, weight: Int)] = [
-        ("🦴", 27), ("🐾", 22), ("🎾", 18), ("💎", 14), ("🐶", 11), ("🏠", 8)
-    ]
-    private static let dogAnteWeights: [(symbol: String, weight: Int)] = [
-        ("🦴", 23), ("🐾", 20), ("🎾", 17), ("💎", 14), ("🐶", 11), ("🏠", 15)
-    ]
-    private static let classicSymbols = ["🍒", "🍋", "🔔", "💎", "7️⃣"]
-    private static let classicWeights: [(symbol: String, weight: Int)] = [
-        ("🍒", 36), ("🍋", 26), ("🔔", 18), ("💎", 13), ("7️⃣", 7)
-    ]
-
-    private static func pickWeighted(_ table: [(symbol: String, weight: Int)]) -> String {
-        let total = table.reduce(0) { $0 + $1.weight }
-        guard total > 0 else { return table.first?.symbol ?? "💎" }
-        var roll = Int.random(in: 0 ..< total)
-        for item in table {
-            if roll < item.weight { return item.symbol }
-            roll -= item.weight
-        }
-        return table[0].symbol
-    }
-
-    private static func pickZeusOrbMultiplier() -> Int {
-        // Реальное распределение орбов в Gates of Olympus: x2 (48%), x3 (24%), x5 (14%), x10 (8%), x25 (4%), x50 (1.5%), x100 (0.5%)
-        let roll = Int.random(in: 0 ..< 1000)
-        if roll < 480 { return 2 }
-        if roll < 720 { return 3 }
-        if roll < 860 { return 5 }
-        if roll < 940 { return 10 }
-        if roll < 980 { return 25 }
-        if roll < 995 { return 50 }
-        return 100
-    }
-
-    init(initialTab: String?, onSendToChat: @escaping (String) -> Void) {
-        self.onSendToChat = onSendToChat
-        if initialTab == "roulette" {
-            self.currentTab = .roulette
-        } else if initialTab == "coin" {
-            self.currentTab = .coin
-        } else if initialTab == "classic" || initialTab == "slots" {
-            self.currentTab = .classic
-        } else if initialTab == "dogs" {
-            self.currentTab = .dogs
-        } else if initialTab == "crash" {
-            self.currentTab = .crash
-        }
-        super.init(nibName: nil, bundle: nil)
-        self.title = "🎰 Казино FullGram"
-    }
-
-    required init?(coder: NSCoder) { return nil }
-
-    deinit {
-        self.spinTimer?.invalidate()
-    }
-
-    override func viewWillDisappear(_ animated: Bool) {
-        super.viewWillDisappear(animated)
-        self.spinTimer?.invalidate()
-        self.spinTimer = nil
-    }
-
-    private var balance: Int {
-        get {
-            guard UserDefaults.standard.object(forKey: Self.balanceKey) != nil else { return 1000 }
-            return UserDefaults.standard.integer(forKey: Self.balanceKey)
-        }
-        set {
-            UserDefaults.standard.set(newValue, forKey: Self.balanceKey)
-            if newValue > self.bestBalance {
-                self.bestBalance = newValue
-            }
-            self.refreshHeader()
-        }
-    }
-
-    private var bestBalance: Int {
-        get {
-            let v = UserDefaults.standard.integer(forKey: Self.bestKey)
-            return max(1000, v)
-        }
-        set {
-            UserDefaults.standard.set(max(1000, newValue), forKey: Self.bestKey)
-        }
-    }
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Закрыть", style: .plain, target: self, action: #selector(self.closeTapped))
-        self.navigationItem.rightBarButtonItem = UIBarButtonItem(title: "🎁 +1000", style: .plain, target: self, action: #selector(self.bonusTapped))
-
-        let scroll = UIScrollView()
-        scroll.alwaysBounceVertical = true
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        self.view.addSubview(scroll)
-
-        let stack = UIStackView()
-        stack.axis = .vertical
-        stack.spacing = 12.0
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        scroll.addSubview(stack)
-
-        NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.topAnchor),
-            scroll.bottomAnchor.constraint(equalTo: self.view.bottomAnchor),
-            scroll.leadingAnchor.constraint(equalTo: self.view.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: self.view.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 12.0),
-            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -24.0),
-            stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: 14.0),
-            stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -14.0)
-        ])
-
-        // 1. Brand / Casino Style Switcher (BETON / PARI / FULLWIN / OLYMP)
-        self.brandScroll.showsHorizontalScrollIndicator = false
-        self.brandScroll.translatesAutoresizingMaskIntoConstraints = false
-        self.brandScroll.heightAnchor.constraint(equalToConstant: 36.0).isActive = true
-        self.brandStack.axis = .horizontal
-        self.brandStack.spacing = 8.0
-        self.brandStack.translatesAutoresizingMaskIntoConstraints = false
-        self.brandScroll.addSubview(self.brandStack)
-        NSLayoutConstraint.activate([
-            self.brandStack.topAnchor.constraint(equalTo: self.brandScroll.contentLayoutGuide.topAnchor),
-            self.brandStack.bottomAnchor.constraint(equalTo: self.brandScroll.contentLayoutGuide.bottomAnchor),
-            self.brandStack.leadingAnchor.constraint(equalTo: self.brandScroll.contentLayoutGuide.leadingAnchor),
-            self.brandStack.trailingAnchor.constraint(equalTo: self.brandScroll.contentLayoutGuide.trailingAnchor),
-            self.brandStack.heightAnchor.constraint(equalTo: self.brandScroll.frameLayoutGuide.heightAnchor)
-        ])
-        for brand in CasinoBrand.allCases {
-            let b = UIButton(type: .system)
-            b.setTitle("  \(brand.title)  ", for: .normal)
-            b.titleLabel?.font = .systemFont(ofSize: 12.5, weight: .bold)
-            b.layer.cornerRadius = 18.0
-            b.tag = brand.rawValue
-            b.addTarget(self, action: #selector(self.brandTapped(_:)), for: .touchUpInside)
-            self.brandButtons[brand] = b
-            self.brandStack.addArrangedSubview(b)
-        }
-        stack.addArrangedSubview(self.brandScroll)
-
-        // 2. Balance Header Card
-        self.headerCard.layer.cornerRadius = 16.0
-        self.headerCard.layer.borderWidth = 1.0
-        self.balanceLabel.font = .monospacedDigitSystemFont(ofSize: 25.0, weight: .bold)
-        self.balanceLabel.textAlignment = .center
-        self.recordLabel.font = .systemFont(ofSize: 12.5, weight: .semibold)
-        self.recordLabel.textColor = UIColor(white: 0.74, alpha: 1.0)
-        self.recordLabel.textAlignment = .center
-
-        let headerVStack = UIStackView(arrangedSubviews: [self.balanceLabel, self.recordLabel])
-        headerVStack.axis = .vertical
-        headerVStack.spacing = 4.0
-        headerVStack.translatesAutoresizingMaskIntoConstraints = false
-        self.headerCard.addSubview(headerVStack)
-        NSLayoutConstraint.activate([
-            headerVStack.topAnchor.constraint(equalTo: self.headerCard.topAnchor, constant: 12.0),
-            headerVStack.bottomAnchor.constraint(equalTo: self.headerCard.bottomAnchor, constant: -12.0),
-            headerVStack.leadingAnchor.constraint(equalTo: self.headerCard.leadingAnchor, constant: 12.0),
-            headerVStack.trailingAnchor.constraint(equalTo: self.headerCard.trailingAnchor, constant: -12.0)
-        ])
-        stack.addArrangedSubview(self.headerCard)
-
-        // 3. Scrollable Game Mode Bar (Zeus / Dog House / 3 Reels / Crash / Roulette / Coin)
-        self.modeScroll.showsHorizontalScrollIndicator = false
-        self.modeScroll.translatesAutoresizingMaskIntoConstraints = false
-        self.modeScroll.heightAnchor.constraint(equalToConstant: 40.0).isActive = true
-        self.modeStack.axis = .horizontal
-        self.modeStack.spacing = 8.0
-        self.modeStack.translatesAutoresizingMaskIntoConstraints = false
-        self.modeScroll.addSubview(self.modeStack)
-        NSLayoutConstraint.activate([
-            self.modeStack.topAnchor.constraint(equalTo: self.modeScroll.contentLayoutGuide.topAnchor),
-            self.modeStack.bottomAnchor.constraint(equalTo: self.modeScroll.contentLayoutGuide.bottomAnchor),
-            self.modeStack.leadingAnchor.constraint(equalTo: self.modeScroll.contentLayoutGuide.leadingAnchor),
-            self.modeStack.trailingAnchor.constraint(equalTo: self.modeScroll.contentLayoutGuide.trailingAnchor),
-            self.modeStack.heightAnchor.constraint(equalTo: self.modeScroll.frameLayoutGuide.heightAnchor)
-        ])
-        for mode in GameTab.allCases {
-            let b = UIButton(type: .system)
-            b.setTitle("  \(mode.title)  ", for: .normal)
-            b.titleLabel?.font = .systemFont(ofSize: 13.5, weight: .bold)
-            b.layer.cornerRadius = 12.0
-            b.tag = mode.rawValue
-            b.addTarget(self, action: #selector(self.modeTapped(_:)), for: .touchUpInside)
-            self.modeButtons[mode] = b
-            self.modeStack.addArrangedSubview(b)
-        }
-        stack.addArrangedSubview(self.modeScroll)
-
-        // 3.5 Live RTP / House Edge Info Bar
-        self.rtpBarCard.layer.cornerRadius = 10.0
-        self.rtpInfoLabel.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
-        self.rtpInfoLabel.textColor = UIColor(white: 0.85, alpha: 1.0)
-        self.rtpDetailsButton.setTitle("ℹ️ Проценты и выплаты", for: .normal)
-        self.rtpDetailsButton.titleLabel?.font = .systemFont(ofSize: 12.0, weight: .bold)
-        self.rtpDetailsButton.addTarget(self, action: #selector(self.paytableTapped), for: .touchUpInside)
-        let rtpRow = UIStackView(arrangedSubviews: [self.rtpInfoLabel, self.rtpDetailsButton])
-        rtpRow.axis = .horizontal
-        rtpRow.alignment = .center
-        rtpRow.spacing = 8.0
-        rtpRow.translatesAutoresizingMaskIntoConstraints = false
-        self.rtpBarCard.addSubview(rtpRow)
-        NSLayoutConstraint.activate([
-            rtpRow.topAnchor.constraint(equalTo: self.rtpBarCard.topAnchor, constant: 7.0),
-            rtpRow.bottomAnchor.constraint(equalTo: self.rtpBarCard.bottomAnchor, constant: -7.0),
-            rtpRow.leadingAnchor.constraint(equalTo: self.rtpBarCard.leadingAnchor, constant: 12.0),
-            rtpRow.trailingAnchor.constraint(equalTo: self.rtpBarCard.trailingAnchor, constant: -12.0)
-        ])
-        stack.addArrangedSubview(self.rtpBarCard)
-
-        // 4. Stage Card
-        self.stageCard.layer.cornerRadius = 18.0
-        self.stageCard.layer.borderWidth = 1.5
-        self.stageCard.heightAnchor.constraint(equalToConstant: 214.0).isActive = true
-
-        self.setupGridStage()
-        self.setupClassicStage()
-        self.setupCrashStage()
-        self.setupRouletteStage()
-        self.setupCoinStage()
-        stack.addArrangedSubview(self.stageCard)
-
-        // 4.5 Ante Bet (+25% x2 шанс) + Buy Bonus (x100) for Slots
-        self.slotBonusRow.axis = .horizontal
-        self.slotBonusRow.distribution = .fillEqually
-        self.slotBonusRow.spacing = 8.0
-        self.anteButton.titleLabel?.font = .systemFont(ofSize: 12.5, weight: .bold)
-        self.anteButton.layer.cornerRadius = 10.0
-        self.anteButton.layer.borderWidth = 1.2
-        self.anteButton.heightAnchor.constraint(equalToConstant: 36.0).isActive = true
-        self.anteButton.addTarget(self, action: #selector(self.anteTapped), for: .touchUpInside)
-        self.buyBonusButton.setTitle("🎁 Купить бонус (x100)", for: .normal)
-        self.buyBonusButton.titleLabel?.font = .systemFont(ofSize: 12.5, weight: .bold)
-        self.buyBonusButton.backgroundColor = UIColor(rgb: 0xFF9500).withAlphaComponent(0.22)
-        self.buyBonusButton.setTitleColor(UIColor(rgb: 0xFFD60A), for: .normal)
-        self.buyBonusButton.layer.cornerRadius = 10.0
-        self.buyBonusButton.layer.borderWidth = 1.2
-        self.buyBonusButton.layer.borderColor = UIColor(rgb: 0xFF9500).withAlphaComponent(0.65).cgColor
-        self.buyBonusButton.heightAnchor.constraint(equalToConstant: 36.0).isActive = true
-        self.buyBonusButton.addTarget(self, action: #selector(self.buyBonusTapped), for: .touchUpInside)
-        self.slotBonusRow.addArrangedSubview(self.anteButton)
-        self.slotBonusRow.addArrangedSubview(self.buyBonusButton)
-        stack.addArrangedSubview(self.slotBonusRow)
-
-        // 5. Status Banner
-        self.statusBannerLabel.font = .systemFont(ofSize: 14.5, weight: .semibold)
-        self.statusBannerLabel.textColor = .white
-        self.statusBannerLabel.textAlignment = .center
-        self.statusBannerLabel.numberOfLines = 2
-        self.statusBannerLabel.text = "Выберите слот и жмите «КРУТИТЬ»!"
-        stack.addArrangedSubview(self.statusBannerLabel)
-
-        // 6. Bet Controls Card
-        self.betCard.layer.cornerRadius = 14.0
-        self.betLabel.font = .monospacedDigitSystemFont(ofSize: 16.0, weight: .bold)
-        self.betLabel.textColor = .white
-        self.betLabel.textAlignment = .center
-
-        let betBtnsRow = UIStackView()
-        betBtnsRow.axis = .horizontal
-        betBtnsRow.distribution = .fillEqually
-        betBtnsRow.spacing = 6.0
-        let presets: [(String, Int)] = [("50", 50), ("100", 100), ("250", 250), ("1/2", -1), ("x2", -2), ("MAX", -3)]
-        for (title, tagVal) in presets {
-            let b = UIButton(type: .system)
-            b.setTitle(title, for: .normal)
-            b.setTitleColor(.white, for: .normal)
-            b.titleLabel?.font = .systemFont(ofSize: 13.0, weight: .bold)
-            b.backgroundColor = UIColor(white: 1.0, alpha: 0.10)
-            b.layer.cornerRadius = 8.0
-            b.tag = tagVal
-            b.heightAnchor.constraint(equalToConstant: 36.0).isActive = true
-            b.addTarget(self, action: #selector(self.betPresetTapped(_:)), for: .touchUpInside)
-            betBtnsRow.addArrangedSubview(b)
-        }
-
-        let betVStack = UIStackView(arrangedSubviews: [self.betLabel, betBtnsRow])
-        betVStack.axis = .vertical
-        betVStack.spacing = 8.0
-        betVStack.translatesAutoresizingMaskIntoConstraints = false
-        self.betCard.addSubview(betVStack)
-        NSLayoutConstraint.activate([
-            betVStack.topAnchor.constraint(equalTo: self.betCard.topAnchor, constant: 10.0),
-            betVStack.bottomAnchor.constraint(equalTo: self.betCard.bottomAnchor, constant: -10.0),
-            betVStack.leadingAnchor.constraint(equalTo: self.betCard.leadingAnchor, constant: 12.0),
-            betVStack.trailingAnchor.constraint(equalTo: self.betCard.trailingAnchor, constant: -12.0)
-        ])
-        stack.addArrangedSubview(self.betCard)
-
-        // 7. Action & Share Buttons
-        self.spinButton.titleLabel?.font = .systemFont(ofSize: 17.5, weight: .heavy)
-        self.spinButton.layer.cornerRadius = 14.0
-        self.spinButton.heightAnchor.constraint(equalToConstant: 50.0).isActive = true
-        self.spinButton.addTarget(self, action: #selector(self.spinTapped), for: .touchUpInside)
-        stack.addArrangedSubview(self.spinButton)
-
-        self.shareButton.setTitle("📤 Отправить занос в чат", for: .normal)
-        self.shareButton.setTitleColor(.white, for: .normal)
-        self.shareButton.titleLabel?.font = .systemFont(ofSize: 15.0, weight: .semibold)
-        self.shareButton.backgroundColor = UIColor(white: 1.0, alpha: 0.12)
-        self.shareButton.layer.cornerRadius = 12.0
-        self.shareButton.heightAnchor.constraint(equalToConstant: 44.0).isActive = true
-        self.shareButton.isHidden = true
-        self.shareButton.addTarget(self, action: #selector(self.shareTapped), for: .touchUpInside)
-        stack.addArrangedSubview(self.shareButton)
-
-        self.applyBrandTheme()
-        self.refreshHeader()
-        self.updateStageVisibility()
-    }
-
-    private func setupGridStage() {
-        self.gridContainer.translatesAutoresizingMaskIntoConstraints = false
-        self.stageCard.addSubview(self.gridContainer)
-        NSLayoutConstraint.activate([
-            self.gridContainer.topAnchor.constraint(equalTo: self.stageCard.topAnchor, constant: 10.0),
-            self.gridContainer.bottomAnchor.constraint(equalTo: self.stageCard.bottomAnchor, constant: -10.0),
-            self.gridContainer.leadingAnchor.constraint(equalTo: self.stageCard.leadingAnchor, constant: 10.0),
-            self.gridContainer.trailingAnchor.constraint(equalTo: self.stageCard.trailingAnchor, constant: -10.0)
-        ])
-
-        self.zeusBadgeLabel.font = .systemFont(ofSize: 12.0, weight: .heavy)
-        self.zeusBadgeLabel.textAlignment = .center
-        self.zeusBadgeLabel.layer.cornerRadius = 8.0
-        self.zeusBadgeLabel.clipsToBounds = true
-        self.zeusBadgeLabel.translatesAutoresizingMaskIntoConstraints = false
-        self.gridContainer.addSubview(self.zeusBadgeLabel)
-
-        let rowsStack = UIStackView()
-        rowsStack.axis = .vertical
-        rowsStack.distribution = .fillEqually
-        rowsStack.spacing = 6.0
-        rowsStack.translatesAutoresizingMaskIntoConstraints = false
-        self.gridContainer.addSubview(rowsStack)
-
-        NSLayoutConstraint.activate([
-            self.zeusBadgeLabel.topAnchor.constraint(equalTo: self.gridContainer.topAnchor),
-            self.zeusBadgeLabel.leadingAnchor.constraint(equalTo: self.gridContainer.leadingAnchor),
-            self.zeusBadgeLabel.trailingAnchor.constraint(equalTo: self.gridContainer.trailingAnchor),
-            self.zeusBadgeLabel.heightAnchor.constraint(equalToConstant: 24.0),
-            rowsStack.topAnchor.constraint(equalTo: self.zeusBadgeLabel.bottomAnchor, constant: 6.0),
-            rowsStack.bottomAnchor.constraint(equalTo: self.gridContainer.bottomAnchor),
-            rowsStack.leadingAnchor.constraint(equalTo: self.gridContainer.leadingAnchor),
-            rowsStack.trailingAnchor.constraint(equalTo: self.gridContainer.trailingAnchor)
-        ])
-
-        for _ in 0 ..< 3 {
-            let row = UIStackView()
-            row.axis = .horizontal
-            row.distribution = .fillEqually
-            row.spacing = 6.0
-            for _ in 0 ..< 5 {
-                let lbl = UILabel()
-                lbl.font = .systemFont(ofSize: 27.0)
-                lbl.textAlignment = .center
-                lbl.backgroundColor = UIColor(white: 0.0, alpha: 0.32)
-                lbl.layer.cornerRadius = 10.0
-                lbl.layer.borderWidth = 1.0
-                lbl.layer.borderColor = UIColor(white: 1.0, alpha: 0.12).cgColor
-                lbl.clipsToBounds = true
-                lbl.text = "⚡"
-                self.gridCells.append(lbl)
-                row.addArrangedSubview(lbl)
-            }
-            rowsStack.addArrangedSubview(row)
-        }
-    }
-
-    private func setupClassicStage() {
-        self.classicStack.axis = .horizontal
-        self.classicStack.distribution = .fillEqually
-        self.classicStack.spacing = 12.0
-        self.classicStack.translatesAutoresizingMaskIntoConstraints = false
-        self.stageCard.addSubview(self.classicStack)
-        NSLayoutConstraint.activate([
-            self.classicStack.centerYAnchor.constraint(equalTo: self.stageCard.centerYAnchor),
-            self.classicStack.leadingAnchor.constraint(equalTo: self.stageCard.leadingAnchor, constant: 16.0),
-            self.classicStack.trailingAnchor.constraint(equalTo: self.stageCard.trailingAnchor, constant: -16.0),
-            self.classicStack.heightAnchor.constraint(equalToConstant: 126.0)
-        ])
-
-        for _ in 0 ..< 3 {
-            let box = UIView()
-            box.backgroundColor = UIColor(white: 0.0, alpha: 0.38)
-            box.layer.cornerRadius = 14.0
-            box.layer.borderWidth = 2.0
-            box.layer.borderColor = UIColor(rgb: 0xFFD60A).withAlphaComponent(0.55).cgColor
-
-            let lbl = UILabel()
-            lbl.font = .systemFont(ofSize: 52.0)
-            lbl.textAlignment = .center
-            lbl.text = "7️⃣"
-            lbl.translatesAutoresizingMaskIntoConstraints = false
-            box.addSubview(lbl)
-            NSLayoutConstraint.activate([
-                lbl.centerXAnchor.constraint(equalTo: box.centerXAnchor),
-                lbl.centerYAnchor.constraint(equalTo: box.centerYAnchor)
-            ])
-            self.classicReels.append(lbl)
-            self.classicStack.addArrangedSubview(box)
-        }
-    }
-
-    private func setupCrashStage() {
-        self.crashContainer.translatesAutoresizingMaskIntoConstraints = false
-        self.stageCard.addSubview(self.crashContainer)
-        NSLayoutConstraint.activate([
-            self.crashContainer.topAnchor.constraint(equalTo: self.stageCard.topAnchor, constant: 14.0),
-            self.crashContainer.bottomAnchor.constraint(equalTo: self.stageCard.bottomAnchor, constant: -14.0),
-            self.crashContainer.leadingAnchor.constraint(equalTo: self.stageCard.leadingAnchor, constant: 14.0),
-            self.crashContainer.trailingAnchor.constraint(equalTo: self.stageCard.trailingAnchor, constant: -14.0)
-        ])
-
-        self.crashHistoryLabel.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .bold)
-        self.crashHistoryLabel.textAlignment = .center
-        self.crashHistoryLabel.textColor = UIColor(white: 0.72, alpha: 1.0)
-        self.crashHistoryLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        self.crashMultLabel.font = .monospacedDigitSystemFont(ofSize: 48.0, weight: .heavy)
-        self.crashMultLabel.textAlignment = .center
-        self.crashMultLabel.text = "🚀 1.00x"
-        self.crashMultLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        self.crashSubLabel.font = .systemFont(ofSize: 13.0, weight: .semibold)
-        self.crashSubLabel.textColor = UIColor(white: 0.78, alpha: 1.0)
-        self.crashSubLabel.textAlignment = .center
-        self.crashSubLabel.text = "RTP 97% · Краш 3% на старте · до x100"
-        self.crashSubLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        let v = UIStackView(arrangedSubviews: [self.crashHistoryLabel, self.crashMultLabel, self.crashSubLabel])
-        v.axis = .vertical
-        v.spacing = 10.0
-        v.translatesAutoresizingMaskIntoConstraints = false
-        self.crashContainer.addSubview(v)
-        NSLayoutConstraint.activate([
-            v.centerYAnchor.constraint(equalTo: self.crashContainer.centerYAnchor),
-            v.leadingAnchor.constraint(equalTo: self.crashContainer.leadingAnchor),
-            v.trailingAnchor.constraint(equalTo: self.crashContainer.trailingAnchor)
-        ])
-    }
-
-    private func setupRouletteStage() {
-        self.rouletteContainer.translatesAutoresizingMaskIntoConstraints = false
-        self.stageCard.addSubview(self.rouletteContainer)
-        NSLayoutConstraint.activate([
-            self.rouletteContainer.topAnchor.constraint(equalTo: self.stageCard.topAnchor, constant: 16.0),
-            self.rouletteContainer.bottomAnchor.constraint(equalTo: self.stageCard.bottomAnchor, constant: -16.0),
-            self.rouletteContainer.leadingAnchor.constraint(equalTo: self.stageCard.leadingAnchor, constant: 16.0),
-            self.rouletteContainer.trailingAnchor.constraint(equalTo: self.stageCard.trailingAnchor, constant: -16.0)
-        ])
-
-        self.rouletteBallLabel.font = .monospacedDigitSystemFont(ofSize: 34.0, weight: .heavy)
-        self.rouletteBallLabel.textColor = .white
-        self.rouletteBallLabel.textAlignment = .center
-        self.rouletteBallLabel.text = "🎡 0 🟢"
-        self.rouletteBallLabel.backgroundColor = UIColor(white: 0.0, alpha: 0.35)
-        self.rouletteBallLabel.layer.cornerRadius = 14.0
-        self.rouletteBallLabel.clipsToBounds = true
-        self.rouletteBallLabel.heightAnchor.constraint(equalToConstant: 94.0).isActive = true
-
-        self.rouletteChoiceStack.axis = .horizontal
-        self.rouletteChoiceStack.distribution = .fillEqually
-        self.rouletteChoiceStack.spacing = 8.0
-        let choices: [(String, String, UIColor)] = [
-            ("red", "🔴 48.6% (x2)", UIColor(rgb: 0xE53935)),
-            ("green", "🟢 2.7% (x36)", UIColor(rgb: 0x2E7D32)),
-            ("black", "⚫️ 48.6% (x2)", UIColor(rgb: 0x262936))
-        ]
-        for (id, title, color) in choices {
-            let b = UIButton(type: .system)
-            b.setTitle(title, for: .normal)
-            b.setTitleColor(.white, for: .normal)
-            b.titleLabel?.font = .systemFont(ofSize: 13.0, weight: .bold)
-            b.backgroundColor = color
-            b.layer.cornerRadius = 10.0
-            b.heightAnchor.constraint(equalToConstant: 44.0).isActive = true
-            b.accessibilityIdentifier = id
-            b.addTarget(self, action: #selector(self.rouletteChoiceTapped(_:)), for: .touchUpInside)
-            self.rouletteButtons[id] = b
-            self.rouletteChoiceStack.addArrangedSubview(b)
-        }
-
-        let v = UIStackView(arrangedSubviews: [self.rouletteBallLabel, self.rouletteChoiceStack])
-        v.axis = .vertical
-        v.spacing = 14.0
-        v.translatesAutoresizingMaskIntoConstraints = false
-        self.rouletteContainer.addSubview(v)
-        NSLayoutConstraint.activate([
-            v.centerYAnchor.constraint(equalTo: self.rouletteContainer.centerYAnchor),
-            v.leadingAnchor.constraint(equalTo: self.rouletteContainer.leadingAnchor),
-            v.trailingAnchor.constraint(equalTo: self.rouletteContainer.trailingAnchor)
-        ])
-        self.highlightRouletteChoice()
-    }
-
-    private func setupCoinStage() {
-        self.coinContainer.translatesAutoresizingMaskIntoConstraints = false
-        self.stageCard.addSubview(self.coinContainer)
-        NSLayoutConstraint.activate([
-            self.coinContainer.topAnchor.constraint(equalTo: self.stageCard.topAnchor, constant: 16.0),
-            self.coinContainer.bottomAnchor.constraint(equalTo: self.stageCard.bottomAnchor, constant: -16.0),
-            self.coinContainer.leadingAnchor.constraint(equalTo: self.stageCard.leadingAnchor, constant: 16.0),
-            self.coinContainer.trailingAnchor.constraint(equalTo: self.stageCard.trailingAnchor, constant: -16.0)
-        ])
-
-        self.coinEmojiLabel.font = .systemFont(ofSize: 32.0, weight: .heavy)
-        self.coinEmojiLabel.textColor = UIColor(rgb: 0xFFD60A)
-        self.coinEmojiLabel.textAlignment = .center
-        self.coinEmojiLabel.text = "🦅 ОРЁЛ"
-        self.coinEmojiLabel.backgroundColor = UIColor(white: 0.0, alpha: 0.35)
-        self.coinEmojiLabel.layer.cornerRadius = 14.0
-        self.coinEmojiLabel.clipsToBounds = true
-        self.coinEmojiLabel.heightAnchor.constraint(equalToConstant: 94.0).isActive = true
-
-        self.coinChoiceStack.axis = .horizontal
-        self.coinChoiceStack.distribution = .fillEqually
-        self.coinChoiceStack.spacing = 10.0
-        let sides: [(String, String)] = [("eagle", "🦅 Орёл · 49% (x2)"), ("tails", "🪙 Решка · 49% (x2)")]
-        for (id, title) in sides {
-            let b = UIButton(type: .system)
-            b.setTitle(title, for: .normal)
-            b.setTitleColor(.white, for: .normal)
-            b.titleLabel?.font = .systemFont(ofSize: 14.0, weight: .bold)
-            b.backgroundColor = UIColor(white: 1.0, alpha: 0.12)
-            b.layer.cornerRadius = 10.0
-            b.heightAnchor.constraint(equalToConstant: 44.0).isActive = true
-            b.accessibilityIdentifier = id
-            b.addTarget(self, action: #selector(self.coinChoiceTapped(_:)), for: .touchUpInside)
-            self.coinButtons[id] = b
-            self.coinChoiceStack.addArrangedSubview(b)
-        }
-
-        let v = UIStackView(arrangedSubviews: [self.coinEmojiLabel, self.coinChoiceStack])
-        v.axis = .vertical
-        v.spacing = 14.0
-        v.translatesAutoresizingMaskIntoConstraints = false
-        self.coinContainer.addSubview(v)
-        NSLayoutConstraint.activate([
-            v.centerYAnchor.constraint(equalTo: self.coinContainer.centerYAnchor),
-            v.leadingAnchor.constraint(equalTo: self.coinContainer.leadingAnchor),
-            v.trailingAnchor.constraint(equalTo: self.coinContainer.trailingAnchor)
-        ])
-        self.highlightCoinChoice()
-    }
-
-    private func applyBrandTheme() {
-        let brand = self.currentBrand
-        let accent = brand.accentColor
-        self.view.backgroundColor = brand.bgColor
-        self.headerCard.backgroundColor = brand.cardColor
-        self.headerCard.layer.borderColor = accent.withAlphaComponent(0.40).cgColor
-        self.rtpBarCard.backgroundColor = brand.cardColor
-        self.rtpDetailsButton.setTitleColor(accent, for: .normal)
-        self.balanceLabel.textColor = accent
-        self.stageCard.backgroundColor = brand.cardColor
-        self.stageCard.layer.borderColor = accent.withAlphaComponent(0.55).cgColor
-        self.betCard.backgroundColor = brand.cardColor
-        self.crashMultLabel.textColor = accent
-        self.spinButton.backgroundColor = accent
-        self.spinButton.setTitleColor(brand.buttonTextColor, for: .normal)
-
-        for (b, btn) in self.brandButtons {
-            let active = (b == brand)
-            btn.backgroundColor = active ? accent : brand.cardColor
-            btn.setTitleColor(active ? brand.buttonTextColor : .white, for: .normal)
-        }
-        for (m, btn) in self.modeButtons {
-            let active = (m == self.currentTab)
-            btn.backgroundColor = active ? accent : brand.cardColor
-            btn.setTitleColor(active ? brand.buttonTextColor : .white, for: .normal)
-        }
-        self.refreshHeader()
-        self.refreshAnteButton()
-    }
-
-    private func highlightRouletteChoice() {
-        for (id, btn) in self.rouletteButtons {
-            btn.layer.borderWidth = (id == self.rouletteChoice) ? 2.5 : 0.0
-            btn.layer.borderColor = UIColor(rgb: 0xFFD60A).cgColor
-        }
-    }
-
-    private func highlightCoinChoice() {
-        for (id, btn) in self.coinButtons {
-            btn.layer.borderWidth = (id == self.coinChoice) ? 2.5 : 0.0
-            btn.layer.borderColor = UIColor(rgb: 0xFFD60A).cgColor
-        }
-    }
-
-    private func effectiveBet() -> Int {
-        if (self.currentTab == .zeus || self.currentTab == .dogs) && self.anteBetEnabled {
-            return Int((Double(self.bet) * 1.25).rounded())
-        }
-        return self.bet
-    }
-
-    private func refreshAnteButton() {
-        if self.anteBetEnabled {
-            self.anteButton.setTitle("⚡ Шанс x2: ВКЛ (+25%)", for: .normal)
-            self.anteButton.backgroundColor = self.currentBrand.accentColor.withAlphaComponent(0.24)
-            self.anteButton.setTitleColor(self.currentBrand.accentColor, for: .normal)
-            self.anteButton.layer.borderColor = self.currentBrand.accentColor.cgColor
-        } else {
-            self.anteButton.setTitle("⚡ Шанс x2 (Ante +25%)", for: .normal)
-            self.anteButton.backgroundColor = self.currentBrand.cardColor
-            self.anteButton.setTitleColor(UIColor(white: 0.85, alpha: 1.0), for: .normal)
-            self.anteButton.layer.borderColor = UIColor(white: 1.0, alpha: 0.18).cgColor
-        }
-        self.buyBonusButton.setTitle("🎁 Бонус \(self.bet * 100) 🪙", for: .normal)
-    }
-
-    private func refreshHeader() {
-        let bal = self.balance
-        let best = self.bestBalance
-        self.balanceLabel.text = "💰 \(bal) 🪙"
-        let winRate = self.sessionRounds > 0 ? Int((Double(self.sessionWins) / Double(self.sessionRounds) * 100.0).rounded()) : 0
-        self.recordLabel.text = "\(self.currentBrand.subtitle) · 🏆 \(best) 🪙 · Винрейт \(winRate)%"
-        self.bet = max(10, min(max(10, bal), self.bet))
-        let eff = self.effectiveBet()
-        self.betLabel.text = (eff != self.bet) ? "Ставка: \(self.bet) → \(eff) 🪙 (Ante)" : "Ставка: \(self.bet) 🪙"
-        self.rtpInfoLabel.text = "📊 RTP \(self.currentTab.rtpPercent) · \(self.currentTab.volatilityLabel)"
-        self.refreshAnteButton()
-    }
-
-    private func refreshCrashHistory() {
-        let text = self.crashHistory.prefix(5).map { String(format: "%.2fx", $0) }.joined(separator: "  ·  ")
-        self.crashHistoryLabel.text = "История: " + text
-    }
-
-    private func updateStageVisibility() {
-        let isGrid = (self.currentTab == .zeus || self.currentTab == .dogs)
-        self.gridContainer.isHidden = !isGrid
-        self.slotBonusRow.isHidden = !isGrid
-        self.classicStack.isHidden = (self.currentTab != .classic)
-        self.crashContainer.isHidden = (self.currentTab != .crash)
-        self.rouletteContainer.isHidden = (self.currentTab != .roulette)
-        self.coinContainer.isHidden = (self.currentTab != .coin)
-
-        let accent = self.currentBrand.accentColor
-        for (m, btn) in self.modeButtons {
-            let active = (m == self.currentTab)
-            btn.backgroundColor = active ? accent : self.currentBrand.cardColor
-            btn.setTitleColor(active ? self.currentBrand.buttonTextColor : .white, for: .normal)
-        }
-
-        switch self.currentTab {
-        case .zeus:
-            if self.freeSpinsLeft > 0 {
-                self.zeusBadgeLabel.text = "🎁 БОНУС: \(self.freeSpinsLeft) FS · МНОЖИТЕЛЬ x\(self.bonusGlobalMult)"
-            } else {
-                self.zeusBadgeLabel.text = "⚡ GATES OF OLYMPUS · RTP 96.50% · ОРБЫ ДО x100"
-            }
-            self.zeusBadgeLabel.backgroundColor = UIColor(rgb: 0xFFD60A).withAlphaComponent(0.18)
-            self.zeusBadgeLabel.textColor = UIColor(rgb: 0xFFD60A)
-            for (idx, cell) in self.gridCells.enumerated() {
-                cell.text = Self.zeusSymbols[idx % Self.zeusSymbols.count]
-                cell.layer.borderColor = UIColor(white: 1.0, alpha: 0.14).cgColor
-            }
-            self.spinButton.setTitle(self.freeSpinsLeft > 0 ? "⚡ ФРИСПИН (\(self.freeSpinsLeft))" : "⚡ КРУТИТЬ ЗЕВСА", for: .normal)
-        case .dogs:
-            if self.freeSpinsLeft > 0 {
-                self.zeusBadgeLabel.text = "🎁 БОНУС СОБАК: \(self.freeSpinsLeft) FS · ЛИПКИЕ БУДКИ 🏠"
-            } else {
-                self.zeusBadgeLabel.text = "🐶 THE DOG HOUSE · RTP 96.51% · WILD 🏠 x2/x3"
-            }
-            self.zeusBadgeLabel.backgroundColor = UIColor(rgb: 0xFF9500).withAlphaComponent(0.20)
-            self.zeusBadgeLabel.textColor = UIColor(rgb: 0xFF9500)
-            for (idx, cell) in self.gridCells.enumerated() {
-                cell.text = Self.dogSymbols[idx % Self.dogSymbols.count]
-                cell.layer.borderColor = UIColor(white: 1.0, alpha: 0.14).cgColor
-            }
-            self.spinButton.setTitle(self.freeSpinsLeft > 0 ? "🐶 ФРИСПИН (\(self.freeSpinsLeft))" : "🐶 КРУТИТЬ СОБАК", for: .normal)
-        case .classic:
-            self.spinButton.setTitle("🎰 КРУТИТЬ 3 ЧИСЛА", for: .normal)
-        case .crash:
-            self.refreshCrashHistory()
-            self.crashMultLabel.text = "🚀 1.00x"
-            self.crashSubLabel.text = "RTP 97.00% · Инста-краш 3% · забирай до взрыва"
-            self.spinButton.setTitle("🚀 СТАРТ РАКЕТЫ", for: .normal)
-        case .roulette:
-            self.spinButton.setTitle("🎡 ЗАПУСТИТЬ РУЛЕТКУ", for: .normal)
-        case .coin:
-            self.spinButton.setTitle("🪙 ПОДБРОСИТЬ МОНЕТКУ", for: .normal)
-        }
-        self.refreshHeader()
-    }
-
-    @objc private func closeTapped() {
-        self.spinTimer?.invalidate()
-        self.dismiss(animated: true)
-    }
-
-    @objc private func bonusTapped() {
-        let prev = self.balance
-        _ = FullGramPluginManager.shared.dispatchUIEvent(pluginId: "fg_casino", action: "bonus")
-        if self.balance == prev {
-            self.balance = prev + 1000
-        } else {
-            self.refreshHeader()
-        }
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
-        self.statusBannerLabel.text = "🎁 Начислен бонус +1000 🪙!"
-    }
-
-    @objc private func anteTapped() {
-        guard !self.isSpinning, !self.crashActive, self.freeSpinsLeft == 0 else { return }
-        self.anteBetEnabled.toggle()
-        self.refreshHeader()
-    }
-
-    @objc private func buyBonusTapped() {
-        guard !self.isSpinning, !self.crashActive else { return }
-        let cost = self.bet * 100
-        guard self.balance >= cost else {
-            UINotificationFeedbackGenerator().notificationOccurred(.error)
-            self.statusBannerLabel.text = "❌ Нужно \(cost) 🪙 для покупки бонуса (x100 ставки)"
-            return
-        }
-        self.balance -= cost
-        self.sessionWagered += cost
-        self.bonusBetBase = self.bet
-        self.freeSpinsLeft = 10
-        self.bonusGlobalMult = 1
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
-        self.statusBannerLabel.text = "🎁 БОНУС КУПЛЕН! 10 ФРИСПИНОВ по ставке \(self.bonusBetBase) 🪙!"
-        self.updateStageVisibility()
-    }
-
-    @objc private func paytableTapped() {
-        let sessRTP = self.sessionWagered > 0
-            ? String(format: "%.1f%%", Double(self.sessionReturned) / Double(self.sessionWagered) * 100.0)
-            : "—"
-        let winPct = self.sessionRounds > 0
-            ? String(format: "%.1f%%", Double(self.sessionWins) / Double(self.sessionRounds) * 100.0)
-            : "—"
-        let details: String
-        switch self.currentTab {
-        case .zeus:
-            details = """
-RTP: 96.50% | Волатильность: Высокая (5/5)
-
-Шансы символов (сетка 5×3):
-• 💎 Кристалл — 30% (x0.5–x2)
-• ⏳ Песочные часы — 23% (x0.8–x4)
-• 🏆 Кубок — 18% (x1.2–x6)
-• 💍 Кольцо — 14% (x2–x10)
-• 👑 Корона — 9% (x4–x20)
-• ⚡ Зевс Scatter/Orb — 6% (12% с Ante +25%)
-
-Орбы множителей Зевса:
-x2 (48%), x3 (24%), x5 (14%), x10 (8%), x25 (4%), x50 (1.5%), x100 (0.5%)
-• 4+ ⚡ запускают 10 Фриспинов с накопительным множителем!
-"""
-        case .dogs:
-            details = """
-RTP: 96.51% | Волатильность: Высокая (5/5)
-
-Шансы символов (5×3, линии):
-• 🦴 Косточка — 27%
-• 🐾 Лапка — 22%
-• 🎾 Мячик — 18%
-• 💎 Ошейник — 14%
-• 🐶 Ротвейлер — 11% (топ символ)
-• 🏠 Будка Wild — 8% (15% с Ante +25%), несёт x2 (70%) или x3 (30%)
-
-• 4+ 🏠 запускают 10 Фриспинов!
-"""
-        case .classic:
-            details = """
-RTP: 96.20% | Волатильность: Средняя (3/5)
-
-Шансы барабанов:
-• 🍒 Вишня — 36% (3 в ряд: x3)
-• 🍋 Лимон — 26% (3 в ряд: x5)
-• 🔔 Колокол — 18% (3 в ряд: x8)
-• 💎 Алмаз — 13% (3 в ряд: x15, 2: x2)
-• 7️⃣ Семёрка — 7% (777 Джекпот: x50, две 7️⃣: x3)
-• Любая другая пара — x1.2
-"""
-        case .crash:
-            details = """
-RTP: 97.00% | Преимущество зала: 3.00%
-
-Вероятность долететь до множителя:
-• x1.00 (Мгновенный краш): 3.0%
-• x1.50+: 64.7%
-• x2.00+: 48.5%
-• x3.00+: 32.3%
-• x5.00+: 19.4%
-• x10.00+: 9.7%
-• Максимум: x100.00
-"""
-        case .roulette:
-            details = """
-Европейская рулетка (37 секторов, RTP 97.30%)
-Преимущество зала: 2.70% (1 зеро)
-
-• 🔴 Красное (18/37): шанс 48.65% → выплата x2 (1:1)
-• ⚫️ Чёрное (18/37): шанс 48.65% → выплата x2 (1:1)
-• 🟢 Зеро [0] (1/37): шанс 2.70% → выплата x36 (35:1)
-"""
-        case .coin:
-            details = """
-Монетка Coin Flip (RTP 98.00%)
-Преимущество зала: 2.00%
-
-• 🦅 Орёл — шанс победы 49.00% → выплата x2
-• 🪙 Решка — шанс победы 49.00% → выплата x2
-"""
-        }
-        let sessionBlock = "\nСессия: раундов \(self.sessionRounds) · побед \(winPct) · RTP сессии \(sessRTP)"
-        let alert = UIAlertController(title: "\(self.currentTab.title) — Проценты и выплаты", message: details + sessionBlock, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "Понятно", style: .default))
-        self.present(alert, animated: true)
-    }
-
-    @objc private func brandTapped(_ sender: UIButton) {
-        guard !self.isSpinning, !self.crashActive, let brand = CasinoBrand(rawValue: sender.tag) else { return }
-        self.currentBrand = brand
-        self.applyBrandTheme()
-    }
-
-    @objc private func modeTapped(_ sender: UIButton) {
-        guard !self.isSpinning, !self.crashActive, let tab = GameTab(rawValue: sender.tag) else { return }
-        self.currentTab = tab
-        self.updateStageVisibility()
-    }
-
-    @objc private func rouletteChoiceTapped(_ sender: UIButton) {
-        guard !self.isSpinning, let id = sender.accessibilityIdentifier else { return }
-        self.rouletteChoice = id
-        self.highlightRouletteChoice()
-    }
-
-    @objc private func coinChoiceTapped(_ sender: UIButton) {
-        guard !self.isSpinning, let id = sender.accessibilityIdentifier else { return }
-        self.coinChoice = id
-        self.highlightCoinChoice()
-    }
-
-    @objc private func betPresetTapped(_ sender: UIButton) {
-        guard !self.isSpinning, !self.crashActive else { return }
-        let bal = max(10, self.balance)
-        switch sender.tag {
-        case -1: self.bet = max(10, self.bet / 2)
-        case -2: self.bet = min(bal, self.bet * 2)
-        case -3: self.bet = bal
-        default: self.bet = min(bal, max(10, sender.tag))
-        }
-        self.refreshHeader()
-    }
-
-    @objc private func spinTapped() {
-        if self.currentTab == .crash && self.crashActive {
-            self.cashOutCrash()
-            return
-        }
-        guard !self.isSpinning else { return }
-        let isFreeSpin = (self.currentTab == .zeus || self.currentTab == .dogs) && self.freeSpinsLeft > 0
-        if !isFreeSpin && self.balance < 10 {
-            self.balance = 500
-            self.statusBannerLabel.text = "🎁 Фрибет-пополнение: +500 🪙!"
-        }
-        let baseBet = isFreeSpin ? self.bonusBetBase : min(self.balance, max(10, self.bet))
-        if !isFreeSpin { self.bet = baseBet }
-        let spinCost = isFreeSpin ? 0 : min(self.balance, self.effectiveBet())
-
-        let impact = UIImpactFeedbackGenerator(style: .medium)
-        impact.prepare()
-
-        if self.currentTab == .crash {
-            self.startCrashRound(bet: baseBet, impact: impact)
-            return
-        }
-
-        self.isSpinning = true
-        self.spinButton.isEnabled = false
-        self.spinButton.alpha = 0.6
-
-        let stepBox = FullGramSpinStepBox()
-        switch self.currentTab {
-        case .zeus, .dogs:
-            let isZeus = (self.currentTab == .zeus)
-            let weights: [(symbol: String, weight: Int)]
-            if isZeus {
-                weights = (self.anteBetEnabled || isFreeSpin) ? Self.zeusAnteWeights : Self.zeusWeights
-            } else {
-                weights = (self.anteBetEnabled || isFreeSpin) ? Self.dogAnteWeights : Self.dogWeights
-            }
-            let pool = isZeus ? Self.zeusSymbols : Self.dogSymbols
-            let finalGrid = (0 ..< 15).map { _ in Self.pickWeighted(weights) }
-            if !isFreeSpin {
-                self.balance -= spinCost
-                self.sessionWagered += spinCost
-            } else {
-                self.freeSpinsLeft -= 1
-            }
-            self.sessionRounds += 1
-            for cell in self.gridCells {
-                cell.layer.borderColor = UIColor(white: 1.0, alpha: 0.14).cgColor
-            }
-            self.spinTimer?.invalidate()
-            self.spinTimer = Foundation.Timer.scheduledTimer(withTimeInterval: 0.055, repeats: true) { [weak self] timer in
-                guard let self else { timer.invalidate(); return }
-                stepBox.value += 1
-                let step = stepBox.value
-                let lockedCols = min(5, step / 4)
-                for r in 0 ..< 3 {
-                    for c in 0 ..< 5 {
-                        let idx = r * 5 + c
-                        guard idx < self.gridCells.count else { continue }
-                        if c < lockedCols {
-                            self.gridCells[idx].text = finalGrid[idx]
-                        } else {
-                            self.gridCells[idx].text = pool.randomElement() ?? "💎"
-                        }
-                    }
-                }
-                if step % 4 == 0 { impact.impactOccurred() }
-                if step >= 22 {
-                    timer.invalidate()
-                    for idx in 0 ..< min(15, self.gridCells.count) {
-                        self.gridCells[idx].text = finalGrid[idx]
-                    }
-                    self.finishGridSpin(isZeus: isZeus, isFreeSpin: isFreeSpin, grid: finalGrid, baseBet: baseBet, spinCost: spinCost)
-                }
-            }
-
-        case .classic:
-            let finalIdx = (0 ..< 3).map { _ in
-                let sym = Self.pickWeighted(Self.classicWeights)
-                return Self.classicSymbols.firstIndex(of: sym) ?? 0
-            }
-            self.sessionRounds += 1
-            self.sessionWagered += baseBet
-            self.spinTimer?.invalidate()
-            self.spinTimer = Foundation.Timer.scheduledTimer(withTimeInterval: 0.06, repeats: true) { [weak self] timer in
-                guard let self else { timer.invalidate(); return }
-                stepBox.value += 1
-                let step = stepBox.value
-                if step < 10 {
-                    self.classicReels[0].text = Self.classicSymbols.randomElement()
-                } else if step == 10 {
-                    self.classicReels[0].text = Self.classicSymbols[finalIdx[0]]
-                    impact.impactOccurred()
-                }
-                if step < 16 {
-                    self.classicReels[1].text = Self.classicSymbols.randomElement()
-                } else if step == 16 {
-                    self.classicReels[1].text = Self.classicSymbols[finalIdx[1]]
-                    impact.impactOccurred()
-                }
-                if step < 22 {
-                    self.classicReels[2].text = Self.classicSymbols.randomElement()
-                } else {
-                    timer.invalidate()
-                    self.classicReels[2].text = Self.classicSymbols[finalIdx[2]]
-                    impact.impactOccurred()
-                    self.finishSlotsSpin(finalIdx: finalIdx, bet: baseBet)
-                }
-            }
-
-        case .roulette:
-            let targetNum = Int.random(in: 0 ... 36)
-            self.sessionRounds += 1
-            self.sessionWagered += baseBet
-            self.spinTimer?.invalidate()
-            self.spinTimer = Foundation.Timer.scheduledTimer(withTimeInterval: 0.065, repeats: true) { [weak self] timer in
-                guard let self else { timer.invalidate(); return }
-                stepBox.value += 1
-                let step = stepBox.value
-                if step < 18 {
-                    let n = Int.random(in: 0 ... 36)
-                    let em = (n == 0) ? "🟢" : (n % 2 == 1 ? "🔴" : "⚫️")
-                    self.rouletteBallLabel.text = "🎡 \(n) \(em)"
-                    if step % 3 == 0 { impact.impactOccurred() }
-                } else {
-                    timer.invalidate()
-                    self.finishRouletteSpin(num: targetNum, bet: baseBet)
-                }
-            }
-
-        case .coin:
-            // Реальный шанс 49.0% победа (RTP 98.0%, 2% edge)
-            let winRoll = Int.random(in: 0 ..< 100) < 49
-            let wonEagle = (self.coinChoice == "eagle") ? winRoll : !winRoll
-            self.sessionRounds += 1
-            self.sessionWagered += baseBet
-            self.spinTimer?.invalidate()
-            self.spinTimer = Foundation.Timer.scheduledTimer(withTimeInterval: 0.11, repeats: true) { [weak self] timer in
-                guard let self else { timer.invalidate(); return }
-                stepBox.value += 1
-                let step = stepBox.value
-                UIView.transition(with: self.coinEmojiLabel, duration: 0.10, options: .transitionFlipFromLeft) {
-                    self.coinEmojiLabel.text = (step % 2 == 0) ? "🦅 ОРЁЛ" : "🪙 РЕШКА"
-                }
-                impact.impactOccurred()
-                if step >= 10 {
-                    timer.invalidate()
-                    self.finishCoinSpin(wonEagle: wonEagle, bet: baseBet)
-                }
-            }
-
-        case .crash:
-            break
-        }
-    }
-
-    private func finishGridSpin(isZeus: Bool, isFreeSpin: Bool, grid: [String], baseBet: Int, spinCost: Int) {
-        self.isSpinning = false
-        self.spinButton.isEnabled = true
-        self.spinButton.alpha = 1.0
-
-        var counts: [String: Int] = [:]
-        for s in grid { counts[s, default: 0] += 1 }
-
-        var mult: Double = 0.0
-        var titleStatus = "❌ Пустой спин!"
-        if isZeus {
-            let bolts = counts["⚡"] ?? 0
-            // Базовые множители символов Gates of Olympus при 6+ совпадениях на сетке 5x3
-            let symbolBase: [String: Double] = [
-                "💎": 0.4, "⏳": 0.6, "🏆": 0.9, "💍": 1.3, "👑": 2.2
-            ]
-            var bestPay = 0.0
-            var bestSym: String?
-            for (sym, cnt) in counts where sym != "⚡" {
-                guard cnt >= 6, let baseVal = symbolBase[sym] else { continue }
-                let scale = 1.0 + Double(cnt - 6) * 0.65
-                let cand = baseVal * scale
-                if cand > bestPay {
-                    bestPay = cand
-                    bestSym = sym
-                }
-            }
-            if bestPay > 0.0 {
-                let orbMult = (bolts > 0 || isFreeSpin) ? Self.pickZeusOrbMultiplier() : 1
-                if isFreeSpin && orbMult > 1 {
-                    self.bonusGlobalMult += orbMult
-                }
-                let effectiveOrb = isFreeSpin ? max(1, self.bonusGlobalMult) : orbMult
-                mult = bestPay * Double(effectiveOrb)
-                if effectiveOrb >= 25 {
-                    titleStatus = "🔥 MAX ОРБ ЗЕВСА x\(effectiveOrb)!"
-                } else if effectiveOrb > 1 {
-                    titleStatus = "⚡ МОЛНИЯ ЗЕВСА x\(effectiveOrb)!"
-                } else {
-                    titleStatus = "👑 СЫГРОВКА x\(String(format: "%.1f", mult))!"
-                }
-            }
-            if bolts >= 4 && !isFreeSpin {
-                self.bonusBetBase = baseBet
-                self.freeSpinsLeft += 10
-                self.bonusGlobalMult = 1
-                mult = max(mult, 3.0)
-                titleStatus = "⚡ 4+ SCATTER! БОНУС 10 ФРИСПИНОВ!"
-            } else if bolts >= 4 && isFreeSpin {
-                self.freeSpinsLeft += 5
-                titleStatus = "⚡ РЕТРИГГЕР +5 ФРИСПИНОВ!"
-            }
-            for (idx, s) in grid.enumerated() where idx < self.gridCells.count {
-                if s == "⚡" || (bestPay > 0.0 && s == bestSym) {
-                    self.gridCells[idx].layer.borderColor = UIColor(rgb: 0xFFD60A).cgColor
-                }
-            }
-        } else {
-            // Dog House: линии слева направо + будки Wild (x2 70% / x3 30%)
-            let kennels = counts["🏠"] ?? 0
-            let lineWeight: [String: Double] = [
-                "🦴": 0.4, "🐾": 0.6, "🎾": 0.85, "💎": 1.4, "🐶": 2.4
-            ]
-            var lineMultSum = 0.0
-            for r in 0 ..< 3 {
-                let rowSyms = (0 ..< 5).map { c in grid[r * 5 + c] }
-                let anchor = rowSyms.first(where: { $0 != "🏠" }) ?? "🐶"
-                var streak = 0
-                for c in 0 ..< 5 {
-                    if rowSyms[c] == anchor || rowSyms[c] == "🏠" {
-                        streak += 1
-                    } else {
-                        break
-                    }
-                }
-                if streak >= 3 {
-                    let baseLine = lineWeight[anchor] ?? 0.6
-                    lineMultSum += baseLine * Double(streak - 1)
-                    for c in 0 ..< streak {
-                        let idx = r * 5 + c
-                        if idx < self.gridCells.count {
-                            self.gridCells[idx].layer.borderColor = UIColor(rgb: 0xFF9500).cgColor
-                        }
-                    }
-                }
-            }
-            if lineMultSum > 0.0 {
-                var kennelMult = 1
-                if kennels > 0 {
-                    var sumWild = 0
-                    for _ in 0 ..< min(kennels, 4) {
-                        sumWild += (Int.random(in: 0 ..< 10) < 7) ? 2 : 3
-                    }
-                    kennelMult = max(1, sumWild)
-                }
-                if isFreeSpin && kennels > 0 {
-                    self.bonusGlobalMult = min(27, self.bonusGlobalMult + kennelMult)
-                    kennelMult = self.bonusGlobalMult
-                }
-                mult = lineMultSum * Double(kennelMult)
-                titleStatus = kennelMult > 1 ? "🐶 БУДКИ x\(kennelMult) · ЗАНОС!" : "🐶 ЛИНИЯ СЫГРАЛА!"
-            } else if (counts["🐶"] ?? 0) >= 5 {
-                mult = 2.5
-                titleStatus = "🐶 СТАЯ СОБАК x2.5!"
-            }
-            if kennels >= 4 && !isFreeSpin {
-                self.bonusBetBase = baseBet
-                self.freeSpinsLeft += 10
-                self.bonusGlobalMult = 1
-                mult = max(mult, 2.0)
-                titleStatus = "🏠 БОНУС 10 ФРИСПИНОВ СОБАК!"
-            }
-        }
-
-        let payout = Int((Double(baseBet) * mult).rounded())
-        self.balance += payout
-        self.sessionReturned += payout
-        if payout > spinCost { self.sessionWins += 1 }
-        let net = payout - spinCost
-        let sign = net >= 0 ? "+\(net)" : "\(net)"
-        self.statusBannerLabel.text = "\(titleStatus) (\(payout > 0 ? "+\(payout)" : sign) 🪙)"
-        UINotificationFeedbackGenerator().notificationOccurred(payout > 0 ? .success : .warning)
-
-        self.updateStageVisibility()
-        let row0 = grid[0 ..< 5].joined(separator: " ")
-        let row1 = grid[5 ..< 10].joined(separator: " ")
-        let row2 = grid[10 ..< 15].joined(separator: " ")
-        let modeName = isZeus ? "⚡ ЗЕВС (RTP 96.5%)" : "🐶 СОБАКИ (RTP 96.5%)"
-        self.lastShareSummary = "\(self.currentBrand.title) · \(modeName)\n\(row0)\n\(row1)\n\(row2)\n\(titleStatus) (Выплата \(payout) 🪙)\n💰 Баланс: \(self.balance) 🪙"
-        self.shareButton.isHidden = false
-    }
-
-    private func startCrashRound(bet: Int, impact: UIImpactFeedbackGenerator) {
-        self.crashActive = true
-        self.crashBet = bet
-        self.balance -= bet
-        self.sessionRounds += 1
-        self.sessionWagered += bet
-        self.crashMultiplier = 1.0
-        // Настоящая математика Crash (RTP 97%): 3% мгновенный краш 1.00x, иначе тяжелый хвост до 100.0x
-        let instantRoll = Int.random(in: 0 ..< 100)
-        if instantRoll < 3 {
-            self.crashTarget = 1.00
-        } else {
-            let u = Double.random(in: 0.001 ... 0.990)
-            self.crashTarget = min(100.0, max(1.03, 0.97 / (1.0 - u)))
-        }
-
-        self.spinButton.setTitle("💰 ЗАБРАТЬ (1.00x)", for: .normal)
-        self.spinButton.backgroundColor = UIColor(rgb: 0x34C759)
-        self.spinButton.setTitleColor(.white, for: .normal)
-        self.crashSubLabel.text = "Ракета набирает высоту — жми «ЗАБРАТЬ»!"
-        self.statusBannerLabel.text = "🚀 Раунд идёт! Ставка \(bet) 🪙"
-
-        self.spinTimer?.invalidate()
-        self.spinTimer = Foundation.Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] timer in
-            guard let self, self.crashActive else { timer.invalidate(); return }
-            if self.crashTarget > 1.00 {
-                self.crashMultiplier += max(0.03, self.crashMultiplier * 0.045)
-            }
-            if self.crashMultiplier >= self.crashTarget {
-                timer.invalidate()
-                self.crashActive = false
-                self.crashHistory.insert(self.crashTarget, at: 0)
-                if self.crashHistory.count > 8 { self.crashHistory.removeLast() }
-                self.refreshCrashHistory()
-                let crashedAt = String(format: "%.2fx", self.crashTarget)
-                self.crashMultLabel.text = "💥 \(crashedAt)"
-                self.crashSubLabel.text = self.crashTarget <= 1.00 ? "Мгновенный краш (3% шанс)!" : "Ракета взорвалась!"
-                self.statusBannerLabel.text = "💥 КРАШ на \(crashedAt) (-\(bet) 🪙)"
-                self.applyBrandTheme()
-                self.spinButton.setTitle("🚀 СТАРТ РАКЕТЫ", for: .normal)
-                UINotificationFeedbackGenerator().notificationOccurred(.error)
-                self.lastShareSummary = "\(self.currentBrand.title) · 🚀 Краш (RTP 97%)\n💥 Ракета упала на \(crashedAt) (-\(bet) 🪙)\n💰 Баланс: \(self.balance) 🪙"
-                self.shareButton.isHidden = false
-                return
-            }
-            let txt = String(format: "%.2fx", self.crashMultiplier)
-            self.crashMultLabel.text = "🚀 \(txt)"
-            let pot = Int(Double(bet) * self.crashMultiplier)
-            self.spinButton.setTitle("💰 ЗАБРАТЬ \(pot) 🪙 (\(txt))", for: .normal)
-            if Int(self.crashMultiplier * 10) % 5 == 0 { impact.impactOccurred() }
-        }
-    }
-
-    private func cashOutCrash() {
-        guard self.crashActive else { return }
-        self.crashActive = false
-        self.spinTimer?.invalidate()
-        let payout = Int((Double(self.crashBet) * self.crashMultiplier).rounded())
-        let profit = payout - self.crashBet
-        self.sessionReturned += payout
-        self.sessionWins += 1
-        self.balance += payout
-        self.crashHistory.insert(self.crashTarget, at: 0)
-        if self.crashHistory.count > 8 { self.crashHistory.removeLast() }
-        self.refreshCrashHistory()
-        let multStr = String(format: "%.2fx", self.crashMultiplier)
-        self.crashMultLabel.text = "✅ \(multStr)"
-        self.crashSubLabel.text = "Забрали вовремя! (краш был на \(String(format: "%.2fx", self.crashTarget)))"
-        self.statusBannerLabel.text = "💰 ЗАНОС \(multStr): +\(profit) 🪙!"
-        self.applyBrandTheme()
-        self.spinButton.setTitle("🚀 СТАРТ РАКЕТЫ", for: .normal)
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
-        self.lastShareSummary = "\(self.currentBrand.title) · 🚀 Краш (RTP 97%)\n✅ Забрал на \(multStr): +\(profit) 🪙 (выплата \(payout) 🪙)\n💰 Баланс: \(self.balance) 🪙"
-        self.shareButton.isHidden = false
-    }
-
-    private func finishSlotsSpin(finalIdx: [Int], bet: Int) {
-        self.isSpinning = false
-        self.spinButton.isEnabled = true
-        self.spinButton.alpha = 1.0
-
-        let s1 = Self.classicSymbols[finalIdx[0]]
-        let s2 = Self.classicSymbols[finalIdx[1]]
-        let s3 = Self.classicSymbols[finalIdx[2]]
-
-        var mult: Double = 0.0
-        var status = "❌ Мимо!"
-        if finalIdx[0] == finalIdx[1] && finalIdx[1] == finalIdx[2] {
-            switch finalIdx[0] {
-            case 4: mult = 50.0; status = "🔥 МЕГА ДЖЕКПОТ 777 (x50)!"
-            case 3: mult = 15.0; status = "💎 АЛМАЗНЫЙ ДЖЕКПОТ (x15)!"
-            case 2: mult = 8.0; status = "🔔 3 КОЛОКОЛА (x8)!"
-            case 1: mult = 5.0; status = "🍋 3 ЛИМОНА (x5)!"
-            default: mult = 3.0; status = "🍒 3 ВИШНИ (x3)!"
-            }
-        } else if finalIdx.filter({ $0 == 4 }).count == 2 {
-            mult = 3.0
-            status = "7️⃣ Две Семёрки (x3)!"
-        } else if finalIdx.filter({ $0 == 3 }).count == 2 {
-            mult = 2.0
-            status = "💎 Два Алмаза (x2)!"
-        } else if finalIdx[0] == finalIdx[1] || finalIdx[1] == finalIdx[2] || finalIdx[0] == finalIdx[2] {
-            mult = 1.2
-            status = "✨ Пара (x1.2)!"
-        }
-
-        let payout = Int((Double(bet) * mult).rounded())
-        let delta = payout - bet
-        self.balance += delta
-        self.sessionReturned += payout
-        if delta > 0 { self.sessionWins += 1 }
-        let sign = delta >= 0 ? "+\(delta)" : "\(delta)"
-        self.statusBannerLabel.text = "\(status) (\(sign) 🪙)"
-        UINotificationFeedbackGenerator().notificationOccurred(mult > 0 ? .success : .warning)
-
-        self.lastShareSummary = "\(self.currentBrand.title) · 🎰 3 числа (RTP 96.2%) | Ставка: \(bet) 🪙\n┃  \(s1) │ \(s2) │ \(s3)  ┃\n\(status) (\(sign) 🪙)\n💰 Баланс: \(self.balance) 🪙"
-        self.shareButton.isHidden = false
-    }
-
-    private func finishRouletteSpin(num: Int, bet: Int) {
-        self.isSpinning = false
-        self.spinButton.isEnabled = true
-        self.spinButton.alpha = 1.0
-
-        let color: String
-        let badge: String
-        if num == 0 {
-            color = "green"
-            badge = "🟢 Зеро (0)"
-        } else if num % 2 == 1 {
-            color = "red"
-            badge = "🔴 Красное"
-        } else {
-            color = "black"
-            badge = "⚫️ Чёрное"
-        }
-        self.rouletteBallLabel.text = "\(badge) [\(num)]"
-
-        let won = (self.rouletteChoice == color)
-        let mult = (color == "green") ? 36 : 2
-        let payout = won ? (bet * mult) : 0
-        let delta = payout - bet
-        self.balance += delta
-        self.sessionReturned += payout
-        if won { self.sessionWins += 1 }
-        let sign = delta >= 0 ? "+\(delta)" : "\(delta)"
-        self.statusBannerLabel.text = won ? "✅ Выигрыш \(color == "green" ? "x36" : "x2"): \(sign) 🪙!" : "❌ Выпало \(badge) (\(sign) 🪙)"
-        UINotificationFeedbackGenerator().notificationOccurred(won ? .success : .warning)
-
-        self.lastShareSummary = "\(self.currentBrand.title) · 🎡 Европейская рулетка (RTP 97.3%)\nВыпало: \(badge) [\(num)]\nРезультат: \(sign) 🪙\n💰 Баланс: \(self.balance) 🪙"
-        self.shareButton.isHidden = false
-    }
-
-    private func finishCoinSpin(wonEagle: Bool, bet: Int) {
-        self.isSpinning = false
-        self.spinButton.isEnabled = true
-        self.spinButton.alpha = 1.0
-
-        self.coinEmojiLabel.text = wonEagle ? "🦅 ОРЁЛ" : "🪙 РЕШКА"
-        let pickedEagle = (self.coinChoice == "eagle")
-        let won = (wonEagle == pickedEagle)
-        let payout = won ? (bet * 2) : 0
-        let delta = payout - bet
-        self.balance += delta
-        self.sessionReturned += payout
-        if won { self.sessionWins += 1 }
-        let sign = delta >= 0 ? "+\(delta)" : "\(delta)"
-        self.statusBannerLabel.text = won ? "✅ Победа (49% шанс): \(sign) 🪙!" : "❌ Не угадали (\(sign) 🪙)"
-        UINotificationFeedbackGenerator().notificationOccurred(won ? .success : .warning)
-
-        self.lastShareSummary = "\(self.currentBrand.title) · 🪙 Монетка (RTP 98%): \(wonEagle ? "🦅 Орёл" : "🪙 Решка")\nРезультат: \(sign) 🪙 (Баланс: \(self.balance) 🪙)"
-        self.shareButton.isHidden = false
-    }
-
-    @objc private func shareTapped() {
-        guard !self.lastShareSummary.isEmpty else { return }
-        self.onSendToChat(self.lastShareSummary)
-        self.dismiss(animated: true)
-    }
-}
-
 // MARK: - Graphical Deadlines Manager (`fg_deadlines`)
 
 private final class FullGramDeadlinesGUIViewController: UIViewController, UITableViewDataSource, UITableViewDelegate {
@@ -3319,8 +1802,11 @@ private final class FullGramDeadlinesGUIViewController: UIViewController, UITabl
 private final class FullGramCustomPluginGUIViewController: UIViewController {
     private let spec: [String: Any]
     private let onSendToChat: (String) -> Void
+    private let scrollView = UIScrollView()
+    private let outputCard = UIView()
     private let outputLabel = UILabel()
     private let inputField = UITextField()
+    private var lastChatText: String = ""
 
     init(spec: [String: Any], onSendToChat: @escaping (String) -> Void) {
         self.spec = spec
@@ -3335,50 +1821,116 @@ private final class FullGramCustomPluginGUIViewController: UIViewController {
         super.viewDidLoad()
         self.view.backgroundColor = .systemGroupedBackground
         self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Закрыть", style: .plain, target: self, action: #selector(self.closeTapped))
+        self.navigationItem.rightBarButtonItem = UIBarButtonItem(title: "В чат", style: .plain, target: self, action: #selector(self.sendToChatTapped))
+
+        self.scrollView.translatesAutoresizingMaskIntoConstraints = false
+        self.scrollView.keyboardDismissMode = .onDrag
+        self.view.addSubview(self.scrollView)
+        NSLayoutConstraint.activate([
+            self.scrollView.topAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.topAnchor),
+            self.scrollView.bottomAnchor.constraint(equalTo: self.view.bottomAnchor),
+            self.scrollView.leadingAnchor.constraint(equalTo: self.view.leadingAnchor),
+            self.scrollView.trailingAnchor.constraint(equalTo: self.view.trailingAnchor)
+        ])
 
         let stack = UIStackView()
         stack.axis = .vertical
-        stack.spacing = 12.0
+        stack.spacing = 10.0
         stack.translatesAutoresizingMaskIntoConstraints = false
-        self.view.addSubview(stack)
+        self.scrollView.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.topAnchor, constant: 20.0),
-            stack.leadingAnchor.constraint(equalTo: self.view.leadingAnchor, constant: 16.0),
-            stack.trailingAnchor.constraint(equalTo: self.view.trailingAnchor, constant: -16.0)
+            stack.topAnchor.constraint(equalTo: self.scrollView.contentLayoutGuide.topAnchor, constant: 14.0),
+            stack.bottomAnchor.constraint(equalTo: self.scrollView.contentLayoutGuide.bottomAnchor, constant: -20.0),
+            stack.leadingAnchor.constraint(equalTo: self.scrollView.contentLayoutGuide.leadingAnchor, constant: 16.0),
+            stack.trailingAnchor.constraint(equalTo: self.scrollView.contentLayoutGuide.trailingAnchor, constant: -16.0),
+            stack.widthAnchor.constraint(equalTo: self.scrollView.frameLayoutGuide.widthAnchor, constant: -32.0)
         ])
 
-        self.outputLabel.font = .systemFont(ofSize: 16.0, weight: .medium)
+        self.outputCard.backgroundColor = .secondarySystemGroupedBackground
+        self.outputCard.layer.cornerRadius = 14.0
+        self.outputLabel.font = .monospacedSystemFont(ofSize: 14.0, weight: .medium)
         self.outputLabel.numberOfLines = 0
         self.outputLabel.text = (self.spec["subtitle"] as? String) ?? "Графический интерфейс плагина активен."
-        stack.addArrangedSubview(self.outputLabel)
+        self.outputLabel.translatesAutoresizingMaskIntoConstraints = false
+        self.outputCard.addSubview(self.outputLabel)
+        NSLayoutConstraint.activate([
+            self.outputLabel.topAnchor.constraint(equalTo: self.outputCard.topAnchor, constant: 14.0),
+            self.outputLabel.bottomAnchor.constraint(equalTo: self.outputCard.bottomAnchor, constant: -14.0),
+            self.outputLabel.leadingAnchor.constraint(equalTo: self.outputCard.leadingAnchor, constant: 14.0),
+            self.outputLabel.trailingAnchor.constraint(equalTo: self.outputCard.trailingAnchor, constant: -14.0)
+        ])
+        stack.addArrangedSubview(self.outputCard)
 
         self.inputField.borderStyle = .roundedRect
+        self.inputField.clearButtonMode = .whileEditing
         self.inputField.placeholder = (self.spec["placeholder"] as? String) ?? "Введите аргумент…"
+        if let initialInput = self.spec["default_input"] as? String, !initialInput.isEmpty {
+            self.inputField.text = initialInput
+        }
+        self.inputField.heightAnchor.constraint(equalToConstant: 40.0).isActive = true
         stack.addArrangedSubview(self.inputField)
 
         if let buttons = self.spec["buttons"] as? [[String: Any]] {
             for b in buttons {
-                let btnTitle = (b["title"] as? String) ?? "Действие"
-                let actionId = (b["id"] as? String) ?? btnTitle
-                let btn = UIButton(type: .system)
-                btn.setTitle(btnTitle, for: .normal)
-                btn.setTitleColor(.white, for: .normal)
-                btn.titleLabel?.font = .systemFont(ofSize: 15.0, weight: .semibold)
-                btn.backgroundColor = .systemBlue
-                btn.layer.cornerRadius = 10.0
-                btn.heightAnchor.constraint(equalToConstant: 44.0).isActive = true
-                btn.accessibilityIdentifier = actionId
-                btn.addTarget(self, action: #selector(self.customButtonTapped(_:)), for: .touchUpInside)
-                stack.addArrangedSubview(btn)
+                if let rowItems = b["items"] as? [[String: Any]], !rowItems.isEmpty {
+                    let row = UIStackView()
+                    row.axis = .horizontal
+                    row.distribution = .fillEqually
+                    row.spacing = 8.0
+                    for item in rowItems {
+                        row.addArrangedSubview(self.makePluginButton(spec: item))
+                    }
+                    stack.addArrangedSubview(row)
+                } else {
+                    stack.addArrangedSubview(self.makePluginButton(spec: b))
+                }
             }
         }
+    }
+
+    private func makePluginButton(spec b: [String: Any]) -> UIButton {
+        let btnTitle = (b["title"] as? String) ?? "Действие"
+        let actionId = (b["id"] as? String) ?? btnTitle
+        let colorName = (b["color"] as? String)?.lowercased() ?? "blue"
+        let bgColor: UIColor
+        switch colorName {
+        case "green": bgColor = .systemGreen
+        case "orange": bgColor = .systemOrange
+        case "red": bgColor = .systemRed
+        case "purple": bgColor = .systemPurple
+        case "indigo": bgColor = .systemIndigo
+        case "teal": bgColor = .systemTeal
+        case "gray": bgColor = .systemGray
+        default: bgColor = .systemBlue
+        }
+        let btn = UIButton(type: .system)
+        btn.setTitle(btnTitle, for: .normal)
+        btn.setTitleColor(.white, for: .normal)
+        btn.titleLabel?.font = .systemFont(ofSize: 13.5, weight: .semibold)
+        btn.titleLabel?.numberOfLines = 2
+        btn.titleLabel?.textAlignment = .center
+        btn.backgroundColor = bgColor
+        btn.layer.cornerRadius = 11.0
+        btn.heightAnchor.constraint(equalToConstant: 44.0).isActive = true
+        btn.accessibilityIdentifier = actionId
+        btn.addTarget(self, action: #selector(self.customButtonTapped(_:)), for: .touchUpInside)
+        return btn
     }
 
     @objc private func closeTapped() {
         self.dismiss(animated: true)
     }
 
+    @objc private func sendToChatTapped() {
+        let candidate = self.lastChatText.isEmpty ? (self.outputLabel.text ?? "") : self.lastChatText
+        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        self.onSendToChat(trimmed)
+        self.dismiss(animated: true)
+    }
+
     @objc private func customButtonTapped(_ sender: UIButton) {
+        self.view.endEditing(true)
         let pluginId = (self.spec["pluginId"] as? String) ?? ""
         let actionId = sender.accessibilityIdentifier ?? "click"
         let inputText = self.inputField.text ?? ""
@@ -3387,9 +1939,28 @@ private final class FullGramCustomPluginGUIViewController: UIViewController {
             action: actionId,
             payload: ["input": .string(inputText)]
         )
-        let str = res.asString
-        if !str.isEmpty {
-            self.outputLabel.text = str
+        switch res {
+        case let .table(box):
+            let display = box.get(key: .string("text")).asString
+            if !display.isEmpty {
+                self.outputLabel.text = display
+            }
+            let chat = box.get(key: .string("chat")).asString
+            if !chat.isEmpty {
+                self.lastChatText = chat
+            } else if !display.isEmpty {
+                self.lastChatText = display
+            }
+            if box.get(key: .string("send_to_chat")).isTruthy && !self.lastChatText.isEmpty {
+                self.onSendToChat(self.lastChatText)
+                self.dismiss(animated: true)
+            }
+        default:
+            let str = res.asString
+            if !str.isEmpty {
+                self.outputLabel.text = str
+                self.lastChatText = str
+            }
         }
     }
 }

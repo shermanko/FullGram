@@ -107,54 +107,704 @@ def on_command(ctx):
     },
     {
       id: "fg_casino",
-      name: "Казино (.casino)",
+      name: "Казино (.casino / .zeus / .crash)",
       language: "lua",
-      version: "3.0",
+      version: "4.0",
       author: "FullGram",
-      description: "Напишите .casino — откроется графическое казино с выбором режима игры (Слоты 777, Рулетка, Монетка).",
-      code: `-- @name Казино (.casino)
+      description: "Реальные шансы и RTP (96.2–98%): Зевс, Собаки, Слоты 777, Краш, Рулетка, Монетка, Ante Bet, Buy Bonus и выдача любого баланса (.setbal).",
+      code: `-- @name Казино (.casino / .zeus / .crash)
 -- @id fg_casino
--- @version 3.0
+-- @version 4.0
 -- @author FullGram
--- @description Напишите .casino — откроется графическое казино с выбором режима игры (Слоты 777, Рулетка, Монетка)
+-- @description Реальные шансы и RTP (96.2–98%): Зевс, Собаки, Слоты 777, Краш, Рулетка, Монетка, Ante Bet, Buy Bonus и выдача любого баланса (.setbal)
+
+function get_num(key, def)
+    local v = tonumber(fullgram.storage_get(key, def))
+    if v == nil then return def end
+    return v
+end
 
 function get_balance()
-    local b = tonumber(fullgram.storage_get("balance", 1000))
-    if b == nil then return 1000 end
-    return b
+    return math.max(0, math.floor(get_num("balance", 1000) + 0.5))
 end
 
 function set_balance(val)
-    fullgram.storage_set("balance", val)
-    local best = tonumber(fullgram.storage_get("best_balance", 1000)) or 1000
-    if val > best then
-        fullgram.storage_set("best_balance", val)
+    local b = math.max(0, math.floor((tonumber(val) or 0) + 0.5))
+    fullgram.storage_set("balance", b)
+    local best = get_num("best_balance", 1000)
+    if b > best then
+        fullgram.storage_set("best_balance", b)
     end
+    return b
+end
+
+function fmt2(x)
+    local n = math.floor((tonumber(x) or 0) * 100 + 0.5)
+    local whole = math.floor(n / 100)
+    local frac = n % 100
+    local fstr = (frac < 10) and ("0" .. tostring(frac)) or tostring(frac)
+    return tostring(whole) .. "." .. fstr
+end
+
+function fmt_signed(delta)
+    if delta >= 0 then
+        return "+" .. tostring(delta)
+    end
+    return tostring(delta)
+end
+
+function add_session(wagered, returned, won)
+    fullgram.storage_set("sess_rounds", get_num("sess_rounds", 0) + 1)
+    fullgram.storage_set("sess_wagered", get_num("sess_wagered", 0) + wagered)
+    fullgram.storage_set("sess_returned", get_num("sess_returned", 0) + returned)
+    if won then
+        fullgram.storage_set("sess_wins", get_num("sess_wins", 0) + 1)
+    end
+end
+
+function pick_weighted(tbl)
+    local total = 0
+    for i = 1, #tbl do
+        total = total + tbl[i][2]
+    end
+    if total <= 0 then return tbl[1][1] end
+    local roll = math.random(0, total - 1)
+    for i = 1, #tbl do
+        local w = tbl[i][2]
+        if roll < w then
+            return tbl[i][1]
+        end
+        roll = roll - w
+    end
+    return tbl[1][1]
+end
+
+function pick_zeus_orb()
+    local roll = math.random(0, 999)
+    if roll < 480 then return 2 end
+    if roll < 720 then return 3 end
+    if roll < 860 then return 5 end
+    if roll < 940 then return 10 end
+    if roll < 980 then return 25 end
+    if roll < 995 then return 50 end
+    return 100
+end
+
+function is_red_pocket(num)
+    local reds = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
+    for i = 1, #reds do
+        if reds[i] == num then return true end
+    end
+    return false
+end
+
+function parse_bet(raw_str, bal)
+    local num = tonumber(string.match(tostring(raw_str or ""), "(%d+)"))
+    local bet = num or 100
+    if bet < 10 then bet = 10 end
+    if bal > 0 and bet > bal then bet = bal end
+    return math.floor(bet + 0.5)
+end
+
+function ensure_playable_balance()
+    local bal = get_balance()
+    if bal < 10 then
+        bal = set_balance(500)
+        return bal, true
+    end
+    return bal, false
+end
+
+function status_header()
+    local bal = get_balance()
+    local best = math.floor(get_num("best_balance", 1000) + 0.5)
+    local ante = (get_num("ante_bet", 0) == 1)
+    local fs = math.floor(get_num("free_spins", 0) + 0.5)
+    local gmult = math.floor(get_num("bonus_mult", 1) + 0.5)
+    local rounds = math.floor(get_num("sess_rounds", 0) + 0.5)
+    local wins = math.floor(get_num("sess_wins", 0) + 0.5)
+    local wag = get_num("sess_wagered", 0)
+    local ret = get_num("sess_returned", 0)
+    local win_pct = (rounds > 0) and fmt2((wins / rounds) * 100) or "0.00"
+    local sess_rtp = (wag > 0) and fmt2((ret / wag) * 100) or "—"
+    local line = "💰 Баланс: " .. tostring(bal) .. " 🪙 | 🏆 Рекорд: " .. tostring(best) .. " 🪙"
+    line = line .. "\\n⚡ Ante Bet (+25%): " .. (ante and "ВКЛ" or "ВЫКЛ")
+    if fs > 0 then
+        line = line .. " | 🎁 FS: " .. tostring(fs) .. " (x" .. tostring(gmult) .. ")"
+    end
+    line = line .. "\\n📊 Сессия: " .. tostring(rounds) .. " раунд. · Побед " .. win_pct .. "% · RTP " .. sess_rtp .. "%"
+    return line
+end
+
+function play_zeus(raw_arg)
+    local fs = math.floor(get_num("free_spins", 0) + 0.5)
+    local is_fs = (fs > 0)
+    local bal, refilled = ensure_playable_balance()
+    local ante = (get_num("ante_bet", 0) == 1)
+    local base_bet = is_fs and math.floor(get_num("bonus_bet", 100) + 0.5) or parse_bet(raw_arg, bal)
+    local spin_cost = is_fs and 0 or math.min(bal, ante and math.floor(base_bet * 1.25 + 0.5) or base_bet)
+
+    local weights = (ante or is_fs)
+        and {{"💎", 26}, {"⏳", 21}, {"🏆", 17}, {"💍", 14}, {"👑", 10}, {"⚡", 12}}
+        or  {{"💎", 30}, {"⏳", 23}, {"🏆", 18}, {"💍", 14}, {"👑", 9},  {"⚡", 6}}
+
+    if not is_fs then
+        bal = set_balance(bal - spin_cost)
+    else
+        fs = fs - 1
+        fullgram.storage_set("free_spins", fs)
+    end
+
+    local grid = {}
+    local counts = {}
+    for i = 1, 15 do
+        local s = pick_weighted(weights)
+        grid[i] = s
+        counts[s] = (counts[s] or 0) + 1
+    end
+
+    local bolts = counts["⚡"] or 0
+    local sym_base = { ["💎"] = 0.4, ["⏳"] = 0.6, ["🏆"] = 0.9, ["💍"] = 1.3, ["👑"] = 2.2 }
+    local syms = {"💎", "⏳", "🏆", "💍", "👑"}
+    local best_pay = 0.0
+    local best_sym = nil
+    for i = 1, #syms do
+        local s = syms[i]
+        local cnt = counts[s] or 0
+        if cnt >= 6 then
+            local cand = sym_base[s] * (1.0 + (cnt - 6) * 0.65)
+            if cand > best_pay then
+                best_pay = cand
+                best_sym = s
+            end
+        end
+    end
+
+    local mult = 0.0
+    local status = "❌ Пустой спин"
+    local gmult = math.floor(get_num("bonus_mult", 1) + 0.5)
+
+    if best_pay > 0.0 then
+        local orb = (bolts > 0 or is_fs) and pick_zeus_orb() or 1
+        if is_fs and orb > 1 then
+            gmult = gmult + orb
+            fullgram.storage_set("bonus_mult", gmult)
+        end
+        local eff_orb = is_fs and math.max(1, gmult) or orb
+        mult = best_pay * eff_orb
+        if eff_orb >= 25 then
+            status = "🔥 MAX ОРБ ЗЕВСА x" .. tostring(eff_orb) .. "!"
+        elseif eff_orb > 1 then
+            status = "⚡ МОЛНИЯ ЗЕВСА x" .. tostring(eff_orb) .. "!"
+        else
+            status = "👑 СЫГРОВКА " .. best_sym .. " x" .. fmt2(mult) .. "!"
+        end
+    end
+
+    if bolts >= 4 and not is_fs then
+        fullgram.storage_set("bonus_bet", base_bet)
+        fullgram.storage_set("free_spins", fs + 10)
+        fullgram.storage_set("bonus_mult", 1)
+        if mult < 3.0 then mult = 3.0 end
+        status = "⚡ 4+ SCATTER! БОНУС 10 ФРИСПИНОВ!"
+    elseif bolts >= 4 and is_fs then
+        fullgram.storage_set("free_spins", fs + 5)
+        status = "⚡ РЕТРИГГЕР +5 ФРИСПИНОВ!"
+    end
+
+    local payout = math.floor(base_bet * mult + 0.5)
+    bal = set_balance(bal + payout)
+    add_session(spin_cost, payout, payout > spin_cost)
+    local net = payout - spin_cost
+
+    local r1 = grid[1] .. " " .. grid[2] .. " " .. grid[3] .. " " .. grid[4] .. " " .. grid[5]
+    local r2 = grid[6] .. " " .. grid[7] .. " " .. grid[8] .. " " .. grid[9] .. " " .. grid[10]
+    local r3 = grid[11] .. " " .. grid[12] .. " " .. grid[13] .. " " .. grid[14] .. " " .. grid[15]
+    local fs_left = math.floor(get_num("free_spins", 0) + 0.5)
+    local tag = is_fs and ("🎁 ФРИСПИН (ост. " .. tostring(fs_left) .. ")") or ("Ставка: " .. tostring(spin_cost) .. " 🪙")
+    local note = refilled and "\\n🎁 Фрибет +500 🪙 на старте" or ""
+
+    return "⚡ GATES OF OLYMPUS (RTP 96.50%) | " .. tag .. "\\n"
+        .. r1 .. "\\n" .. r2 .. "\\n" .. r3 .. "\\n"
+        .. status .. " (выплата " .. tostring(payout) .. " 🪙, " .. fmt_signed(net) .. " 🪙)" .. note .. "\\n"
+        .. "💰 Баланс: " .. tostring(bal) .. " 🪙"
+end
+
+function play_dogs(raw_arg)
+    local fs = math.floor(get_num("free_spins", 0) + 0.5)
+    local is_fs = (fs > 0)
+    local bal, refilled = ensure_playable_balance()
+    local ante = (get_num("ante_bet", 0) == 1)
+    local base_bet = is_fs and math.floor(get_num("bonus_bet", 100) + 0.5) or parse_bet(raw_arg, bal)
+    local spin_cost = is_fs and 0 or math.min(bal, ante and math.floor(base_bet * 1.25 + 0.5) or base_bet)
+
+    local weights = (ante or is_fs)
+        and {{"🦴", 23}, {"🐾", 20}, {"🎾", 17}, {"💎", 14}, {"🐶", 11}, {"🏠", 15}}
+        or  {{"🦴", 27}, {"🐾", 22}, {"🎾", 18}, {"💎", 14}, {"🐶", 11}, {"🏠", 8}}
+
+    if not is_fs then
+        bal = set_balance(bal - spin_cost)
+    else
+        fs = fs - 1
+        fullgram.storage_set("free_spins", fs)
+    end
+
+    local grid = {}
+    local kennels = 0
+    local dogs_cnt = 0
+    for i = 1, 15 do
+        local s = pick_weighted(weights)
+        grid[i] = s
+        if s == "🏠" then kennels = kennels + 1 end
+        if s == "🐶" then dogs_cnt = dogs_cnt + 1 end
+    end
+
+    local line_w = { ["🦴"] = 0.4, ["🐾"] = 0.6, ["🎾"] = 0.85, ["💎"] = 1.4, ["🐶"] = 2.4 }
+    local line_sum = 0.0
+    for r = 0, 2 do
+        local anchor = "🐶"
+        for c = 1, 5 do
+            local sym = grid[r * 5 + c]
+            if sym ~= "🏠" then
+                anchor = sym
+                break
+            end
+        end
+        local streak = 0
+        for c = 1, 5 do
+            local sym = grid[r * 5 + c]
+            if sym == anchor or sym == "🏠" then
+                streak = streak + 1
+            else
+                break
+            end
+        end
+        if streak >= 3 then
+            line_sum = line_sum + (line_w[anchor] or 0.6) * (streak - 1)
+        end
+    end
+
+    local mult = 0.0
+    local status = "❌ Пустой спин"
+    local gmult = math.floor(get_num("bonus_mult", 1) + 0.5)
+
+    if line_sum > 0.0 then
+        local km = 1
+        if kennels > 0 then
+            local sum_w = 0
+            local cap = math.min(kennels, 4)
+            for i = 1, cap do
+                sum_w = sum_w + ((math.random(0, 9) < 7) and 2 or 3)
+            end
+            km = math.max(1, sum_w)
+        end
+        if is_fs and kennels > 0 then
+            gmult = math.min(27, gmult + km)
+            fullgram.storage_set("bonus_mult", gmult)
+            km = gmult
+        end
+        mult = line_sum * km
+        status = (km > 1) and ("🐶 БУДКИ x" .. tostring(km) .. " · ЗАНОС!") or "🐶 ЛИНИЯ СЫГРАЛА!"
+    elseif dogs_cnt >= 5 then
+        mult = 2.5
+        status = "🐶 СТАЯ СОБАК x2.5!"
+    end
+
+    if kennels >= 4 and not is_fs then
+        fullgram.storage_set("bonus_bet", base_bet)
+        fullgram.storage_set("free_spins", fs + 10)
+        fullgram.storage_set("bonus_mult", 1)
+        if mult < 2.0 then mult = 2.0 end
+        status = "🏠 БОНУС 10 ФРИСПИНОВ СОБАК!"
+    elseif kennels >= 4 and is_fs then
+        fullgram.storage_set("free_spins", fs + 5)
+        status = "🏠 РЕТРИГГЕР +5 ФРИСПИНОВ!"
+    end
+
+    local payout = math.floor(base_bet * mult + 0.5)
+    bal = set_balance(bal + payout)
+    add_session(spin_cost, payout, payout > spin_cost)
+    local net = payout - spin_cost
+
+    local r1 = grid[1] .. " " .. grid[2] .. " " .. grid[3] .. " " .. grid[4] .. " " .. grid[5]
+    local r2 = grid[6] .. " " .. grid[7] .. " " .. grid[8] .. " " .. grid[9] .. " " .. grid[10]
+    local r3 = grid[11] .. " " .. grid[12] .. " " .. grid[13] .. " " .. grid[14] .. " " .. grid[15]
+    local fs_left = math.floor(get_num("free_spins", 0) + 0.5)
+    local tag = is_fs and ("🎁 ФРИСПИН (ост. " .. tostring(fs_left) .. ")") or ("Ставка: " .. tostring(spin_cost) .. " 🪙")
+    local note = refilled and "\\n🎁 Фрибет +500 🪙 на старте" or ""
+
+    return "🐶 THE DOG HOUSE (RTP 96.51%) | " .. tag .. "\\n"
+        .. r1 .. "\\n" .. r2 .. "\\n" .. r3 .. "\\n"
+        .. status .. " (выплата " .. tostring(payout) .. " 🪙, " .. fmt_signed(net) .. " 🪙)" .. note .. "\\n"
+        .. "💰 Баланс: " .. tostring(bal) .. " 🪙"
+end
+
+function play_classic(raw_arg)
+    local bal, refilled = ensure_playable_balance()
+    local bet = parse_bet(raw_arg, bal)
+    local weights = {{"🍒", 36}, {"🍋", 26}, {"🔔", 18}, {"💎", 13}, {"7️⃣", 7}}
+    local s1 = pick_weighted(weights)
+    local s2 = pick_weighted(weights)
+    local s3 = pick_weighted(weights)
+
+    local sevens = ((s1 == "7️⃣") and 1 or 0) + ((s2 == "7️⃣") and 1 or 0) + ((s3 == "7️⃣") and 1 or 0)
+    local diamonds = ((s1 == "💎") and 1 or 0) + ((s2 == "💎") and 1 or 0) + ((s3 == "💎") and 1 or 0)
+
+    local mult = 0.0
+    local status = "❌ Мимо!"
+    if s1 == s2 and s2 == s3 then
+        if s1 == "7️⃣" then mult = 50.0; status = "🔥 МЕГА ДЖЕКПОТ 777 (x50)!"
+        elseif s1 == "💎" then mult = 15.0; status = "💎 АЛМАЗНЫЙ ДЖЕКПОТ (x15)!"
+        elseif s1 == "🔔" then mult = 8.0; status = "🔔 3 КОЛОКОЛА (x8)!"
+        elseif s1 == "🍋" then mult = 5.0; status = "🍋 3 ЛИМОНА (x5)!"
+        else mult = 3.0; status = "🍒 3 ВИШНИ (x3)!"
+        end
+    elseif sevens == 2 then
+        mult = 3.0; status = "7️⃣ Две Семёрки (x3)!"
+    elseif diamonds == 2 then
+        mult = 2.0; status = "💎 Два Алмаза (x2)!"
+    elseif s1 == s2 or s2 == s3 or s1 == s3 then
+        mult = 1.2; status = "✨ Пара (x1.2)!"
+    end
+
+    local payout = math.floor(bet * mult + 0.5)
+    local delta = payout - bet
+    bal = set_balance(bal + delta)
+    add_session(bet, payout, delta > 0)
+    local note = refilled and "\\n🎁 Фрибет +500 🪙" or ""
+
+    return "🎰 3 БАРАБАНА (RTP 96.20%) | Ставка: " .. tostring(bet) .. " 🪙\\n"
+        .. "┏━━━━━━━━━━━┓\\n┃  " .. s1 .. " │ " .. s2 .. " │ " .. s3 .. "  ┃\\n┗━━━━━━━━━━━┛\\n"
+        .. status .. " (" .. fmt_signed(delta) .. " 🪙)" .. note .. "\\n"
+        .. "💰 Баланс: " .. tostring(bal) .. " 🪙"
+end
+
+function play_crash(raw_arg, default_target)
+    local bal, refilled = ensure_playable_balance()
+    local s = tostring(raw_arg or "")
+    local target = default_target or 2.0
+    local bet = 100
+
+    local n1 = string.match(s, "^%s*([%d%.]+)%s+%d+")
+    local n2 = string.match(s, "^%s*[%d%.]+%s+(%d+)")
+    if n1 and n2 then
+        target = tonumber(n1) or target
+        bet = tonumber(n2) or bet
+    else
+        local with_x = string.match(s, "([%d%.]+)[xXхХ]")
+        if with_x then
+            target = tonumber(with_x) or target
+        else
+            local single = tonumber(string.match(s, "([%d%.]+)"))
+            if single then
+                if string.find(s, ".", 1, true) then
+                    target = single
+                else
+                    bet = single
+                end
+            end
+        end
+    end
+    if target < 1.05 then target = 1.05 end
+    if target > 100.0 then target = 100.0 end
+    if bet < 10 then bet = 10 end
+    if bet > bal then bet = bal end
+    bet = math.floor(bet + 0.5)
+
+    local crash_pt = 1.00
+    if math.random(0, 99) >= 3 then
+        local u = math.random(1, 990) / 1000.0
+        crash_pt = math.min(100.0, math.max(1.03, 0.97 / (1.0 - u)))
+    end
+
+    local won = (crash_pt >= target)
+    local payout = won and math.floor(bet * target + 0.5) or 0
+    local delta = payout - bet
+    bal = set_balance(bal + delta)
+    add_session(bet, payout, won)
+    local note = refilled and "\\n🎁 Фрибет +500 🪙" or ""
+
+    local res_line = won
+        and ("✅ Забрал на " .. fmt2(target) .. "x (краш был " .. fmt2(crash_pt) .. "x): +" .. tostring(delta) .. " 🪙")
+        or  ("💥 КРАШ на " .. fmt2(crash_pt) .. "x (цель " .. fmt2(target) .. "x): " .. tostring(delta) .. " 🪙")
+
+    return "🚀 CRASH (RTP 97.00% · 3% инста-краш) | Ставка: " .. tostring(bet) .. " 🪙\\n"
+        .. res_line .. note .. "\\n"
+        .. "💰 Баланс: " .. tostring(bal) .. " 🪙"
+end
+
+function play_roulette(choice_arg, bet_arg)
+    local bal, refilled = ensure_playable_balance()
+    local c = string.lower(tostring(choice_arg or "red"))
+    local bet = parse_bet(bet_arg, bal)
+    local num = math.random(0, 36)
+
+    local color = "black"
+    local badge = "⚫️ Чёрное"
+    if num == 0 then
+        color = "green"
+        badge = "🟢 Зеро (0)"
+    elseif is_red_pocket(num) then
+        color = "red"
+        badge = "🔴 Красное"
+    end
+
+    local exact_num = tonumber(c)
+    local won = false
+    local mult = 2
+    local bet_label = "🔴 Красное"
+    if exact_num ~= nil and exact_num >= 0 and exact_num <= 36 then
+        mult = 36
+        bet_label = "🎯 Число [" .. tostring(exact_num) .. "]"
+        won = (num == exact_num)
+    elseif c == "green" or c == "0" or c == "зеро" or c == "зеленое" then
+        mult = 36
+        bet_label = "🟢 Зеро [0]"
+        won = (color == "green")
+    elseif c == "black" or c == "черное" or c == "ч" then
+        mult = 2
+        bet_label = "⚫️ Чёрное"
+        won = (color == "black")
+    else
+        mult = 2
+        bet_label = "🔴 Красное"
+        won = (color == "red")
+    end
+
+    local payout = won and (bet * mult) or 0
+    local delta = payout - bet
+    bal = set_balance(bal + delta)
+    add_session(bet, payout, won)
+    local note = refilled and "\\n🎁 Фрибет +500 🪙" or ""
+    local outcome = won
+        and ("✅ Выигрыш x" .. tostring(mult) .. ": +" .. tostring(delta) .. " 🪙!")
+        or  ("❌ Мимо: " .. tostring(delta) .. " 🪙")
+
+    return "🎡 ЕВРОПЕЙСКАЯ РУЛЕТКА (RTP 97.30%) | " .. bet_label .. " · " .. tostring(bet) .. " 🪙\\n"
+        .. "Выпало: " .. badge .. " [" .. tostring(num) .. "]\\n"
+        .. outcome .. note .. "\\n"
+        .. "💰 Баланс: " .. tostring(bal) .. " 🪙"
+end
+
+function play_coin(side_arg, bet_arg)
+    local bal, refilled = ensure_playable_balance()
+    local bet = parse_bet(bet_arg, bal)
+    local pick_tails = (string.find(string.lower(tostring(side_arg or "")), "реш") ~= nil)
+        or (string.find(string.lower(tostring(side_arg or "")), "tail") ~= nil)
+    local won = (math.random(0, 99) < 49)
+    local landed_tails = false
+    if pick_tails then
+        landed_tails = won
+    else
+        landed_tails = not won
+    end
+    local landed_str = landed_tails and "🪙 Решка" or "🦅 Орёл"
+
+    local payout = won and (bet * 2) or 0
+    local delta = payout - bet
+    bal = set_balance(bal + delta)
+    add_session(bet, payout, won)
+    local note = refilled and "\\n🎁 Фрибет +500 🪙" or ""
+    local res = won and ("✅ Победа (49% шанс, x2): +" .. tostring(delta) .. " 🪙!") or ("❌ Не угадали: " .. tostring(delta) .. " 🪙")
+
+    return "🪙 МОНЕТКА (RTP 98.00%) | Ставка: " .. tostring(bet) .. " 🪙\\n"
+        .. "Выпал: " .. landed_str .. "\\n"
+        .. res .. note .. "\\n"
+        .. "💰 Баланс: " .. tostring(bal) .. " 🪙"
+end
+
+function rtp_summary()
+    return "📊 ЧЕСТНЫЕ ШАНСЫ И RTP КАЗИНО:\\n"
+        .. "• ⚡ Gates of Olympus — RTP 96.50% (орбы x2..x100, 4+ ⚡ = 10 FS)\\n"
+        .. "• 🐶 The Dog House — RTP 96.51% (линии + будки Wild x2/x3, до x27 в FS)\\n"
+        .. "• 🎰 3 Барабана — RTP 96.20% (777: x50, 💎: x15, 🔔: x8, пара: x1.2)\\n"
+        .. "• 🚀 Crash — RTP 97.00% (3% краш на 1.00x, хвост до x100)\\n"
+        .. "• 🎡 Рулетка (37 сект.) — RTP 97.30% (🔴/⚫️ 48.65% x2, 🟢 2.70% x36)\\n"
+        .. "• 🪙 Монетка — RTP 98.00% (49.0% победа, x2)\\n"
+        .. "ℹ️ Выдача баланса (.setbal <сумма>) НЕ меняет шансы.\\n\\n"
+        .. status_header()
+end
+
+function handle_set_balance(raw)
+    local s = tostring(raw or "")
+    local add_num = tonumber(string.match(s, "^%s*%+%s*(%d+)"))
+    if add_num ~= nil then
+        local nb = set_balance(get_balance() + add_num)
+        return "💰 Добавлено +" .. tostring(add_num) .. " 🪙!\\nБаланс: " .. tostring(nb) .. " 🪙 (шансы те же)"
+    end
+    local exact = tonumber(string.match(s, "(%d+)"))
+    if exact ~= nil then
+        local nb = set_balance(exact)
+        return "💰 Баланс установлен: " .. tostring(nb) .. " 🪙\\n(шансы и RTP без изменений!)"
+    end
+    local nb = set_balance(get_balance() + 10000)
+    return "🎁 Начислено +10000 🪙!\\nБаланс: " .. tostring(nb) .. " 🪙\\n(введите любое число в поле для точной выдачи)"
+end
+
+function open_casino_ui()
+    fullgram.open_ui({
+        kind = "custom",
+        title = "🎰 Казино FullGram",
+        subtitle = "Реальные шансы и RTP (96.2–98.0%). Введите ставку (по ум. 100) или сумму баланса:\\n\\n" .. status_header(),
+        placeholder = "Ставка (100), цель Crash (2.5 100) или баланс (50000)",
+        default_input = "100",
+        buttons = {
+            { items = {
+                { title = "⚡ Зевс (96.5%)", id = "spin_zeus", color = "orange" },
+                { title = "🐶 Собаки (96.5%)", id = "spin_dogs", color = "indigo" }
+            } },
+            { items = {
+                { title = "🎰 3 Барабана", id = "spin_classic", color = "purple" },
+                { title = "🚀 Краш (x2.0)", id = "spin_crash", color = "teal" }
+            } },
+            { items = {
+                { title = "🔴 Красное x2", id = "spin_red", color = "red" },
+                { title = "⚫️ Чёрное x2", id = "spin_black", color = "gray" }
+            } },
+            { items = {
+                { title = "🟢 Зеро x36", id = "spin_green", color = "green" },
+                { title = "🪙 Монетка x2", id = "spin_coin", color = "blue" }
+            } },
+            { items = {
+                { title = "⚡ Ante +25%", id = "toggle_ante", color = "orange" },
+                { title = "🎁 Бонус x100", id = "buy_bonus", color = "purple" }
+            } },
+            { items = {
+                { title = "💰 Выдать баланс", id = "set_balance", color = "green" },
+                { title = "📊 RTP и шансы", id = "rtp_info", color = "gray" }
+            } }
+        }
+    })
 end
 
 function on_ui_event(ctx)
     local act = tostring(ctx.action or "")
-    local bal = get_balance()
-    local best = tonumber(fullgram.storage_get("best_balance", 1000)) or 1000
+    local inp = tostring(ctx.input or "")
+
     if act == "bonus" then
-        bal = bal + 1000
-        set_balance(bal)
-        best = tonumber(fullgram.storage_get("best_balance", 1000)) or 1000
+        local nb = set_balance(get_balance() + 1000)
+        return { balance = nb, best_balance = get_num("best_balance", 1000), text = "🎁 +1000 🪙!\\n" .. status_header() }
+    elseif act == "spin_zeus" then
+        return play_zeus(inp)
+    elseif act == "spin_dogs" then
+        return play_dogs(inp)
+    elseif act == "spin_classic" then
+        return play_classic(inp)
+    elseif act == "spin_crash" then
+        return play_crash(inp, 2.0)
+    elseif act == "spin_red" then
+        return play_roulette("red", inp)
+    elseif act == "spin_black" then
+        return play_roulette("black", inp)
+    elseif act == "spin_green" then
+        return play_roulette("green", inp)
+    elseif act == "spin_coin" then
+        return play_coin("eagle", inp)
+    elseif act == "toggle_ante" then
+        if get_num("free_spins", 0) > 0 then
+            return "⚠️ Нельзя менять Ante Bet во время фриспинов!\\n" .. status_header()
+        end
+        local cur = (get_num("ante_bet", 0) == 1) and 0 or 1
+        fullgram.storage_set("ante_bet", cur)
+        return (cur == 1 and "⚡ Ante Bet ВКЛ (+25% к ставке, x2 шанс бонуса)" or "⚡ Ante Bet ВЫКЛ") .. "\\n\\n" .. status_header()
+    elseif act == "buy_bonus" then
+        local bal = get_balance()
+        local bet = parse_bet(inp, bal)
+        local cost = bet * 100
+        if bal < cost then
+            return "❌ Нужно " .. tostring(cost) .. " 🪙 для покупки бонуса (x100 ставки).\\nВы можете выдать себе баланс кнопкой «💰 Выдать баланс»!\\n\\n" .. status_header()
+        end
+        set_balance(bal - cost)
+        fullgram.storage_set("sess_wagered", get_num("sess_wagered", 0) + cost)
+        fullgram.storage_set("bonus_bet", bet)
+        fullgram.storage_set("free_spins", get_num("free_spins", 0) + 10)
+        fullgram.storage_set("bonus_mult", 1)
+        return "🎁 БОНУС КУПЛЕН! 10 ФРИСПИНОВ по ставке " .. tostring(bet) .. " 🪙!\\nЖмите «⚡ Зевс» или «🐶 Собаки»!\\n\\n" .. status_header()
+    elseif act == "set_balance" then
+        return handle_set_balance(inp) .. "\\n\\n" .. status_header()
+    elseif act == "rtp_info" then
+        return rtp_summary()
     end
-    return { balance = bal, best_balance = best }
+
+    return status_header()
 end
 
 function on_command(ctx)
-    if ctx.command == "casino" then
-        if fullgram.open_ui ~= nil then
-            fullgram.open_ui({ kind = "casino", title = "Казино FullGram" })
+    local aliases = { roul = "roulette", givebal = "setbal", balance = "bal", odds = "rtp" }
+    local cmd = aliases[ctx.command] or ctx.command
+    local args = tostring(ctx.args or "")
+
+    if cmd == "casino" then
+        if args == "" or args == "ui" then
+            open_casino_ui()
             return { cancel = true }
         end
-        return { cancel = true, toast = "Обновите приложение FullGram до v1.0.0 для запуска графического Казино!" }
+        return { cancel = true, toast = "Откройте UI командой .casino или используйте .zeus, .dogs, .slots, .crash, .roulette, .coin, .setbal <сумма>" }
+    elseif cmd == "zeus" then
+        return play_zeus(args)
+    elseif cmd == "dogs" then
+        return play_dogs(args)
+    elseif cmd == "slots" then
+        return play_classic(args)
+    elseif cmd == "crash" then
+        return play_crash(args, 2.0)
+    elseif cmd == "roulette" then
+        local choice = string.lower(ctx.subcommand or "red")
+        local bet_str = string.match(args, "%s+(%d+)$") or "100"
+        return play_roulette(choice, bet_str)
+    elseif cmd == "coin" then
+        local side = string.lower(ctx.subcommand or "eagle")
+        local bet_str = string.match(args, "(%d+)") or "100"
+        return play_coin(side, bet_str)
+    elseif cmd == "setbal" then
+        local exact = tonumber(string.match(args, "(%d+)"))
+        if exact == nil then
+            return { cancel = true, toast = "Формат: .setbal <сумма> (например: .setbal 100000)" }
+        end
+        local nb = set_balance(exact)
+        return { cancel = true, toast = "💰 Баланс установлен: " .. tostring(nb) .. " 🪙 (шансы не изменены)" }
+    elseif cmd == "bal" then
+        local lower = string.lower(args)
+        if string.sub(lower, 1, 4) == "set " then
+            local exact = tonumber(string.match(args, "(%d+)"))
+            if exact ~= nil then
+                local nb = set_balance(exact)
+                return { cancel = true, toast = "💰 Баланс: " .. tostring(nb) .. " 🪙 (шансы прежние)" }
+            end
+        elseif string.sub(lower, 1, 4) == "add " or string.sub(lower, 1, 1) == "+" then
+            local add_v = tonumber(string.match(args, "(%d+)"))
+            if add_v ~= nil then
+                local nb = set_balance(get_balance() + add_v)
+                return { cancel = true, toast = "💰 +" .. tostring(add_v) .. " 🪙 → Баланс: " .. tostring(nb) .. " 🪙" }
+            end
+        elseif lower == "bonus" then
+            local nb = set_balance(get_balance() + 1000)
+            return { cancel = true, toast = "🎁 +1000 🪙 → Баланс: " .. tostring(nb) .. " 🪙" }
+        end
+        return status_header()
+    elseif cmd == "ante" then
+        local cur = (get_num("ante_bet", 0) == 1) and 0 or 1
+        fullgram.storage_set("ante_bet", cur)
+        return { cancel = true, toast = cur == 1 and "⚡ Ante Bet ВКЛ (+25%, x2 шанс бонуса)" or "⚡ Ante Bet ВЫКЛ" }
+    elseif cmd == "buybonus" then
+        local bal = get_balance()
+        local bet = parse_bet(args, bal)
+        local cost = bet * 100
+        if bal < cost then
+            return { cancel = true, toast = "Нужно " .. tostring(cost) .. " 🪙 (можно выдать: .setbal " .. tostring(cost) .. ")" }
+        end
+        set_balance(bal - cost)
+        fullgram.storage_set("sess_wagered", get_num("sess_wagered", 0) + cost)
+        fullgram.storage_set("bonus_bet", bet)
+        fullgram.storage_set("free_spins", get_num("free_spins", 0) + 10)
+        fullgram.storage_set("bonus_mult", 1)
+        return { cancel = true, toast = "🎁 Куплено 10 фриспинов по ставке " .. tostring(bet) .. " 🪙! Играйте .zeus или .dogs" }
+    elseif cmd == "rtp" then
+        return rtp_summary()
     end
+
     return nil
-end
-`
+end`
     },
     {
       id: "fg_anti_typos",

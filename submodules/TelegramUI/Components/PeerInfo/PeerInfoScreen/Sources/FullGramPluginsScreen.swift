@@ -14,7 +14,6 @@ import AccountContext
 private final class FullGramPluginsArguments {
     let toggleSystem: (Bool) -> Void
     let chooseLayoutFixerMode: () -> Void
-    let openCasinoGUI: () -> Void
     let openDeadlinesGUI: () -> Void
     let createPlugin: (FullGramPluginLanguage) -> Void
     let importFromFile: () -> Void
@@ -25,7 +24,6 @@ private final class FullGramPluginsArguments {
     init(
         toggleSystem: @escaping (Bool) -> Void,
         chooseLayoutFixerMode: @escaping () -> Void,
-        openCasinoGUI: @escaping () -> Void,
         openDeadlinesGUI: @escaping () -> Void,
         createPlugin: @escaping (FullGramPluginLanguage) -> Void,
         importFromFile: @escaping () -> Void,
@@ -35,7 +33,6 @@ private final class FullGramPluginsArguments {
     ) {
         self.toggleSystem = toggleSystem
         self.chooseLayoutFixerMode = chooseLayoutFixerMode
-        self.openCasinoGUI = openCasinoGUI
         self.openDeadlinesGUI = openDeadlinesGUI
         self.createPlugin = createPlugin
         self.importFromFile = importFromFile
@@ -54,7 +51,6 @@ private enum FullGramPluginsSection: Int32 {
 private enum FullGramPluginsEntry: ItemListNodeEntry {
     case systemSwitch(Bool)
     case layoutFixerMode(String)
-    case openCasino
     case openDeadlines
     case systemInfo(String)
     case remoteCatalog(String)
@@ -68,7 +64,7 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
 
     var section: ItemListSectionId {
         switch self {
-        case .systemSwitch, .layoutFixerMode, .openCasino, .openDeadlines, .systemInfo: return FullGramPluginsSection.system.rawValue
+        case .systemSwitch, .layoutFixerMode, .openDeadlines, .systemInfo: return FullGramPluginsSection.system.rawValue
         case .remoteCatalog, .createLua, .createPython, .createRust, .importFile, .apiDocs: return FullGramPluginsSection.actions.rawValue
         case .listHeader, .pluginItem: return FullGramPluginsSection.list.rawValue
         }
@@ -78,7 +74,6 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
         switch self {
         case .systemSwitch: return 0
         case .layoutFixerMode: return 1
-        case .openCasino: return 2
         case .openDeadlines: return 3
         case .systemInfo: return 4
         case .remoteCatalog: return 9
@@ -103,8 +98,6 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Включить систему плагинов", value: value, sectionId: self.section, style: .blocks, updated: args.toggleSystem)
         case let .layoutFixerMode(label):
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: "⌨️ Исправление раскладки (.fix)", label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.chooseLayoutFixerMode)
-        case .openCasino:
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: "🎰 Казино FullGram (Слоты, Рулетка, Монетка)", label: "Играть", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openCasinoGUI)
         case .openDeadlines:
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: "⏰ Дедлайны и Задачи (.dl)", label: "Открыть", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openDeadlinesGUI)
         case let .systemInfo(text):
@@ -190,13 +183,6 @@ func fullGramPluginsController(context: AccountContext) -> ViewController {
             })
             sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
             presentNativeImpl?(sheet)
-        },
-        openCasinoGUI: {
-            NotificationCenter.default.post(
-                name: FullGramPluginNotifications.openUIRequested,
-                object: nil,
-                userInfo: ["kind": "casino", "pluginId": "fg_casino"]
-            )
         },
         openDeadlinesGUI: {
             NotificationCenter.default.post(
@@ -324,9 +310,8 @@ fn on_outgoing_message(ctx: Context) -> Option<String> {
         var entries: [FullGramPluginsEntry] = [
             .systemSwitch(manager.isSystemEnabled),
             .layoutFixerMode(manager.layoutFixerModeTitle),
-            .openCasino,
             .openDeadlines,
-            .systemInfo("Как использовать плагины:\n• В чате введите точку «.» (появятся подсказки) или нажмите «⚡ Плагины» над полем ввода.\n• Команды .casino / .slots и .dl сразу открывают графический интерфейс; .fix <текст> исправляет раскладку.\n• Плагин «Анти-опечатки» работает автоматически при отправке каждого сообщения."),
+            .systemInfo("Как использовать плагины:\n• В чате введите точку «.» (появятся подсказки) или нажмите «⚡ Плагины» над полем ввода.\n• Команды плагинов (например .dl, .fix) работают прямо в чате; некоторые плагины открывают графический интерфейс.\n• Плагин «Анти-опечатки» работает автоматически при отправке каждого сообщения."),
             .remoteCatalog("Каталог"),
             .createLua,
             .createPython,
