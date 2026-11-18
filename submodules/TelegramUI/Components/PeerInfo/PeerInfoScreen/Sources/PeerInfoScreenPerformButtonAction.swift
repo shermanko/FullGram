@@ -1282,7 +1282,7 @@ extension PeerInfoScreenNode {
                     items.append(.separator)
                 }
                 let fullGramTargetPeerId = peer.id.toInt64()
-                let fullGramTargetTitle = EnginePeer(peer).compactDisplayTitle
+                let fullGramTargetTitle = peer.compactDisplayTitle
                 items.append(.action(ContextMenuActionItem(text: "Сводка чата (ИИ)", icon: { theme in
                     UIImage(systemName: "sparkles")?.withTintColor(theme.contextMenu.primaryColor, renderingMode: .alwaysOriginal)
                 }, action: { _, f in
