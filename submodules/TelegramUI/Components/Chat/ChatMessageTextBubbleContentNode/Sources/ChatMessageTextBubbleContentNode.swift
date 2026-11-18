@@ -195,7 +195,7 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
         
         let currentCachedChatMessageText = self.cachedChatMessageText
         let expandedBlockIds = self.expandedBlockIds
-        let displayContentsUnderSpoilers = self.displayContentsUnderSpoilers
+        let displayContentsUnderSpoilers: (value: Bool, location: CGPoint?) = FullGramExtras.shared.autoRevealSpoilers ? (true, nil) : self.displayContentsUnderSpoilers
         let currentMaxGlyphCount: Int? = self.textRevealController?.currentGlyphCount
         let previousGlyphCount = self.textNode.textNode.cachedLayout?.attributedString?.length ?? 0
         

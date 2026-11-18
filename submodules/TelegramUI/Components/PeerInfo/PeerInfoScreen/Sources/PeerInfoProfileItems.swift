@@ -179,7 +179,7 @@ func infoItems(
             ))
         }
         
-        if let phone = user.phone, !(user.id == context.account.peerId && FullGramExtras.shared.hidePhoneNumber) {
+        if let phone = user.phone, !(user.id == context.account.peerId && (FullGramExtras.shared.hidePhoneNumber || FullGramExtras.shared.privateMode)) {
             let formattedPhone = formatPhoneNumber(context: context, number: phone)
             let label: String
             if formattedPhone.hasPrefix("+888 ") {

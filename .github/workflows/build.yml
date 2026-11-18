@@ -32,7 +32,7 @@ on:
 
 concurrency:
   group: fullgram-ci-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -292,6 +292,7 @@ jobs:
             --cacheDir="$CACHE_DIR" \
             ${XCODE_OVERRIDE_FLAG:-} \
             build \
+            --enableParallelSwiftmoduleGeneration \
             --xcodeManagedCodesigning \
             --disableProvisioningProfiles \
             --skipDsym \
@@ -307,6 +308,29 @@ jobs:
             echo "::error::Build finished without producing Telegram.ipa"
             exit 1
           fi
+
+          python3 - "$IPA_PATH" <<'PY'
+          import stat, sys, zipfile
+          from pathlib import Path
+
+          ipa_path = Path(sys.argv[1])
+          tmp_path = ipa_path.with_suffix(".ipa.tmp")
+          orig_size = ipa_path.stat().st_size
+          with zipfile.ZipFile(ipa_path, "r") as zin, zipfile.ZipFile(
+              tmp_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
+          ) as zout:
+              for info in zin.infolist():
+                  data = zin.read(info.filename)
+                  is_symlink = stat.S_ISLNK(info.external_attr >> 16)
+                  info.compress_type = zipfile.ZIP_STORED if is_symlink else zipfile.ZIP_DEFLATED
+                  zout.writestr(info, data)
+          if tmp_path.stat().st_size < orig_size:
+              tmp_path.replace(ipa_path)
+              new_size = ipa_path.stat().st_size
+              print(f"Recompressed IPA: {orig_size / (1024*1024):.2f} MiB -> {new_size / (1024*1024):.2f} MiB")
+          else:
+              tmp_path.unlink(missing_ok=True)
+          PY
 
           python3 - "$IPA_PATH" "$BUILD_CONFIGURATION" <<'PY'
           import hashlib, plistlib, struct, sys, zipfile

@@ -650,18 +650,20 @@ func fullGramSettingsController(context: AccountContext) -> ViewController {
 
 private struct FullGramPrivacyCategoryArguments {
     let openGhostMode: () -> Void
+    let openPrivateMode: () -> Void
     let openActivityAndTraces: () -> Void
     let openDeleted: () -> Void
 }
 
 private enum FullGramPrivacyCategoryEntry: ItemListNodeEntry {
     case ghostModeLink(PresentationTheme, Bool)
+    case privateModeLink(PresentationTheme, Bool)
     case activityAndTracesLink(PresentationTheme)
     case deletedLink(PresentationTheme)
 
     var section: ItemListSectionId {
         switch self {
-        case .ghostModeLink, .activityAndTracesLink:
+        case .ghostModeLink, .privateModeLink, .activityAndTracesLink:
             return 0
         case .deletedLink:
             return 1
@@ -671,14 +673,17 @@ private enum FullGramPrivacyCategoryEntry: ItemListNodeEntry {
     var stableId: Int32 {
         switch self {
         case .ghostModeLink: return 0
-        case .activityAndTracesLink: return 1
-        case .deletedLink: return 2
+        case .privateModeLink: return 1
+        case .activityAndTracesLink: return 2
+        case .deletedLink: return 3
         }
     }
 
     static func ==(lhs: FullGramPrivacyCategoryEntry, rhs: FullGramPrivacyCategoryEntry) -> Bool {
         switch (lhs, rhs) {
         case let (.ghostModeLink(lhsTheme, lhsActive), .ghostModeLink(rhsTheme, rhsActive)):
+            return lhsTheme === rhsTheme && lhsActive == rhsActive
+        case let (.privateModeLink(lhsTheme, lhsActive), .privateModeLink(rhsTheme, rhsActive)):
             return lhsTheme === rhsTheme && lhsActive == rhsActive
         case let (.activityAndTracesLink(lhsTheme), .activityAndTracesLink(rhsTheme)):
             return lhsTheme === rhsTheme
@@ -707,6 +712,18 @@ private enum FullGramPrivacyCategoryEntry: ItemListNodeEntry {
                 style: .blocks,
                 disclosureStyle: .arrow,
                 action: arguments.openGhostMode
+            )
+        case let .privateModeLink(_, isActive):
+            return ItemListDisclosureItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                icon: PresentationResourcesSettings.security,
+                title: "Приватный режим",
+                label: isActive ? "Вкл." : "Выкл.",
+                sectionId: self.section,
+                style: .blocks,
+                disclosureStyle: .arrow,
+                action: arguments.openPrivateMode
             )
         case .activityAndTracesLink:
             return ItemListDisclosureItem(
@@ -744,6 +761,9 @@ func fullGramPrivacyCategoryController(context: AccountContext) -> ViewControlle
         openGhostMode: {
             pushControllerImpl?(fullGramGhostModeController(context: context))
         },
+        openPrivateMode: {
+            pushControllerImpl?(fullGramPrivateModeController(context: context))
+        },
         openActivityAndTraces: {
             pushControllerImpl?(fullGramActivityAndTracesController(context: context))
         },
@@ -757,6 +777,7 @@ func fullGramPrivacyCategoryController(context: AccountContext) -> ViewControlle
     |> map { presentationData, settings -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let entries: [FullGramPrivacyCategoryEntry] = [
             .ghostModeLink(presentationData.theme, settings.isActive),
+            .privateModeLink(presentationData.theme, FullGramExtras.shared.privateMode),
             .activityAndTracesLink(presentationData.theme),
             .deletedLink(presentationData.theme)
         ]
@@ -1432,6 +1453,8 @@ private enum FullGramChatsToggle: Int32 {
     case addCommaAfterMention = 5
     case hideFastShare = 6
     case horizonLockVideoMessages = 7
+    case autoRevealSpoilers = 8
+    case deletePaperAnimation = 9
 }
 
 private struct FullGramChatsCategoryArguments {
@@ -1669,6 +1692,16 @@ func fullGramChatsCategoryController(context: AccountContext) -> ViewController 
             pushControllerImpl?(fullGramAutoResponderController(context: context))
         },
         toggle: { option, value in
+            switch option {
+            case .autoRevealSpoilers:
+                FullGramExtras.shared.autoRevealSpoilers = value
+                return
+            case .deletePaperAnimation:
+                FullGramExtras.shared.deletePaperAnimation = value
+                return
+            default:
+                break
+            }
             try? store.update { settings in
                 switch option {
                 case .hideStickerTime:
@@ -1685,6 +1718,8 @@ func fullGramChatsCategoryController(context: AccountContext) -> ViewController 
                     settings.interface.hideFastShare = value
                 case .horizonLockVideoMessages:
                     settings.interface.horizonLockVideoMessages = value
+                case .autoRevealSpoilers, .deletePaperAnimation:
+                    break
                 }
             }
         }
@@ -1725,6 +1760,8 @@ func fullGramChatsCategoryController(context: AccountContext) -> ViewController 
             .toggle(.addCommaAfterMention, t("Запятая после упоминания (@nick, )", "Add comma after mention"), ui.addCommaAfterMention),
             .toggle(.hideFastShare, t("Скрыть кнопку быстрого репоста", "Hide fast share button"), ui.hideFastShare),
             .toggle(.horizonLockVideoMessages, t("Фиксация горизонта в видеокружках", "Horizon lock in video messages"), ui.horizonLockVideoMessages),
+            .toggle(.autoRevealSpoilers, t("Автораскрытие спойлеров", "Auto-reveal spoilers"), FullGramExtras.shared.autoRevealSpoilers),
+            .toggle(.deletePaperAnimation, t("Анимация удаления (бумага в мусорку)", "Paper trash delete animation"), FullGramExtras.shared.deletePaperAnimation),
             .optionsInfo(t(
                 "Настройки мгновенно применяются ко всем открытым чатам.",
                 "Settings take effect immediately in chats."
@@ -3328,6 +3365,10 @@ private struct FullGramAppearanceCategoryArguments {
     let openThemes: () -> Void
     let openDesign: () -> Void
     let openIcons: () -> Void
+    let openFrames: () -> Void
+    let openNicknames: () -> Void
+    let openSkins: () -> Void
+    let openBubbles: () -> Void
 }
 
 private enum FullGramAppearanceCategoryEntry: ItemListNodeEntry {
@@ -3335,8 +3376,17 @@ private enum FullGramAppearanceCategoryEntry: ItemListNodeEntry {
     case themes(String)
     case design(String)
     case icons(String)
+    case frames(String)
+    case nicknames(String)
+    case skins(String)
+    case bubbles(String)
 
-    var section: ItemListSectionId { return 0 }
+    var section: ItemListSectionId {
+        switch self {
+        case .fonts, .themes, .design, .icons: return 0
+        case .frames, .nicknames, .skins, .bubbles: return 1
+        }
+    }
 
     var stableId: Int32 {
         switch self {
@@ -3344,6 +3394,10 @@ private enum FullGramAppearanceCategoryEntry: ItemListNodeEntry {
         case .themes: return 1
         case .design: return 2
         case .icons: return 3
+        case .frames: return 10
+        case .nicknames: return 11
+        case .skins: return 12
+        case .bubbles: return 13
         }
     }
 
@@ -3362,6 +3416,14 @@ private enum FullGramAppearanceCategoryEntry: ItemListNodeEntry {
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.appearance, title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openDesign)
         case let .icons(title):
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.appearance, title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openIcons)
+        case let .frames(title):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.appearance, title: title, label: FullGramAvatarFrames.isEnabled ? "Вкл." : "Выкл.", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openFrames)
+        case let .nicknames(title):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.appearance, title: title, label: FullGramNicknameStyle.activePreset?.title ?? "Стандартный", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openNicknames)
+        case let .skins(title):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.appearance, title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openSkins)
+        case let .bubbles(title):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.appearance, title: title, label: "\(Int(FullGramBubbleCustomization.cornerRadius.rounded())) pt", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openBubbles)
         }
     }
 }
@@ -3372,7 +3434,11 @@ func fullGramAppearanceCategoryController(context: AccountContext) -> ViewContro
         openFonts: { pushImpl?(fullGramFontsController(context: context)) },
         openThemes: { pushImpl?(fullGramThemesController(context: context)) },
         openDesign: { pushImpl?(fullGramDesignController(context: context)) },
-        openIcons: { pushImpl?(fullGramAppIconsController(context: context)) }
+        openIcons: { pushImpl?(fullGramAppIconsController(context: context)) },
+        openFrames: { pushImpl?(fullGramAvatarFramesController(context: context)) },
+        openNicknames: { pushImpl?(fullGramNicknameStyleController(context: context)) },
+        openSkins: { pushImpl?(fullGramColorSkinsController(context: context)) },
+        openBubbles: { pushImpl?(fullGramBubblesController(context: context)) }
     )
     let signal = context.sharedContext.presentationData
     |> map { presentationData -> (ItemListControllerState, (ItemListNodeState, Any)) in
@@ -3380,7 +3446,11 @@ func fullGramAppearanceCategoryController(context: AccountContext) -> ViewContro
             .fonts("Шрифты"),
             .themes("Темы"),
             .design("Дизайн"),
-            .icons("Иконки приложения")
+            .icons("Иконки приложения"),
+            .frames("Анимированные рамки"),
+            .nicknames("Стили ников"),
+            .skins("Скины раскраски"),
+            .bubbles("Настройка пузырей")
         ]
         let data = ItemListPresentationData(presentationData)
         let state = ItemListControllerState(presentationData: data, title: .text("Оформление"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))

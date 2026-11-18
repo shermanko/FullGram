@@ -88,8 +88,12 @@ class BazelCommandLine:
         ]
 
         self.common_release_args = [
-            # Enable cross-crate link-time optimization for Rust targets.
-            '--@rules_rust//rust/settings:lto=fat',
+            # Parallelize Swift WMO codegen across cores for faster release builds.
+            '--@build_bazel_rules_swift//swift:copt=-j',
+            f'--@build_bazel_rules_swift//swift:copt={num_threads}',
+
+            # Use ThinLTO for fast cross-crate Rust optimization.
+            '--@rules_rust//rust/settings:lto=thin',
 
             # https://github.com/bazelbuild/rules_swift
             # Enable whole module optimization.
@@ -99,15 +103,10 @@ class BazelCommandLine:
             # Use -Osize instead of -O when building swift modules.
             '--features=swift.opt_uses_osize',
 
-            # --num-threads 0 forces swiftc to generate one object file per module; it:
-            # 1. resolves issues with the linker caused by the swift-objc mixing.
-            # 2. makes the resulting binaries significantly smaller (up to 9% for this project).
-            #'--swiftcopt=-num-threads', '--swiftcopt=1',
-            #'--@build_bazel_rules_swift//swift:copt="-num-threads 0"',
-
-            # Strip unsused code.
+            # Strip unused code and local symbols.
             '--features=dead_strip',
             '--objc_enable_binary_stripping',
+            '--linkopt=-Wl,-dead_strip',
         ]
 
     def set_lock(self, lock):
@@ -640,7 +639,7 @@ def build(bazel, arguments):
         bazel_command_line.configuration_args = [
             argument for argument in bazel_command_line.configuration_args
             if argument not in ('--apple_generate_dsym', '--output_groups=+dsyms')
-        ]
+        ] + ['--linkopt=-Wl,-x']
     if arguments.embedWatchApp:
         if arguments.configuration in ('debug_arm64', 'release_arm64'):
             if arguments.watchApiId is None or arguments.watchApiHash is None:

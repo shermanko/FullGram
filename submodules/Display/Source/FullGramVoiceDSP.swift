@@ -8,6 +8,9 @@ public final class FullGramVoiceDSP {
     private let mode: FullGramVoiceMode
     private let noiseMode: FullGramNoiseReductionMode
     private let sampleRate: Double
+    private let cachedCustomPitch: Double
+    private let cachedCustomEcho: Double
+    private let cachedCustomWarmth: Double
     private var robotPhase: Double = 0.0
     private var lfoPhase: Double = 0.0
     private var grainPhase: Double = 0.0
@@ -41,6 +44,9 @@ public final class FullGramVoiceDSP {
         self.mode = mode
         self.noiseMode = noiseMode
         self.sampleRate = max(8000.0, sampleRate)
+        self.cachedCustomPitch = Double(FullGramCustomVoiceSettings.pitch)
+        self.cachedCustomEcho = Double(FullGramCustomVoiceSettings.echo)
+        self.cachedCustomWarmth = Double(FullGramCustomVoiceSettings.warmth)
         self.ring = [Double](repeating: 0.0, count: 16384)
         self.echoRing = [Double](repeating: 0.0, count: 8192)
     }
@@ -73,9 +79,9 @@ public final class FullGramVoiceDSP {
         case .trippy:
             self.processPitch(samples, count: count, basePitch: 1.05, lfoDepth: 0.34)
         case .custom:
-            let customPitch = Double(FullGramCustomVoiceSettings.pitch)
-            let customEcho = Double(FullGramCustomVoiceSettings.echo)
-            let customWarmth = Double(FullGramCustomVoiceSettings.warmth)
+            let customPitch = self.cachedCustomPitch
+            let customEcho = self.cachedCustomEcho
+            let customWarmth = self.cachedCustomWarmth
             if abs(customPitch - 1.0) > 0.02 {
                 self.processPitch(samples, count: count, basePitch: customPitch, lfoDepth: 0.0)
             }

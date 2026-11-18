@@ -74,6 +74,8 @@ public final class FullGramPluginManager {
     }
     private var descriptors: [FullGramPluginDescriptor] = []
     private var loaded: [String: FullGramLoadedPlugin] = [:]
+    private var cachedOrderedPlugins: [FullGramLoadedPlugin] = []
+    private var cachedRenderPlugins: [FullGramLoadedPlugin] = []
     private var logsByPlugin: [String: [String]] = [:]
     private var cachedSystemEnabled: Bool?
     private var hasRenderHooks: Bool = false
@@ -360,6 +362,8 @@ public final class FullGramPluginManager {
 
     private func reloadRuntimeLocked() {
         self.loaded.removeAll()
+        self.cachedOrderedPlugins.removeAll()
+        self.cachedRenderPlugins.removeAll()
         self.hasRenderHooks = false
         guard self.isSystemEnabled else { return }
 
@@ -368,8 +372,10 @@ public final class FullGramPluginManager {
             let runtime = self.compile(descriptor: descriptor)
             if runtime.hasRenderHook {
                 anyRender = true
+                self.cachedRenderPlugins.append(runtime)
             }
             self.loaded[descriptor.id] = runtime
+            self.cachedOrderedPlugins.append(runtime)
         }
         self.hasRenderHooks = anyRender
     }
@@ -677,11 +683,11 @@ public final class FullGramPluginManager {
     ) -> FullGramPluginOutgoingDecision {
         self.ensureLoaded()
         self.lock.lock()
-        guard self.isSystemEnabled && !self.loaded.isEmpty else {
+        guard self.isSystemEnabled && !self.cachedOrderedPlugins.isEmpty else {
             self.lock.unlock()
             return .pass
         }
-        let orderedPlugins = self.descriptors.compactMap { self.loaded[$0.id] }
+        let orderedPlugins = self.cachedOrderedPlugins
         self.lock.unlock()
 
         if let chatStats {
@@ -806,13 +812,15 @@ public final class FullGramPluginManager {
         guard !text.isEmpty else { return text }
         self.ensureLoaded()
         self.lock.lock()
-        guard self.isSystemEnabled && self.hasRenderHooks else {
+        guard self.isSystemEnabled && self.hasRenderHooks && !self.cachedRenderPlugins.isEmpty else {
             self.lock.unlock()
             return text
         }
-        let renderPlugins = self.descriptors.compactMap { self.loaded[$0.id] }.filter { $0.hasRenderHook }
+        let renderPlugins = self.cachedRenderPlugins
         self.lock.unlock()
-        guard !renderPlugins.isEmpty else { return text }
+
+        self.vmLock.lock()
+        defer { self.vmLock.unlock() }
 
         var currentText = text
         for plugin in renderPlugins {

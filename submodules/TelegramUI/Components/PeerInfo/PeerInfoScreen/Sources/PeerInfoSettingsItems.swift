@@ -496,7 +496,7 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
     
     if case let .user(user) = data.peer {
         let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
-        let phoneLabel = FullGramExtras.shared.hidePhoneNumber
+        let phoneLabel = (FullGramExtras.shared.hidePhoneNumber || FullGramExtras.shared.privateMode)
             ? (ru ? "Скрыт" : "Hidden")
             : (user.phone.flatMap({ formatPhoneNumber(context: context, number: $0) }) ?? "")
         items[.info]!.append(PeerInfoScreenDisclosureItem(id: ItemPhoneNumber, label: .text(phoneLabel), text: presentationData.strings.Settings_PhoneNumber, icon: PresentationResourcesSettings.recentCalls, action: {

@@ -73,6 +73,8 @@ public final class FullGramBadges {
     private var roles: [String: FullGramBadgeRole] = [:]
     private var usersById: [Int64: String] = [:]
     private var usersByName: [String: String] = [:]
+    private var cachedIsEnabled: Bool?
+    private var cachedCustomPopupText: String?
     private var isRefreshing = false
 
     public static let builtInRoles: [String: FullGramBadgeRole] = [
@@ -101,10 +103,22 @@ public final class FullGramBadges {
 
     public var isEnabled: Bool {
         get {
-            if self.defaults.object(forKey: self.enabledKey) == nil { return true }
-            return self.defaults.bool(forKey: self.enabledKey)
+            self.lock.lock()
+            if let v = self.cachedIsEnabled {
+                self.lock.unlock()
+                return v
+            }
+            let resolved: Bool = (self.defaults.object(forKey: self.enabledKey) == nil)
+                ? true
+                : self.defaults.bool(forKey: self.enabledKey)
+            self.cachedIsEnabled = resolved
+            self.lock.unlock()
+            return resolved
         }
         set {
+            self.lock.lock()
+            self.cachedIsEnabled = newValue
+            self.lock.unlock()
             self.defaults.set(newValue, forKey: self.enabledKey)
             NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
         }
@@ -159,10 +173,21 @@ public final class FullGramBadges {
 
     public var customPopupText: String {
         get {
-            return UserDefaults.standard.string(forKey: "fullgram.badges.customPopupText") ?? ""
+            self.lock.lock()
+            if let v = self.cachedCustomPopupText {
+                self.lock.unlock()
+                return v
+            }
+            let resolved = UserDefaults.standard.string(forKey: "fullgram.badges.customPopupText") ?? ""
+            self.cachedCustomPopupText = resolved
+            self.lock.unlock()
+            return resolved
         }
         set {
             let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.lock.lock()
+            self.cachedCustomPopupText = trimmed
+            self.lock.unlock()
             if trimmed.isEmpty {
                 UserDefaults.standard.removeObject(forKey: "fullgram.badges.customPopupText")
             } else {

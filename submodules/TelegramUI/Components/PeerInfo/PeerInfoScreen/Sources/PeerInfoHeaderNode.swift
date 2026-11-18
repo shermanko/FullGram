@@ -1314,29 +1314,47 @@ final class PeerInfoHeaderNode: ASDisplayNode {
                 title = "" //"\u{00A0}"
             }
             if title.isEmpty {
-                if case let .user(user) = peer, let phone = user.phone, !(user.id == self.context.account.peerId && FullGramExtras.shared.hidePhoneNumber) {
+                if case let .user(user) = peer, let phone = user.phone, !(user.id == self.context.account.peerId && (FullGramExtras.shared.hidePhoneNumber || FullGramExtras.shared.privateMode)) {
                     title = formatPhoneNumber(context: self.context, number: phone)
                 } else if let addressName = peer.addressName {
-                    title = "@\(addressName)"
+                    if FullGramExtras.shared.privateMode && FullGramExtras.shared.privateModeHideUsername {
+                        title = "@••••••••"
+                    } else {
+                        title = "@\(addressName)"
+                    }
                 } else {
                     title = "_"
                 }
             }
 
             titleStringText = title
-            titleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: .white)
-            smallTitleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: .white, shadowColor: titleShadowColor)
+            if let nickPreset = FullGramNicknameStyle.activePreset,
+               (peer?.id == self.context.account.peerId || FullGramNicknameStyle.applyToChatTitles) {
+                let nickFont: UIFont = nickPreset.isMono
+                    ? UIFont.monospacedSystemFont(ofSize: 28.0, weight: nickPreset.isBold ? .bold : .medium)
+                    : (nickPreset.isBold ? Font.bold(28.0) : Font.medium(28.0))
+                let nickColor = nickPreset.colors.first ?? .white
+                let nickShadow = FullGramNicknameStyle.glowEnabled ? (nickPreset.glowColor ?? titleShadowColor) : titleShadowColor
+                titleAttributes = MultiScaleTextState.Attributes(font: nickFont, color: nickColor, shadowColor: nickShadow)
+                smallTitleAttributes = MultiScaleTextState.Attributes(font: nickFont, color: nickColor, shadowColor: nickShadow)
+            } else {
+                titleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: .white)
+                smallTitleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: .white, shadowColor: titleShadowColor)
+            }
             
             if self.isSettings, case let .user(user) = peer {
-                var subtitle = formatPhoneNumber(context: self.context, number: user.phone ?? "")
-                if FullGramExtras.shared.hidePhoneNumber {
+                let hidePhone = FullGramExtras.shared.hidePhoneNumber || FullGramExtras.shared.privateMode
+                let hideUser = FullGramExtras.shared.privateMode && FullGramExtras.shared.privateModeHideUsername
+                var subtitle = hidePhone ? "" : formatPhoneNumber(context: self.context, number: user.phone ?? "")
+                if hidePhone {
                     if let mainUsername = user.addressName, !mainUsername.isEmpty {
-                        subtitle = "@\(mainUsername)"
+                        subtitle = hideUser ? "@••••••••" : "@\(mainUsername)"
                     } else {
-                        subtitle = presentationData.strings.baseLanguageCode.hasPrefix("ru") ? "Номер скрыт" : "Phone hidden"
+                        subtitle = presentationData.strings.baseLanguageCode.hasPrefix("ru") ? "Приватный режим" : "Private mode"
                     }
                 } else if let mainUsername = user.addressName, !mainUsername.isEmpty {
-                    subtitle = "\(subtitle) • @\(mainUsername)"
+                    let displayUser = hideUser ? "@••••••••" : "@\(mainUsername)"
+                    subtitle = "\(subtitle) • \(displayUser)"
                 }
                 subtitleStringText = subtitle
                 subtitleAttributes = MultiScaleTextState.Attributes(font: Font.regular(17.0), color: .white)

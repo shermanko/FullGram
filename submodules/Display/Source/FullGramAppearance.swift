@@ -364,11 +364,36 @@ public enum FullGramThemeColors {
 
     private static func key(_ slot: Slot) -> String { return "fullgram.theme." + slot.rawValue }
 
+    private struct CachedSlot {
+        let hex: String?
+        let rgb: UInt32?
+        let color: UIColor?
+    }
+
+    private static let cacheLock = NSLock()
+    private static var slotCache: [Slot: CachedSlot] = [:]
+    private static var cachedHasColors: Bool?
+
     public private(set) static var revision: Int = 0
 
+    private static func cachedEntry(for slot: Slot) -> CachedSlot {
+        self.cacheLock.lock()
+        if let entry = self.slotCache[slot] {
+            self.cacheLock.unlock()
+            return entry
+        }
+        let raw = UserDefaults.standard.string(forKey: key(slot)) ?? ""
+        let hex: String? = raw.isEmpty ? nil : raw
+        let rgb = hex.flatMap(parse)
+        let color = rgb.map { UIColor(rgb: $0) }
+        let entry = CachedSlot(hex: hex, rgb: rgb, color: color)
+        self.slotCache[slot] = entry
+        self.cacheLock.unlock()
+        return entry
+    }
+
     public static func hex(_ slot: Slot) -> String? {
-        let value = UserDefaults.standard.string(forKey: key(slot)) ?? ""
-        return value.isEmpty ? nil : value
+        return self.cachedEntry(for: slot).hex
     }
 
     public static func parse(_ text: String) -> UInt32? {
@@ -381,14 +406,18 @@ public enum FullGramThemeColors {
     }
 
     public static func rgb(_ slot: Slot) -> UInt32? {
-        return hex(slot).flatMap(parse)
+        return self.cachedEntry(for: slot).rgb
     }
 
     public static func color(_ slot: Slot) -> UIColor? {
-        return rgb(slot).map { UIColor(rgb: $0) }
+        return self.cachedEntry(for: slot).color
     }
 
     public static func set(_ slot: Slot, hex: String?) {
+        self.cacheLock.lock()
+        self.slotCache.removeValue(forKey: slot)
+        self.cachedHasColors = nil
+        self.cacheLock.unlock()
         if let hex, let value = parse(hex) {
             UserDefaults.standard.set(String(format: "#%06X", value), forKey: key(slot))
         } else {
@@ -398,7 +427,17 @@ public enum FullGramThemeColors {
     }
 
     public static var hasColors: Bool {
-        return Slot.allCases.contains(where: { hex($0) != nil })
+        self.cacheLock.lock()
+        if let v = self.cachedHasColors {
+            self.cacheLock.unlock()
+            return v
+        }
+        self.cacheLock.unlock()
+        let v = Slot.allCases.contains(where: { hex($0) != nil })
+        self.cacheLock.lock()
+        self.cachedHasColors = v
+        self.cacheLock.unlock()
+        return v
     }
 
     public static var selectedPresetId: String? {
@@ -406,6 +445,10 @@ public enum FullGramThemeColors {
     }
 
     public static func apply(_ preset: Preset) {
+        self.cacheLock.lock()
+        self.slotCache.removeAll()
+        self.cachedHasColors = nil
+        self.cacheLock.unlock()
         for slot in Slot.allCases {
             if let value = preset.colors[slot] {
                 UserDefaults.standard.set(value, forKey: key(slot))
@@ -418,6 +461,10 @@ public enum FullGramThemeColors {
     }
 
     public static func reset() {
+        self.cacheLock.lock()
+        self.slotCache.removeAll()
+        self.cachedHasColors = false
+        self.cacheLock.unlock()
         for slot in Slot.allCases {
             UserDefaults.standard.removeObject(forKey: key(slot))
         }

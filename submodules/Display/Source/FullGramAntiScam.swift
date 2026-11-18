@@ -20,6 +20,7 @@ public final class FullGramAntiScam {
     private let prefix = "fullgram.antiscam."
     private let whitelistLock = NSLock()
     private var cachedLowerWhitelist: [String]?
+    private var boolCache: [String: Bool] = [:]
 
     private static let detectorLock = NSLock()
     private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
@@ -122,14 +123,30 @@ public final class FullGramAntiScam {
     }
 
     private func bool(_ key: String, default fallback: Bool) -> Bool {
+        self.whitelistLock.lock()
+        if let cached = self.boolCache[key] {
+            self.whitelistLock.unlock()
+            return cached
+        }
         let full = self.prefix + key
-        if self.defaults.object(forKey: full) == nil { return fallback }
-        return self.defaults.bool(forKey: full)
+        let resolved = (self.defaults.object(forKey: full) == nil) ? fallback : self.defaults.bool(forKey: full)
+        self.boolCache[key] = resolved
+        self.whitelistLock.unlock()
+        return resolved
     }
 
     private func setBool(_ key: String, _ value: Bool) {
+        self.whitelistLock.lock()
+        self.boolCache[key] = value
+        self.whitelistLock.unlock()
         self.defaults.set(value, forKey: self.prefix + key)
         NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+    }
+
+    @inline(__always)
+    private static func normalize(_ text: String) -> String {
+        let lower = text.lowercased()
+        return lower.contains("ё") ? lower.replacingOccurrences(of: "ё", with: "е") : lower
     }
 
     // MARK: - Domain & URL Inspection
@@ -312,7 +329,7 @@ public final class FullGramAntiScam {
         }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 12 else { return nil }
-        let normalized = trimmed.lowercased().replacingOccurrences(of: "ё", with: "е")
+        let normalized = Self.normalize(trimmed)
 
         var score = 0
         var reasons: [String] = []
@@ -400,7 +417,7 @@ public final class FullGramAntiScam {
         }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 6 else { return nil }
-        let normalized = trimmed.lowercased().replacingOccurrences(of: "ё", with: "е")
+        let normalized = Self.normalize(trimmed)
         let fullRange = NSRange(location: 0, length: (normalized as NSString).length)
 
         let detectedLinks = self.extractLinks(in: trimmed)
@@ -491,7 +508,7 @@ public final class FullGramAntiScam {
         if !forceCheck {
             guard self.isEnabled && self.antiOtcEnabled else { return nil }
         }
-        let normalized = text.lowercased().replacingOccurrences(of: "ё", with: "е")
+        let normalized = Self.normalize(text)
         let range = NSRange(location: 0, length: (normalized as NSString).length)
         for regex in Self.otcRegexes {
             if regex.firstMatch(in: normalized, range: range) != nil {

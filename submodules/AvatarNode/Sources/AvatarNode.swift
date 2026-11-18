@@ -1224,6 +1224,15 @@ public final class AvatarNode: ASDisplayNode {
     }
     
     public private(set) var storyStats: StoryStats?
+    private var fullGramFrameView: FullGramAvatarFrameView?
+    private var fullGramFrameObserver: NSObjectProtocol?
+    private var fullGramIsSelfPeer: Bool = false {
+        didSet {
+            if oldValue != self.fullGramIsSelfPeer {
+                self.updateFullGramFrame()
+            }
+        }
+    }
     
     public var font: UIFont {
         get {
@@ -1275,12 +1284,25 @@ public final class AvatarNode: ASDisplayNode {
                 return
             }
             self.updateStoryIndicator(transition: .immediate)
+            self.updateFullGramFrame()
+            self.fullGramFrameObserver = NotificationCenter.default.addObserver(
+                forName: FullGramAvatarFrames.didChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.updateFullGramFrame()
+                }
+            }
         }
         
         self.addSubnode(self.contentNode)
     }
     
     deinit {
+        if let observer = self.fullGramFrameObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
         self.cancelLoading()
     }
     
@@ -1308,6 +1330,39 @@ public final class AvatarNode: ASDisplayNode {
         self.contentNode.updateSize(size: size)
         
         self.updateStoryIndicator(transition: .immediate)
+        self.updateFullGramFrame()
+    }
+
+    private func updateFullGramFrame() {
+        guard self.isNodeLoaded else { return }
+        if self.fullGramFrameView == nil && !FullGramAvatarFrames.isEnabled {
+            return
+        }
+        let size = self.bounds.size
+        let shouldShow = size.width >= 26.0 && (self.fullGramIsSelfPeer || FullGramAvatarFrames.showInChatListAndMessages)
+        guard shouldShow, let preset = FullGramAvatarFrames.activeFrame else {
+            if let existing = self.fullGramFrameView, !existing.isHidden {
+                existing.configure(with: nil)
+                existing.isHidden = true
+            }
+            return
+        }
+        let frameView: FullGramAvatarFrameView
+        if let existing = self.fullGramFrameView {
+            frameView = existing
+        } else {
+            let created = FullGramAvatarFrameView(frame: self.bounds)
+            self.fullGramFrameView = created
+            self.view.addSubview(created)
+            frameView = created
+        }
+        if frameView.frame != self.bounds {
+            frameView.frame = self.bounds
+        }
+        if self.view.subviews.last !== frameView {
+            self.view.bringSubviewToFront(frameView)
+        }
+        frameView.configure(with: preset)
     }
     
     public func playArchiveAnimation() {
@@ -1337,6 +1392,7 @@ public final class AvatarNode: ASDisplayNode {
         displayDimensions: CGSize = CGSize(width: 60.0, height: 60.0),
         storeUnrounded: Bool = false
     ) {
+        self.fullGramIsSelfPeer = (peer?.id == accountPeerId)
         self.contentNode.setPeer(
             accountPeerId: accountPeerId,
             postbox: postbox,
@@ -1366,6 +1422,7 @@ public final class AvatarNode: ASDisplayNode {
         displayDimensions: CGSize = CGSize(width: 60.0, height: 60.0),
         storeUnrounded: Bool = false
     ) {
+        self.fullGramIsSelfPeer = (peer?.id == genericContext.account.peerId)
         self.contentNode.setPeerV2(
             context: genericContext,
             theme: theme,
@@ -1394,6 +1451,7 @@ public final class AvatarNode: ASDisplayNode {
         storeUnrounded: Bool = false,
         cutoutRect: CGRect? = nil
     ) {
+        self.fullGramIsSelfPeer = (peer?.id == (account?.peerId ?? context.account.peerId))
         self.contentNode.setPeer(
             context: context,
             account: account,

@@ -1225,39 +1225,80 @@ func fullGramMarkReadAfterSending(postbox: Postbox, network: Network, stateManag
     }).startStandalone()
 }
 
-public final class FullGramExtras {
+public final class FullGramExtras: @unchecked Sendable {
     public static let shared = FullGramExtras()
 
     private let defaults = UserDefaults.standard
     private let prefix = "fullgram.extras."
+    private let cacheLock = NSLock()
+    private var boolCache: [String: Bool] = [:]
+    private var intCache: [String: Int] = [:]
+    private var stringCache: [String: String] = [:]
 
     private func bool(_ key: String, default fallback: Bool = false) -> Bool {
+        self.cacheLock.lock()
+        if let cached = self.boolCache[key] {
+            self.cacheLock.unlock()
+            return cached
+        }
         let full = prefix + key
-        if defaults.object(forKey: full) == nil { return fallback }
-        return defaults.bool(forKey: full)
+        let resolved: Bool = (defaults.object(forKey: full) == nil) ? fallback : defaults.bool(forKey: full)
+        self.boolCache[key] = resolved
+        self.cacheLock.unlock()
+        return resolved
     }
 
     private func setBool(_ key: String, _ value: Bool) {
-        defaults.set(value, forKey: prefix + key)
-        NotificationCenter.default.post(name: Self.didChangeNotification, object: key)
+        self.cacheLock.lock()
+        let prev = self.boolCache[key]
+        self.boolCache[key] = value
+        self.cacheLock.unlock()
+        if prev != value || defaults.object(forKey: prefix + key) == nil {
+            defaults.set(value, forKey: prefix + key)
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: key)
+        }
     }
 
     private func int(_ key: String, default fallback: Int = 0) -> Int {
+        self.cacheLock.lock()
+        if let cached = self.intCache[key] {
+            self.cacheLock.unlock()
+            return cached
+        }
         let full = prefix + key
-        if defaults.object(forKey: full) == nil { return fallback }
-        return defaults.integer(forKey: full)
+        let resolved: Int = (defaults.object(forKey: full) == nil) ? fallback : defaults.integer(forKey: full)
+        self.intCache[key] = resolved
+        self.cacheLock.unlock()
+        return resolved
     }
 
     private func setInt(_ key: String, _ value: Int) {
-        defaults.set(value, forKey: prefix + key)
-        NotificationCenter.default.post(name: Self.didChangeNotification, object: key)
+        self.cacheLock.lock()
+        let prev = self.intCache[key]
+        self.intCache[key] = value
+        self.cacheLock.unlock()
+        if prev != value || defaults.object(forKey: prefix + key) == nil {
+            defaults.set(value, forKey: prefix + key)
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: key)
+        }
     }
 
     private func string(_ key: String, default fallback: String = "") -> String {
-        return defaults.string(forKey: prefix + key) ?? fallback
+        self.cacheLock.lock()
+        if let cached = self.stringCache[key] {
+            self.cacheLock.unlock()
+            return cached
+        }
+        let resolved = defaults.string(forKey: prefix + key) ?? fallback
+        self.stringCache[key] = resolved
+        self.cacheLock.unlock()
+        return resolved
     }
 
     private func setString(_ key: String, _ value: String) {
+        self.cacheLock.lock()
+        self.stringCache[key] = value
+        self.cacheLock.unlock()
         defaults.set(value, forKey: prefix + key)
         NotificationCenter.default.post(name: Self.didChangeNotification, object: key)
     }
@@ -1426,13 +1467,12 @@ public final class FullGramExtras {
 
     public var downloadBoostMultiplier: Int {
         get {
-            let stored = defaults.integer(forKey: prefix + "downloadBoostMultiplier")
+            let stored = int("downloadBoostMultiplier", default: 2)
             return Self.downloadBoostMultiplierOptions.contains(stored) ? stored : 2
         }
         set {
             let sanitized = Self.downloadBoostMultiplierOptions.contains(newValue) ? newValue : 2
-            defaults.set(sanitized, forKey: prefix + "downloadBoostMultiplier")
-            NotificationCenter.default.post(name: Self.didChangeNotification, object: "downloadBoostMultiplier")
+            setInt("downloadBoostMultiplier", sanitized)
         }
     }
 
@@ -1460,16 +1500,12 @@ public final class FullGramExtras {
 
     public var removeGlassColorHex: String? {
         get {
-            let raw = defaults.string(forKey: prefix + "removeGlassColorHex") ?? ""
+            let raw = string("removeGlassColorHex", default: "")
             return raw.isEmpty ? nil : raw
         }
         set {
-            if let value = newValue?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
-                defaults.set(value, forKey: prefix + "removeGlassColorHex")
-            } else {
-                defaults.removeObject(forKey: prefix + "removeGlassColorHex")
-            }
-            NotificationCenter.default.post(name: Self.didChangeNotification, object: "removeGlassColorHex")
+            let cleaned = newValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            setString("removeGlassColorHex", cleaned)
         }
     }
 
@@ -1481,6 +1517,33 @@ public final class FullGramExtras {
     public var monochromeAppIcons: Bool {
         get { bool("monochromeAppIcons", default: false) }
         set { setBool("monochromeAppIcons", newValue) }
+    }
+
+    // MARK: - Спойлеры, Анимация удаления и Приватный режим
+
+    public var autoRevealSpoilers: Bool {
+        get { bool("autoRevealSpoilers", default: false) }
+        set { setBool("autoRevealSpoilers", newValue) }
+    }
+
+    public var deletePaperAnimation: Bool {
+        get { bool("deletePaperAnimation", default: true) }
+        set { setBool("deletePaperAnimation", newValue) }
+    }
+
+    public var privateMode: Bool {
+        get { bool("privateMode", default: false) }
+        set { setBool("privateMode", newValue) }
+    }
+
+    public var privateModeHidePreviews: Bool {
+        get { bool("privateModeHidePreviews", default: true) }
+        set { setBool("privateModeHidePreviews", newValue) }
+    }
+
+    public var privateModeHideUsername: Bool {
+        get { bool("privateModeHideUsername", default: true) }
+        set { setBool("privateModeHideUsername", newValue) }
     }
 
     // MARK: - Helpers for 1.4 (Удаление метаданных) and 1.5 (Случайные имена файлов)
