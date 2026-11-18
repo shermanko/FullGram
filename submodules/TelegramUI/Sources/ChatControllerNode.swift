@@ -3958,8 +3958,11 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                     }
                 }
 
+                let selection = chatPresentationInterfaceState.interfaceState.effectiveInputState.selectionRange
+                let hasTextSelection = selection.upperBound > selection.lowerBound
                 let shouldShowFormattingBar = FullGramExtras.shared.quickFormattingBar
                     && !commandBarVisible
+                    && hasTextSelection
                     && !plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     && self.overlayContextPanelNode == nil
                     && chatPresentationInterfaceState.inputMode == .text

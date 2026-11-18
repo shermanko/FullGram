@@ -109,8 +109,8 @@ public enum FullGramSpeechBleep {
         let trimmedRaw = rawWord.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedRaw.isEmpty else { return false }
 
-        // 1. iOS SFSpeechRecognizer replaces recognized swear words with asterisks (e.g. "б***ь", "х**", "f**k", "***")
-        if trimmedRaw.contains("*") {
+        // 1. iOS SFSpeechRecognizer replaces recognized swear words with asterisks (e.g. "б***ь", "х**", "f**k")
+        if trimmedRaw.contains("*") && (trimmedRaw.rangeOfCharacter(from: .letters) != nil || trimmedRaw.contains("**")) {
             return true
         }
 
@@ -310,7 +310,7 @@ public enum FullGramSpeechBleep {
                 return
             }
 
-            if let result {
+            if let result, result.isFinal {
                 let extracted = extractProfanityRanges(from: result, leadOffset: leadOffset)
                 if !extracted.isEmpty {
                     partialRanges.append(contentsOf: extracted)
@@ -318,20 +318,17 @@ public enum FullGramSpeechBleep {
                 if !result.bestTranscription.segments.isEmpty {
                     hadAnySegments = true
                 }
-                if result.isFinal {
-                    finished = true
-                    let finalRanges = merge(ranges: partialRanges)
-                    lock.unlock()
-                    if !finalRanges.isEmpty {
-                        completion(finalRanges)
-                    } else if !hadAnySegments && attemptIndex + 1 < attempts.count {
-                        performRecognition(url: url, attemptIndex: attemptIndex + 1, leadOffset: leadOffset, accumulatedRanges: partialRanges, completion: completion)
-                    } else {
-                        // If ru-RU produced segments with no profanity, still complete quickly
-                        completion(finalRanges)
-                    }
-                    return
+                finished = true
+                let finalRanges = merge(ranges: partialRanges)
+                lock.unlock()
+                if !finalRanges.isEmpty {
+                    completion(finalRanges)
+                } else if !hadAnySegments && attemptIndex + 1 < attempts.count {
+                    performRecognition(url: url, attemptIndex: attemptIndex + 1, leadOffset: leadOffset, accumulatedRanges: partialRanges, completion: completion)
+                } else {
+                    completion(finalRanges)
                 }
+                return
             }
 
             if error != nil {
@@ -420,6 +417,9 @@ public enum FullGramSpeechBleep {
                 rawStart = fallbackSegments[idx].timestamp
                 rawDuration = fallbackSegments[idx].duration
             }
+            guard rawDuration > 0.02 else { continue }
+            if rawStart <= 0.0 && leadOffset > 0.05 { continue }
+
             if includePreviousPrefix, idx > 0 {
                 let prevStart = segments[idx - 1].timestamp
                 if prevStart > 0.0 && rawStart - prevStart <= 0.32 {
@@ -428,8 +428,8 @@ public enum FullGramSpeechBleep {
                 }
             }
 
-            let adjustedStart = max(0.0, rawStart - leadOffset - 0.07)
-            let effectiveDur = max(0.26, rawDuration + 0.14)
+            let adjustedStart = max(0.0, rawStart - leadOffset - 0.05)
+            let effectiveDur = max(0.24, rawDuration + 0.10)
             ranges.append(adjustedStart ... (adjustedStart + effectiveDur))
         }
         return ranges
@@ -448,6 +448,74 @@ public enum FullGramSpeechBleep {
         return merged
     }
 
+    private static let bundledSamplesLock = NSLock()
+    private static var bundledSamplesCache: [String: [Float]] = [:]
+
+    private static func bundledAudioSamples48k(resourceName: String) -> [Float] {
+        bundledSamplesLock.lock()
+        if let cached = bundledSamplesCache[resourceName] {
+            bundledSamplesLock.unlock()
+            return cached
+        }
+        bundledSamplesLock.unlock()
+
+        guard let url = Bundle.main.url(forResource: resourceName, withExtension: "mp3") else {
+            return []
+        }
+        let asset = AVURLAsset(url: url)
+        guard let track = asset.tracks(withMediaType: .audio).first,
+              let reader = try? AVAssetReader(asset: asset) else {
+            return []
+        }
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: 48000.0,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false
+        ]
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
+        output.alwaysCopiesSampleData = false
+        guard reader.canAdd(output) else { return [] }
+        reader.add(output)
+        guard reader.startReading() else { return [] }
+
+        var samples: [Float] = []
+        while reader.status == .reading, let sampleBuffer = output.copyNextSampleBuffer() {
+            guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { continue }
+            let length = CMBlockBufferGetDataLength(blockBuffer)
+            guard length > 0 else { continue }
+            let count = length / MemoryLayout<Float>.size
+            var chunk = [Float](repeating: 0.0, count: count)
+            chunk.withUnsafeMutableBytes { raw in
+                if let base = raw.baseAddress {
+                    CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length, destination: base)
+                }
+            }
+            samples.append(contentsOf: chunk)
+        }
+
+        // Peak-normalize to 0.90 for crisp, audible playback over speech
+        var peak: Float = 0.0
+        for s in samples {
+            let a = abs(s)
+            if a > peak { peak = a }
+        }
+        if peak > 0.01 && peak < 0.85 {
+            let gain = min(4.0, 0.90 / peak)
+            for i in 0 ..< samples.count {
+                samples[i] = max(-0.98, min(0.98, samples[i] * gain))
+            }
+        }
+
+        bundledSamplesLock.lock()
+        bundledSamplesCache[resourceName] = samples
+        bundledSamplesLock.unlock()
+        return samples
+    }
+
     public static func sample(sound: FullGramBleepSound, index: Int, totalSamples: Int, sampleRate: Double) -> Float {
         guard totalSamples > 0, sampleRate > 0.0 else { return 0.0 }
         let t = Double(index) / sampleRate
@@ -464,26 +532,24 @@ public enum FullGramSpeechBleep {
             let tone = 0.65 * sin(2.0 * .pi * 1046.5 * t) + 0.35 * sin(2.0 * .pi * 2093.0 * t)
             return Float(tone * decay * env * 0.52)
         case .dolphin:
-            // SpongeBob dolphin chirp: rapid FM whistle sweep with bubbly warble bursts
-            let burst = sin(.pi * progress * 3.0)
-            let burstEnv = abs(burst)
-            let modFreq = 26.0
-            let carrierFreq = 2900.0 + 1250.0 * sin(2.0 * .pi * modFreq * t) + 550.0 * sin(2.0 * .pi * 7.5 * t)
-            let signal = sin(2.0 * .pi * carrierFreq * t)
-            return Float(signal * burstEnv * env * 0.44)
+            let clip = bundledAudioSamples48k(resourceName: "fullgram_dolphin")
+            if !clip.isEmpty {
+                let pos = Int((Double(index) / max(1.0, sampleRate)) * 48000.0) % clip.count
+                return clip[pos] * Float(env)
+            }
+            let burstEnv = abs(sin(.pi * progress * 3.0))
+            let carrierFreq = 2900.0 + 1250.0 * sin(2.0 * .pi * 26.0 * t)
+            return Float(sin(2.0 * .pi * carrierFreq * t) * burstEnv * env * 0.44)
         case .duck:
-            // Nasal formant duck quack ("кря-кря")
+            let clip = bundledAudioSamples48k(resourceName: "fullgram_duck")
+            if !clip.isEmpty {
+                let pos = Int((Double(index) / max(1.0, sampleRate)) * 48000.0) % clip.count
+                return clip[pos] * Float(env)
+            }
             let quackEnv = sin(.pi * min(1.0, progress * 1.15))
-            let f0 = 285.0 - 75.0 * progress + 18.0 * sin(2.0 * .pi * 38.0 * t)
+            let f0 = 285.0 - 75.0 * progress
             let p = 2.0 * .pi * f0 * t
-            let nasal = 0.45 * sin(p) + 0.35 * sin(2.0 * p) + 0.25 * sin(3.0 * p) + 0.18 * sin(5.0 * p)
-            return Float(nasal * quackEnv * env * 0.52)
-        case .coin:
-            // Classic 8-bit two-tone coin chime: B5 (987.77 Hz) -> E6 (1318.51 Hz)
-            let freq = (t < 0.075) ? 987.77 : 1318.51
-            let decay = exp(-max(0.0, t - 0.075) * 4.8)
-            let sq = sin(2.0 * .pi * freq * t) + 0.33 * sin(6.0 * .pi * freq * t)
-            return Float(sq * decay * env * 0.46)
+            return Float((0.45 * sin(p) + 0.35 * sin(2.0 * p)) * quackEnv * env * 0.52)
         case .custom:
             if let customVal = FullGramCustomBleepStore.shared.sampleAt(index: index, totalSamples: totalSamples, sampleRate: sampleRate) {
                 return customVal * Float(env)

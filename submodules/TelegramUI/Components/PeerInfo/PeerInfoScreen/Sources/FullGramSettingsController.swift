@@ -3911,10 +3911,12 @@ private func fullGramCategoryController(context: AccountContext, category: FullG
 
 private final class FullGramBadgesArguments {
     let toggleEnabled: (Bool) -> Void
+    let editCustomText: () -> Void
     let editURL: () -> Void
     let refreshNow: () -> Void
-    init(toggleEnabled: @escaping (Bool) -> Void, editURL: @escaping () -> Void, refreshNow: @escaping () -> Void) {
+    init(toggleEnabled: @escaping (Bool) -> Void, editCustomText: @escaping () -> Void, editURL: @escaping () -> Void, refreshNow: @escaping () -> Void) {
         self.toggleEnabled = toggleEnabled
+        self.editCustomText = editCustomText
         self.editURL = editURL
         self.refreshNow = refreshNow
     }
@@ -3928,6 +3930,7 @@ private enum FullGramBadgesSection: Int32 {
 private enum FullGramBadgesEntry: ItemListNodeEntry {
     case header(String)
     case enabled(Bool)
+    case customText(String, String)
     case url(String, String)
     case refresh(String, ItemListActionKind)
     case footer(String)
@@ -3936,7 +3939,7 @@ private enum FullGramBadgesEntry: ItemListNodeEntry {
 
     var section: ItemListSectionId {
         switch self {
-        case .header, .enabled, .url, .refresh, .footer: return FullGramBadgesSection.main.rawValue
+        case .header, .enabled, .customText, .url, .refresh, .footer: return FullGramBadgesSection.main.rawValue
         case .rolesHeader, .roleItem: return FullGramBadgesSection.roles.rawValue
         }
     }
@@ -3945,9 +3948,10 @@ private enum FullGramBadgesEntry: ItemListNodeEntry {
         switch self {
         case .header: return 0
         case .enabled: return 1
-        case .url: return 2
-        case .refresh: return 3
-        case .footer: return 4
+        case .customText: return 2
+        case .url: return 3
+        case .refresh: return 4
+        case .footer: return 5
         case .rolesHeader: return 100
         case let .roleItem(idx, _, _): return 101 + idx
         }
@@ -3964,6 +3968,8 @@ private enum FullGramBadgesEntry: ItemListNodeEntry {
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .enabled(val):
             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Показывать бейджи FullGram", value: val, sectionId: self.section, style: .blocks, updated: args.toggleEnabled)
+        case let .customText(title, value):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.editCustomText)
         case let .url(title, value):
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.editURL)
         case let .refresh(title, kind):
@@ -3996,6 +4002,25 @@ public func fullGramBadgesController(context: AccountContext) -> ViewController 
     let args = FullGramBadgesArguments(
         toggleEnabled: { val in
             FullGramBadges.shared.isEnabled = val
+        },
+        editCustomText: {
+            let alert = UIAlertController(
+                title: "Текст бейджа",
+                message: "Этот текст показывается во всплывающем окне сверху при нажатии на эмодзи бейджа в профиле. Оставьте пустым, чтобы использовать текст роли по умолчанию.",
+                preferredStyle: .alert
+            )
+            alert.addTextField { tf in
+                tf.text = FullGramBadges.shared.customPopupText
+                tf.placeholder = "Например: Официальный создатель плагинов…"
+            }
+            alert.addAction(UIAlertAction(title: "Сохранить", style: .default, handler: { _ in
+                FullGramBadges.shared.customPopupText = alert.textFields?.first?.text ?? ""
+            }))
+            alert.addAction(UIAlertAction(title: "Сбросить", style: .destructive, handler: { _ in
+                FullGramBadges.shared.customPopupText = ""
+            }))
+            alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            presentNativeImpl?(alert)
         },
         editURL: {
             let alert = UIAlertController(
@@ -4050,11 +4075,13 @@ public func fullGramBadgesController(context: AccountContext) -> ViewController 
     |> deliverOnMainQueue
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let badges = FullGramBadges.shared
+        let customTextLabel = badges.customPopupText.isEmpty ? "По умолчанию" : String(badges.customPopupText.prefix(24))
         let urlLabel = badges.badgesURL.isEmpty ? "По умолчанию" : String(badges.badgesURL.suffix(24))
 
         var entries: [FullGramBadgesEntry] = [
             .header("БЕЙДЖИ FULLGRAM (CLOUDFLARE / GITHUB)"),
             .enabled(badges.isEnabled),
+            .customText("Текст бейджа", customTextLabel),
             .url("Ссылка на badges.json", urlLabel),
             .refresh(isRefreshing ? "⏳ Загрузка…" : "🔄 Обновить бейджи с сервера", isRefreshing ? .neutral : .generic),
             .footer("Бейджи отображаются в профиле, шапке чата и у сообщений в группах. @shermanko (Создатель), @fullgram_mod и @fullgramgroup уже встроены по умолчанию; новых Premium-пользователей можно добавлять в badges.json без обновления приложения.")

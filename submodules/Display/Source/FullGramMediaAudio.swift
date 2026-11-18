@@ -148,7 +148,6 @@ public enum FullGramBleepSound: String, CaseIterable {
     case silence
     case dolphin
     case duck
-    case coin
     case custom
 
     public static let defaultsKey = "fullgram.media.bleepSound"
@@ -166,9 +165,8 @@ public enum FullGramBleepSound: String, CaseIterable {
         case .off: return ru ? "Выключено" : "Off"
         case .bell: return ru ? "Звон" : "Chime"
         case .silence: return ru ? "Пустота" : "Silence"
-        case .dolphin: return ru ? "Дельфинячий писк" : "Dolphin chirp"
-        case .duck: return ru ? "🦆 Кряк утки" : "🦆 Duck quack"
-        case .coin: return ru ? "🪙 Монетка (8-bit)" : "🪙 8-bit Coin"
+        case .dolphin: return ru ? "🐬 Дельфин" : "🐬 Dolphin"
+        case .duck: return ru ? "🦆 Утка" : "🦆 Duck"
         case .custom: return ru ? "🎵 Свой звук" : "🎵 Custom sound"
         }
     }
@@ -178,9 +176,8 @@ public enum FullGramBleepSound: String, CaseIterable {
         case .off: return ru ? "Без запикивания матов" : "No profanity censoring"
         case .bell: return ru ? "Чистый звон вместо мата" : "Clean chime over profanity"
         case .silence: return ru ? "Тишина вместо мата" : "Mute profanity"
-        case .dolphin: return ru ? "Писк дельфина из Губки Боба" : "SpongeBob dolphin chirp"
-        case .duck: return ru ? "Мемный кряк утки вместо мата" : "Funny duck quack over profanity"
-        case .coin: return ru ? "Аркадный звук монетки" : "Retro arcade coin chime"
+        case .dolphin: return ru ? "Оригинальный звук дельфина" : "Dolphin sound clip"
+        case .duck: return ru ? "Оригинальный кряк утки" : "Duck quack sound clip"
         case .custom: return ru ? "Ваш записанный или загруженный звук" : "Your recorded or imported audio clip"
         }
     }

@@ -1057,7 +1057,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
                         if case .premium = strongSelf.currentCredibilityIcon {
                             strongSelf.displayPremiumIntro?(strongSelf.titleCredibilityIconView, currentEmojiStatus, strongSelf.emojiStatusFileAndPackTitle.get(), false)
                         } else if case let .fullGram(badge) = strongSelf.currentCredibilityIcon {
-                            strongSelf.controller?.present(UndoOverlayController(presentationData: presentationData, content: .info(title: badge.chipText, text: badge.label, timeout: 4.0, customUndoText: nil), elevatedLayout: false, action: { _ in return false }), in: .current)
+                            strongSelf.presentFullGramBadgeBanner(badge: badge)
                         }
                     }
                 )),
@@ -1081,7 +1081,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
                         if case .premium = strongSelf.currentCredibilityIcon {
                             strongSelf.displayPremiumIntro?(strongSelf.titleExpandedCredibilityIconView, currentEmojiStatus, strongSelf.emojiStatusFileAndPackTitle.get(), true)
                         } else if case let .fullGram(badge) = strongSelf.currentCredibilityIcon {
-                            strongSelf.controller?.present(UndoOverlayController(presentationData: presentationData, content: .info(title: badge.chipText, text: badge.label, timeout: 4.0, customUndoText: nil), elevatedLayout: false, action: { _ in return false }), in: .current)
+                            strongSelf.presentFullGramBadgeBanner(badge: badge)
                         }
                     }
                 )),
@@ -3027,5 +3027,164 @@ final class PeerInfoHeaderNode: ASDisplayNode {
         
         let maskAnchorPoint = CGPoint(x: 0.5, y: self.isAvatarExpanded ? 0.37 : 0.5)
         transition.updateAnchorPoint(layer: self.avatarListNode.maskNode.layer, anchorPoint: maskAnchorPoint)
+    }
+
+    private func presentFullGramBadgeBanner(badge: FullGramBadge) {
+        guard let hostView = self.controller?.view.window ?? self.controller?.displayNode.view else {
+            return
+        }
+        let bannerTag = 984312
+        hostView.subviews.filter { $0.tag == bannerTag }.forEach { $0.removeFromSuperview() }
+
+        let text = FullGramBadges.shared.resolvedPopupText(for: badge)
+        let banner = FullGramBadgeTopBannerView(badge: badge, text: text)
+        banner.tag = bannerTag
+        banner.translatesAutoresizingMaskIntoConstraints = false
+        hostView.addSubview(banner)
+
+        NSLayoutConstraint.activate([
+            banner.topAnchor.constraint(equalTo: hostView.safeAreaLayoutGuide.topAnchor, constant: 8.0),
+            banner.leadingAnchor.constraint(greaterThanOrEqualTo: hostView.leadingAnchor, constant: 14.0),
+            banner.trailingAnchor.constraint(lessThanOrEqualTo: hostView.trailingAnchor, constant: -14.0),
+            banner.centerXAnchor.constraint(equalTo: hostView.centerXAnchor),
+            banner.widthAnchor.constraint(lessThanOrEqualToConstant: 420.0)
+        ])
+
+        banner.alpha = 0.0
+        banner.transform = CGAffineTransform(translationX: 0.0, y: -18.0)
+        UIView.animate(withDuration: 0.28, delay: 0.0, usingSpringWithDamping: 0.85, initialSpringVelocity: 0.4, options: [.allowUserInteraction]) {
+            banner.alpha = 1.0
+            banner.transform = .identity
+        }
+
+        Task { @MainActor [weak banner] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            banner?.dismiss()
+        }
+    }
+}
+
+private final class FullGramBadgeTopBannerView: UIView {
+    private var isDismissing = false
+
+    init(badge: FullGramBadge, text: String) {
+        super.init(frame: .zero)
+        self.layer.cornerRadius = 18.0
+        self.layer.cornerCurve = .continuous
+        self.layer.shadowColor = UIColor.black.cgColor
+        self.layer.shadowOpacity = 0.28
+        self.layer.shadowRadius = 14.0
+        self.layer.shadowOffset = CGSize(width: 0.0, height: 6.0)
+
+        let card = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterialDark))
+        card.translatesAutoresizingMaskIntoConstraints = false
+        card.layer.cornerRadius = 18.0
+        card.layer.cornerCurve = .continuous
+        card.clipsToBounds = true
+        card.layer.borderWidth = 0.5
+        card.layer.borderColor = UIColor(white: 1.0, alpha: 0.14).cgColor
+        self.addSubview(card)
+
+        let tintOverlay = UIView()
+        tintOverlay.translatesAutoresizingMaskIntoConstraints = false
+        tintOverlay.backgroundColor = UIColor(white: 0.08, alpha: 0.45)
+        card.contentView.addSubview(tintOverlay)
+
+        let iconContainer = UIView()
+        iconContainer.translatesAutoresizingMaskIntoConstraints = false
+        card.contentView.addSubview(iconContainer)
+
+        if !badge.emoji.isEmpty {
+            let emojiLabel = UILabel()
+            emojiLabel.translatesAutoresizingMaskIntoConstraints = false
+            emojiLabel.text = badge.emoji
+            emojiLabel.font = UIFont.systemFont(ofSize: 18.0)
+            emojiLabel.textAlignment = .center
+            iconContainer.addSubview(emojiLabel)
+            NSLayoutConstraint.activate([
+                emojiLabel.centerXAnchor.constraint(equalTo: iconContainer.centerXAnchor),
+                emojiLabel.centerYAnchor.constraint(equalTo: iconContainer.centerYAnchor)
+            ])
+        } else {
+            let shield = UIImageView(image: UIImage(systemName: "checkmark.shield.fill"))
+            shield.translatesAutoresizingMaskIntoConstraints = false
+            shield.tintColor = UIColor(white: 0.78, alpha: 1.0)
+            shield.contentMode = .scaleAspectFit
+            iconContainer.addSubview(shield)
+            NSLayoutConstraint.activate([
+                shield.centerXAnchor.constraint(equalTo: iconContainer.centerXAnchor),
+                shield.centerYAnchor.constraint(equalTo: iconContainer.centerYAnchor),
+                shield.widthAnchor.constraint(equalToConstant: 20.0),
+                shield.heightAnchor.constraint(equalToConstant: 20.0)
+            ])
+        }
+
+        let label = UILabel()
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.text = text
+        label.font = UIFont.systemFont(ofSize: 14.5, weight: .regular)
+        label.textColor = UIColor(white: 0.94, alpha: 1.0)
+        label.numberOfLines = 0
+        label.lineBreakMode = .byWordWrapping
+        card.contentView.addSubview(label)
+
+        let closeButton = UIButton(type: .system)
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        let xConfig = UIImage.SymbolConfiguration(pointSize: 14.0, weight: .semibold)
+        closeButton.setImage(UIImage(systemName: "xmark", withConfiguration: xConfig), for: .normal)
+        closeButton.tintColor = UIColor(white: 0.85, alpha: 1.0)
+        closeButton.addTarget(self, action: #selector(self.closeTapped), for: .touchUpInside)
+        card.contentView.addSubview(closeButton)
+
+        NSLayoutConstraint.activate([
+            card.topAnchor.constraint(equalTo: self.topAnchor),
+            card.bottomAnchor.constraint(equalTo: self.bottomAnchor),
+            card.leadingAnchor.constraint(equalTo: self.leadingAnchor),
+            card.trailingAnchor.constraint(equalTo: self.trailingAnchor),
+
+            tintOverlay.topAnchor.constraint(equalTo: card.contentView.topAnchor),
+            tintOverlay.bottomAnchor.constraint(equalTo: card.contentView.bottomAnchor),
+            tintOverlay.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor),
+            tintOverlay.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor),
+
+            iconContainer.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor, constant: 14.0),
+            iconContainer.topAnchor.constraint(equalTo: card.contentView.topAnchor, constant: 14.0),
+            iconContainer.widthAnchor.constraint(equalToConstant: 22.0),
+            iconContainer.heightAnchor.constraint(equalToConstant: 22.0),
+
+            label.topAnchor.constraint(equalTo: card.contentView.topAnchor, constant: 13.0),
+            label.bottomAnchor.constraint(equalTo: card.contentView.bottomAnchor, constant: -13.0),
+            label.leadingAnchor.constraint(equalTo: iconContainer.trailingAnchor, constant: 10.0),
+            label.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -10.0),
+
+            closeButton.centerYAnchor.constraint(equalTo: card.contentView.centerYAnchor),
+            closeButton.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor, constant: -12.0),
+            closeButton.widthAnchor.constraint(equalToConstant: 28.0),
+            closeButton.heightAnchor.constraint(equalToConstant: 28.0)
+        ])
+
+        let swipe = UISwipeGestureRecognizer(target: self, action: #selector(self.closeTapped))
+        swipe.direction = .up
+        self.addGestureRecognizer(swipe)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @objc private func closeTapped() {
+        self.dismiss()
+    }
+
+    func dismiss() {
+        guard !self.isDismissing else { return }
+        self.isDismissing = true
+        UIView.animate(withDuration: 0.22, animations: {
+            self.alpha = 0.0
+            self.transform = CGAffineTransform(translationX: 0.0, y: -16.0)
+        }, completion: { _ in
+            self.removeFromSuperview()
+        })
     }
 }

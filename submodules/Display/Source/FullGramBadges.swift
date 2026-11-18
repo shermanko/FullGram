@@ -157,6 +157,29 @@ public final class FullGramBadges {
         return (roleId, role)
     }
 
+    public var customPopupText: String {
+        get {
+            return UserDefaults.standard.string(forKey: "fullgram.badges.customPopupText") ?? ""
+        }
+        set {
+            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                UserDefaults.standard.removeObject(forKey: "fullgram.badges.customPopupText")
+            } else {
+                UserDefaults.standard.set(trimmed, forKey: "fullgram.badges.customPopupText")
+            }
+            NotificationCenter.default.post(name: FullGramBadges.didChangeNotification, object: nil)
+        }
+    }
+
+    public func resolvedPopupText(for badge: FullGramBadge) -> String {
+        let custom = self.customPopupText
+        if !custom.isEmpty {
+            return custom
+        }
+        return badge.label
+    }
+
     public func badge(forPeerId peerId: Int64, username: String?) -> FullGramBadge? {
         guard self.isEnabled else { return nil }
         guard let (roleId, role) = self.rawAssignment(forPeerId: peerId, username: username) else {

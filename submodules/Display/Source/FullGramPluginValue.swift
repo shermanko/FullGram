@@ -3,11 +3,13 @@ import Foundation
 public enum FullGramPluginLanguage: String, Codable, CaseIterable {
     case lua
     case python
+    case rust
 
     public var displayName: String {
         switch self {
         case .lua: return "Lua"
         case .python: return "Python"
+        case .rust: return "Rust"
         }
     }
 
@@ -15,6 +17,7 @@ public enum FullGramPluginLanguage: String, Codable, CaseIterable {
         switch self {
         case .lua: return "lua"
         case .python: return "py"
+        case .rust: return "rs"
         }
     }
 }
@@ -41,7 +44,12 @@ public struct FullGramPluginMetadata: Codable, Equatable {
     }
 
     public static func parse(from code: String, fallbackName: String, language: FullGramPluginLanguage) -> FullGramPluginMetadata {
-        let commentPrefix = language == .lua ? "--" : "#"
+        let commentPrefix: String
+        switch language {
+        case .lua: commentPrefix = "--"
+        case .python: commentPrefix = "#"
+        case .rust: commentPrefix = "//"
+        }
         var name = fallbackName
         var id = ""
         var version = "1.0"

@@ -28,6 +28,7 @@ private final class FullGramLoadedPlugin {
     let descriptor: FullGramPluginDescriptor
     var luaVM: FullGramLuaVM?
     var pythonVM: FullGramPythonVM?
+    var rustVM: FullGramRustVM?
     var registeredCommands: [String: ([FullGramPluginValue]) throws -> FullGramPluginValue] = [:]
     var lastError: String?
 
@@ -326,10 +327,14 @@ public final class FullGramPluginManager {
         let language: FullGramPluginLanguage
         if ext == "py" {
             language = .python
+        } else if ext == "rs" {
+            language = .rust
         } else if ext == "lua" {
             language = .lua
         } else if code.contains("def on_") || code.contains("import fullgram") || code.contains("# @name") {
             language = .python
+        } else if code.contains("fn on_") || code.contains("fullgram::") || code.contains("// @name") {
+            language = .rust
         } else {
             language = .lua
         }
@@ -522,6 +527,15 @@ public final class FullGramPluginManager {
                 holder.hasOutgoingHook = vm.hasFunction("on_outgoing_message")
                 holder.hasRenderHook = vm.hasFunction("on_render_message")
                 holder.hasCommandHook = holder.hasCommandHook || vm.hasFunction("on_command")
+            case .rust:
+                let vm = FullGramRustVM(hostAPI: hostAPI) { [weak self] msg in
+                    self?.appendLog(pluginId: descriptor.id, message: msg)
+                }
+                try vm.load(code: descriptor.code)
+                holder.rustVM = vm
+                holder.hasOutgoingHook = vm.hasFunction("on_outgoing_message")
+                holder.hasRenderHook = vm.hasFunction("on_render_message")
+                holder.hasCommandHook = holder.hasCommandHook || vm.hasFunction("on_command")
             }
         } catch {
             holder.lastError = error.localizedDescription
@@ -534,7 +548,7 @@ public final class FullGramPluginManager {
         self.ensureLoaded()
         self.lock.lock()
         defer { self.lock.unlock() }
-        return self.isSystemEnabled && !self.loaded.values.filter({ ($0.luaVM?.hasFunction("on_message_action") ?? false) || ($0.pythonVM?.hasFunction("on_message_action") ?? false) }).isEmpty
+        return self.isSystemEnabled && !self.loaded.values.filter({ ($0.luaVM?.hasFunction("on_message_action") ?? false) || ($0.pythonVM?.hasFunction("on_message_action") ?? false) || ($0.rustVM?.hasFunction("on_message_action") ?? false) }).isEmpty
     }
 
     public func availableCommands() -> [(command: String, description: String, pluginName: String)] {
@@ -610,6 +624,9 @@ public final class FullGramPluginManager {
                 } else if let py = plugin.pythonVM, py.hasFunction("on_message_action") {
                     let res = try py.callFunction("on_message_action", args: [.table(ctx)])
                     if case let .string(out) = res, !out.isEmpty { return out }
+                } else if let rs = plugin.rustVM, rs.hasFunction("on_message_action") {
+                    let res = try rs.callFunction("on_message_action", args: [.table(ctx)])
+                    if case let .string(out) = res, !out.isEmpty { return out }
                 }
             } catch {
                 self.appendLog(pluginId: plugin.descriptor.id, message: "Action error: \(error.localizedDescription)")
@@ -640,6 +657,8 @@ public final class FullGramPluginManager {
                 return try lua.callFunction("on_ui_event", args: [.table(ctx)])
             } else if let py = holder.pythonVM, py.hasFunction("on_ui_event") {
                 return try py.callFunction("on_ui_event", args: [.table(ctx)])
+            } else if let rs = holder.rustVM, rs.hasFunction("on_ui_event") {
+                return try rs.callFunction("on_ui_event", args: [.table(ctx)])
             }
         } catch {
             self.appendLog(pluginId: pluginId, message: "UI event error: \(error.localizedDescription)")
@@ -722,6 +741,8 @@ public final class FullGramPluginManager {
                         result = try lua.callFunction("on_command", args: [.table(ctxTable)])
                     } else if let py = plugin.pythonVM, py.hasFunction("on_command") {
                         result = try py.callFunction("on_command", args: [.table(ctxTable)])
+                    } else if let rs = plugin.rustVM, rs.hasFunction("on_command") {
+                        result = try rs.callFunction("on_command", args: [.table(ctxTable)])
                     }
                     switch self.interpretDecision(result) {
                     case .pass:
@@ -751,6 +772,8 @@ public final class FullGramPluginManager {
                         result = try lua.callFunction("on_outgoing_message", args: [.table(ctxTable)])
                     } else if let py = plugin.pythonVM {
                         result = try py.callFunction("on_outgoing_message", args: [.table(ctxTable)])
+                    } else if let rs = plugin.rustVM {
+                        result = try rs.callFunction("on_outgoing_message", args: [.table(ctxTable)])
                     } else {
                         continue
                     }
@@ -805,6 +828,8 @@ public final class FullGramPluginManager {
                     result = try lua.callFunction("on_render_message", args: [.table(ctxTable)])
                 } else if let py = plugin.pythonVM {
                     result = try py.callFunction("on_render_message", args: [.table(ctxTable)])
+                } else if let rs = plugin.rustVM {
+                    result = try rs.callFunction("on_render_message", args: [.table(ctxTable)])
                 } else {
                     continue
                 }
@@ -859,6 +884,24 @@ public final class FullGramPluginManager {
                 return (resultText, capturedLogs, nil)
             case .python:
                 let vm = FullGramPythonVM(hostAPI: hostAPI) { line in
+                    capturedLogs.append(line)
+                }
+                try vm.load(code: code)
+                var resultText = ""
+                let cmd = ctxTable.get(key: .string("command")).asString
+                if !cmd.isEmpty {
+                    if let fn = holder.registeredCommands[cmd.lowercased()] {
+                        resultText = try fn([.table(ctxTable)]).asString
+                    } else if vm.hasFunction("on_command") {
+                        resultText = try vm.callFunction("on_command", args: [.table(ctxTable)]).asString
+                    }
+                }
+                if resultText.isEmpty && vm.hasFunction("on_outgoing_message") {
+                    resultText = try vm.callFunction("on_outgoing_message", args: [.table(ctxTable)]).asString
+                }
+                return (resultText, capturedLogs, nil)
+            case .rust:
+                let vm = FullGramRustVM(hostAPI: hostAPI) { line in
                     capturedLogs.append(line)
                 }
                 try vm.load(code: code)

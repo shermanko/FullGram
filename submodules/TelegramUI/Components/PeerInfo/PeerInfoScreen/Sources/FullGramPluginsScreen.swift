@@ -60,6 +60,7 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
     case remoteCatalog(String)
     case createLua
     case createPython
+    case createRust
     case importFile
     case apiDocs
     case listHeader(String)
@@ -68,7 +69,7 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
     var section: ItemListSectionId {
         switch self {
         case .systemSwitch, .layoutFixerMode, .openCasino, .openDeadlines, .systemInfo: return FullGramPluginsSection.system.rawValue
-        case .remoteCatalog, .createLua, .createPython, .importFile, .apiDocs: return FullGramPluginsSection.actions.rawValue
+        case .remoteCatalog, .createLua, .createPython, .createRust, .importFile, .apiDocs: return FullGramPluginsSection.actions.rawValue
         case .listHeader, .pluginItem: return FullGramPluginsSection.list.rawValue
         }
     }
@@ -83,8 +84,9 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
         case .remoteCatalog: return 9
         case .createLua: return 10
         case .createPython: return 11
-        case .importFile: return 12
-        case .apiDocs: return 13
+        case .createRust: return 12
+        case .importFile: return 13
+        case .apiDocs: return 14
         case .listHeader: return 100
         case let .pluginItem(idx, _, _): return 101 + idx
         }
@@ -117,10 +119,14 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
             return ItemListActionItem(presentationData: presentationData, title: "+ Новый плагин на Python (.py)", kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
                 args.createPlugin(.python)
             })
+        case .createRust:
+            return ItemListActionItem(presentationData: presentationData, title: "+ Новый плагин на Rust (.rs)", kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
+                args.createPlugin(.rust)
+            })
         case .importFile:
-            return ItemListActionItem(presentationData: presentationData, title: "📥 Импорт из Файлов (.lua / .py)", kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.importFromFile)
+            return ItemListActionItem(presentationData: presentationData, title: "📥 Импорт из Файлов (.lua / .py / .rs)", kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.importFromFile)
         case .apiDocs:
-            return ItemListDisclosureItem(presentationData: presentationData, title: "Справка по API (Lua и Python)", label: "", sectionId: self.section, style: .blocks, action: args.openApiDocs)
+            return ItemListDisclosureItem(presentationData: presentationData, title: "Справка по API (Lua, Python, Rust)", label: "", sectionId: self.section, style: .blocks, action: args.openApiDocs)
         case let .listHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .pluginItem(_, descriptor, error):
@@ -201,7 +207,10 @@ func fullGramPluginsController(context: AccountContext) -> ViewController {
         },
         createPlugin: { language in
             let template: String
-            if language == .lua {
+            let defaultName: String
+            switch language {
+            case .lua:
+                defaultName = "Новый Lua-плагин"
                 template = """
 -- @name Мой Lua-плагин
 -- @version 1.0
@@ -219,7 +228,8 @@ function on_outgoing_message(ctx)
     return nil
 end
 """
-            } else {
+            case .python:
+                defaultName = "Новый Python-плагин"
                 template = """
 # @name Мой Python-плагин
 # @version 1.0
@@ -237,10 +247,32 @@ def on_command(ctx):
 def on_outgoing_message(ctx):
     return None
 """
+            case .rust:
+                defaultName = "Новый Rust-плагин"
+                template = """
+// @name Мой Rust-плагин
+// @version 1.0
+// @author User
+// @description Описание плагина
+
+use fullgram::*;
+
+fn on_command(ctx: Context) -> Option<String> {
+    if ctx.command == "hi" {
+        let target = if !ctx.args.is_empty() { ctx.args } else { "мир" };
+        return Some(format!("Привет, {}!", target));
+    }
+    None
+}
+
+fn on_outgoing_message(ctx: Context) -> Option<String> {
+    None
+}
+"""
             }
             let draft = FullGramPluginDescriptor(
                 id: "custom_\(Int(Date().timeIntervalSince1970))",
-                name: language == .lua ? "Новый Lua-плагин" : "Новый Python-плагин",
+                name: defaultName,
                 language: language,
                 code: template,
                 isEnabled: true,
@@ -252,6 +284,7 @@ def on_outgoing_message(ctx):
             var types: [UTType] = [.plainText, .sourceCode, .data, .item]
             if let luaType = UTType(filenameExtension: "lua") { types.insert(luaType, at: 0) }
             if let pyType = UTType(filenameExtension: "py") { types.insert(pyType, at: 0) }
+            if let rsType = UTType(filenameExtension: "rs") { types.insert(rsType, at: 0) }
             let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
             let delegate = FullGramPluginFilePickerDelegate { url in
                 activePluginFilePickerDelegate = nil
@@ -297,6 +330,7 @@ def on_outgoing_message(ctx):
             .remoteCatalog("Каталог"),
             .createLua,
             .createPython,
+            .createRust,
             .importFile,
             .apiDocs
         ]
