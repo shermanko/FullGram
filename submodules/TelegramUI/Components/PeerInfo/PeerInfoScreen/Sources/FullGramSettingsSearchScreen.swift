@@ -326,9 +326,9 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
         ),
         FullGramSearchItem(
             id: 17,
-            title: "Авто-ответчик (AFK без Telegram Premium)",
+            title: "Авто-ответчик",
             subtitle: "Чаты",
-            keywords: "автоответчик авто ответчик afk занят сплю за рулем без премиума",
+            keywords: "автоответчик авто ответчик afk занят сплю за рулем",
             destination: { fullGramAutoResponderController(context: $0) }
         ),
         FullGramSearchItem(

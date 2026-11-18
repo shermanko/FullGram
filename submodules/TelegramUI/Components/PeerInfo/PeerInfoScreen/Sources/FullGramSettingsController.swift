@@ -1359,7 +1359,7 @@ private enum FullGramChatsCategoryEntry: ItemListNodeEntry {
                 presentationData: presentationData,
                 systemStyle: .glass,
                 icon: PresentationResourcesSettings.privateChats,
-                title: "Авто-ответчик (AFK без Premium)",
+                title: "Авто-ответчик",
                 label: label,
                 sectionId: self.section,
                 style: .blocks,
@@ -4049,11 +4049,11 @@ func fullGramAutoResponderController(context: AccountContext) -> ViewController 
         }
 
         var entries: [FullGramAutoResponderEntry] = []
-        entries.append(.modeHeader("РЕЖИМ АВТО-ОТВЕТЧИКА (БЕЗ TELEGRAM PREMIUM)"))
+        entries.append(.modeHeader("РЕЖИМ АВТО-ОТВЕТЧИКА"))
         for (idx, m) in FullGramAutoResponderSettings.Mode.allCases.enumerated() {
             entries.append(.modeOption(Int32(idx), m, m.title(ru), m == currentMode))
         }
-        entries.append(.modeFooter("Работает бесплатно и без подписки Telegram Premium/Business. При получении нового сообщения автоматически отправляет выбранный ответ (боты и каналы игнорируются)."))
+        entries.append(.modeFooter("При получении нового сообщения автоматически отправляет выбранный ответ (боты и каналы игнорируются)."))
 
         entries.append(.templateHeader("ТЕКСТ АВТО-ОТВЕТА"))
         entries.append(.editCustomText("Изменить свой текст", "Настроить"))
@@ -4069,7 +4069,7 @@ func fullGramAutoResponderController(context: AccountContext) -> ViewController 
         let data = ItemListPresentationData(presentationData)
         let state = ItemListControllerState(
             presentationData: data,
-            title: .text("Авто-ответчик (AFK)"),
+            title: .text("Авто-ответчик"),
             leftNavigationButton: nil,
             rightNavigationButton: nil,
             backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back)

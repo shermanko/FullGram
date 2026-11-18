@@ -22,7 +22,7 @@ public enum FullGramNoiseReductionMode: String, CaseIterable {
         switch self {
         case .off: return ru ? "Выключено" : "Off"
         case .soft: return ru ? "Мягкое (Улица / Ветер)" : "Soft (Street / Wind)"
-        case .studio: return ru ? "Студийный микрофон (PRO)" : "Studio Mic (PRO)"
+        case .studio: return ru ? "Студийный микрофон" : "Studio Mic"
         case .aggressive: return ru ? "Максимальное (Полная тишина фона)" : "Maximum (Full Noise Gate)"
         }
     }
