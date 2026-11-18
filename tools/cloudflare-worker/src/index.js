@@ -107,16 +107,16 @@ def on_command(ctx):
     },
     {
       id: "fg_casino",
-      name: "Казино (.slots / .roulette / .bal)",
+      name: "Казино (.casino)",
       language: "lua",
-      version: "1.0",
+      version: "3.0",
       author: "FullGram",
-      description: "Слоты (.slots [ставка]), рулетка (.roulette red/black/green [ставка]), монетка (.coin) и баланс фишек (.bal).",
-      code: `-- @name Казино (.slots / .roulette / .bal)
+      description: "Напишите .casino — откроется графическое казино с выбором режима игры (Слоты 777, Рулетка, Монетка).",
+      code: `-- @name Казино (.casino)
 -- @id fg_casino
--- @version 1.0
+-- @version 3.0
 -- @author FullGram
--- @description Слоты (.slots [ставка]), рулетка (.roulette red/black/green [ставка]), монетка (.coin) и баланс фишек (.bal)
+-- @description Напишите .casino — откроется графическое казино с выбором режима игры (Слоты 777, Рулетка, Монетка)
 
 function get_balance()
     local b = tonumber(fullgram.storage_get("balance", 1000))
@@ -132,117 +132,26 @@ function set_balance(val)
     end
 end
 
+function on_ui_event(ctx)
+    local act = tostring(ctx.action or "")
+    local bal = get_balance()
+    local best = tonumber(fullgram.storage_get("best_balance", 1000)) or 1000
+    if act == "bonus" then
+        bal = bal + 1000
+        set_balance(bal)
+        best = tonumber(fullgram.storage_get("best_balance", 1000)) or 1000
+    end
+    return { balance = bal, best_balance = best }
+end
+
 function on_command(ctx)
-    local cmd = ctx.command
-    local args = tostring(ctx.args or "")
-
-    if cmd == "bal" or cmd == "casino" then
-        local bal = get_balance()
-        local best = tonumber(fullgram.storage_get("best_balance", 1000)) or 1000
-        if args == "bonus" or bal < 50 then
-            bal = bal + 1000
-            set_balance(bal)
-            return "🎁 Бонус казино FullGram начислен: +1000 🪙\\n💰 Текущий баланс: " .. tostring(bal) .. " 🪙 (Рекорд: " .. tostring(best) .. " 🪙)"
+    if ctx.command == "casino" then
+        if fullgram.open_ui ~= nil then
+            fullgram.open_ui({ kind = "casino", title = "Казино FullGram" })
+            return { cancel = true }
         end
-        return "🎰 Казино FullGram\\n💰 Баланс: " .. tostring(bal) .. " 🪙 (Рекорд: " .. tostring(best) .. " 🪙)\\nКоманды: .slots [ставка], .roulette red/black/green [ставка], .coin [ставка], .bal bonus"
+        return { cancel = true, toast = "Обновите приложение FullGram до v1.0.0 для запуска графического Казино!" }
     end
-
-    if cmd == "slots" then
-        local bal = get_balance()
-        if bal <= 0 then
-            bal = 500
-            set_balance(bal)
-        end
-        local bet = tonumber(args) or 100
-        if bet < 10 then bet = 10 end
-        if bet > bal then bet = bal end
-
-        local symbols = {"🍒", "🍋", "🔔", "💎", "7️⃣"}
-        local r1 = math.random(1, 5)
-        local r2 = math.random(1, 5)
-        local r3 = math.random(1, 5)
-        local s1 = symbols[r1]
-        local s2 = symbols[r2]
-        local s3 = symbols[r3]
-
-        local mult = 0
-        local status = "❌ Мимо!"
-        if r1 == 5 and r2 == 5 and r3 == 5 then
-            mult = 15
-            status = "🔥 МЕГА ДЖЕКПОТ 777 (x15)!"
-        elseif r1 == r2 and r2 == r3 then
-            mult = 7
-            status = "🎉 ДЖЕКПОТ 3 В РЯД (x7)!"
-        elseif r1 == r2 or r2 == r3 or r1 == r3 then
-            mult = 2
-            status = "✨ Совпадение 2 из 3 (x2)!"
-        end
-
-        local delta = (mult > 0) and (bet * (mult - 1)) or (-bet)
-        bal = bal + delta
-        set_balance(bal)
-        local sign = (delta >= 0) and ("+" .. tostring(delta)) or tostring(delta)
-
-        return "🎰 Слоты FullGram | Ставка: " .. tostring(bet) .. " 🪙\\n"
-            .. "┏━━━━━━━━━━━┓\\n"
-            .. "┃  " .. s1 .. " │ " .. s2 .. " │ " .. s3 .. "  ┃\\n"
-            .. "┗━━━━━━━━━━━┛\\n"
-            .. status .. " (" .. sign .. " 🪙)\\n"
-            .. "💰 Баланс: " .. tostring(bal) .. " 🪙"
-    end
-
-    if cmd == "roulette" or cmd == "roul" then
-        local bal = get_balance()
-        if bal <= 0 then bal = 500 end
-        local choice = string.lower(ctx.subcommand or "red")
-        local bet_str = string.match(args, "%s+(%d+)$")
-        local bet = tonumber(bet_str) or 100
-        if bet > bal then bet = bal end
-
-        local num = math.random(0, 36)
-        local color = "black"
-        local badge = "⚫️ Чёрное"
-        if num == 0 then
-            color = "green"
-            badge = "🟢 Зеро (0)"
-        elseif num % 2 == 1 then
-            color = "red"
-            badge = "🔴 Красное"
-        end
-
-        local win = false
-        local mult = 2
-        if (choice == "green" or choice == "0" or choice == "зеленое" or choice == "зеро") and color == "green" then
-            win = true
-            mult = 14
-        elseif (choice == "red" or choice == "красное" or choice == "к") and color == "red" then
-            win = true
-        elseif (choice == "black" or choice == "черное" or choice == "ч") and color == "black" then
-            win = true
-        end
-
-        local delta = win and (bet * (mult - 1)) or (-bet)
-        bal = bal + delta
-        set_balance(bal)
-        local outcome = win and ("✅ Выигрыш: +" .. tostring(delta) .. " 🪙") or ("❌ Проигрыш: " .. tostring(delta) .. " 🪙")
-
-        return "🎡 Рулетка FullGram\\nВыпало: " .. badge .. " [" .. tostring(num) .. "]\\n" .. outcome .. "\\n💰 Баланс: " .. tostring(bal) .. " 🪙"
-    end
-
-    if cmd == "coin" then
-        local bal = get_balance()
-        if bal <= 0 then bal = 500 end
-        local bet = tonumber(args) or 100
-        if bet > bal then bet = bal end
-        local side = (math.random(1, 2) == 1) and "🦅 Орёл" or "🪙 Решка"
-        local win = (math.random(1, 2) == 1)
-        local delta = win and bet or (-bet)
-        bal = bal + delta
-        set_balance(bal)
-        local res = win and ("✅ Победа! +" .. tostring(bet) .. " 🪙") or ("❌ Не повезло: -" .. tostring(bet) .. " 🪙")
-        return "🪙 Монетка: выпал " .. side .. "\\n" .. res .. " (Баланс: " .. tostring(bal) .. " 🪙)"
-    end
-
     return nil
 end
 `
@@ -387,6 +296,9 @@ def on_command(ctx):
     items = load_items()
 
     if not raw or raw == "list":
+        if fullgram.get("open_ui"):
+            fullgram.open_ui({"kind": "deadlines", "title": "Дедлайны FullGram"})
+            return {"cancel": True}
         return {"cancel": True, "toast": format_list(items)}
 
     if raw == "send":
