@@ -2,33 +2,65 @@ import Foundation
 import AVFoundation
 
 /// Real-time mono Int16 voice processor shared by recorder and voice preview tester.
+/// Includes multi-mode Noise Suppression (Soft / Studio Mic / Aggressive), Voice Changer presets,
+/// and Custom Voice Constructor (Pitch + Echo + Warmth).
 public final class FullGramVoiceDSP {
     private let mode: FullGramVoiceMode
+    private let noiseMode: FullGramNoiseReductionMode
     private let sampleRate: Double
     private var robotPhase: Double = 0.0
     private var lfoPhase: Double = 0.0
     private var grainPhase: Double = 0.0
     private var lpState: Double = 0.0
+    private var warmthState: Double = 0.0
 
+    // Noise suppression state
+    private var hpPrevX: Double = 0.0
+    private var hpPrevY: Double = 0.0
+    private var envFollower: Double = 0.0
+    private var noiseFloor: Double = 0.008
+    private var gateGain: Double = 1.0
+    private var agcGain: Double = 1.0
+
+    // Pitch ring buffer
     private var ring: [Double]
     private var writePos: Int = 0
     private var filledCount: Int = 0
     private let ringSize = 16384
 
-    public init(mode: FullGramVoiceMode, sampleRate: Double = 48000.0) {
+    // Echo delay buffer (up to ~170ms at 48kHz)
+    private var echoRing: [Double]
+    private var echoPos: Int = 0
+    private let echoSize = 8192
+
+    public init(
+        mode: FullGramVoiceMode,
+        noiseMode: FullGramNoiseReductionMode = FullGramNoiseReductionMode.current,
+        sampleRate: Double = 48000.0
+    ) {
         self.mode = mode
+        self.noiseMode = noiseMode
         self.sampleRate = max(8000.0, sampleRate)
         self.ring = [Double](repeating: 0.0, count: 16384)
+        self.echoRing = [Double](repeating: 0.0, count: 8192)
     }
 
     public static func makeIfEnabled(sampleRate: Double = 48000.0) -> FullGramVoiceDSP? {
         let mode = FullGramVoiceMode.current
-        guard mode != .off else { return nil }
-        return FullGramVoiceDSP(mode: mode, sampleRate: sampleRate)
+        let noise = FullGramNoiseReductionMode.current
+        guard mode != .off || noise != .off else { return nil }
+        return FullGramVoiceDSP(mode: mode, noiseMode: noise, sampleRate: sampleRate)
     }
 
     public func process(_ samples: UnsafeMutablePointer<Int16>, count: Int) {
         guard count > 0 else { return }
+
+        // Step 1: Apply Noise Suppression / Studio Mic first on clean input
+        if self.noiseMode != .off {
+            self.processNoiseReduction(samples, count: count)
+        }
+
+        // Step 2: Apply Voice Mode / Custom Voice Constructor
         switch self.mode {
         case .off:
             return
@@ -40,6 +72,127 @@ public final class FullGramVoiceDSP {
             self.processPitch(samples, count: count, basePitch: 1.42, lfoDepth: 0.0)
         case .trippy:
             self.processPitch(samples, count: count, basePitch: 1.05, lfoDepth: 0.34)
+        case .custom:
+            let customPitch = Double(FullGramCustomVoiceSettings.pitch)
+            let customEcho = Double(FullGramCustomVoiceSettings.echo)
+            let customWarmth = Double(FullGramCustomVoiceSettings.warmth)
+            if abs(customPitch - 1.0) > 0.02 {
+                self.processPitch(samples, count: count, basePitch: customPitch, lfoDepth: 0.0)
+            }
+            if abs(customWarmth) > 0.02 || customEcho > 0.01 {
+                self.processWarmthAndEcho(samples, count: count, warmth: customWarmth, echo: customEcho)
+            }
+        }
+    }
+
+    private func processNoiseReduction(_ samples: UnsafeMutablePointer<Int16>, count: Int) {
+        let cutoffHz: Double = (self.noiseMode == .aggressive) ? 120.0 : 85.0
+        let rc = 1.0 / (2.0 * .pi * cutoffHz)
+        let dt = 1.0 / self.sampleRate
+        let hpAlpha = rc / (rc + dt)
+
+        let attackCoeff = exp(-1.0 / (self.sampleRate * 0.004))
+        let releaseCoeff = exp(-1.0 / (self.sampleRate * 0.045))
+
+        let thresholdMultiplier: Double
+        let floorAttenuation: Double
+        switch self.noiseMode {
+        case .off:
+            return
+        case .soft:
+            thresholdMultiplier = 2.0
+            floorAttenuation = 0.28
+        case .studio:
+            thresholdMultiplier = 2.4
+            floorAttenuation = 0.16
+        case .aggressive:
+            thresholdMultiplier = 3.2
+            floorAttenuation = 0.04
+        }
+
+        for i in 0 ..< count {
+            let x = Double(samples[i]) / 32768.0
+
+            // High-pass filter removes wind rumble and mic handling thumps
+            let hp = hpAlpha * (self.hpPrevY + x - self.hpPrevX)
+            self.hpPrevX = x
+            self.hpPrevY = hp
+
+            let absVal = abs(hp)
+            if absVal > self.envFollower {
+                self.envFollower = attackCoeff * self.envFollower + (1.0 - attackCoeff) * absVal
+            } else {
+                self.envFollower = releaseCoeff * self.envFollower + (1.0 - releaseCoeff) * absVal
+            }
+
+            // Track background noise floor slowly
+            if self.envFollower < self.noiseFloor {
+                self.noiseFloor = 0.992 * self.noiseFloor + 0.008 * max(0.0015, self.envFollower)
+            } else {
+                self.noiseFloor = min(0.045, self.noiseFloor * 1.00008)
+            }
+
+            let gateThreshold = max(0.008, self.noiseFloor * thresholdMultiplier)
+            let targetGate: Double
+            if self.envFollower >= gateThreshold {
+                targetGate = 1.0
+            } else {
+                let ratio = self.envFollower / gateThreshold
+                targetGate = max(floorAttenuation, ratio * ratio)
+            }
+            self.gateGain = 0.96 * self.gateGain + 0.04 * targetGate
+
+            var y = hp * self.gateGain
+
+            // Studio Mic mode: add broadcast vocal warmth + auto-leveler AGC
+            if self.noiseMode == .studio {
+                self.warmthState += 0.18 * (y - self.warmthState)
+                let presence = y - self.warmthState
+                y = y + 0.24 * self.warmthState + 0.22 * presence
+
+                if self.envFollower > gateThreshold * 1.2 {
+                    let desiredGain = min(2.2, max(0.85, 0.32 / max(0.05, self.envFollower)))
+                    self.agcGain = 0.9985 * self.agcGain + 0.0015 * desiredGain
+                }
+                y *= self.agcGain
+            }
+
+            let out = softClip(y) * 32767.0
+            samples[i] = Int16(max(-32767.0, min(32767.0, out)))
+        }
+    }
+
+    private func processWarmthAndEcho(_ samples: UnsafeMutablePointer<Int16>, count: Int, warmth: Double, echo: Double) {
+        let echoMask = self.echoSize - 1
+        let delaySamples = min(self.echoSize - 4, max(64, Int((self.sampleRate * 0.110).rounded())))
+
+        for i in 0 ..< count {
+            var x = Double(samples[i]) / 32768.0
+
+            if abs(warmth) > 0.02 {
+                self.warmthState += 0.16 * (x - self.warmthState)
+                let high = x - self.warmthState
+                if warmth > 0.0 {
+                    // Boost warm low-mids, soften harsh highs
+                    x = x + warmth * 0.65 * self.warmthState - warmth * 0.25 * high
+                } else {
+                    // Boost crisp radio highs, trim lows
+                    let amt = -warmth
+                    x = x + amt * 0.60 * high - amt * 0.30 * self.warmthState
+                }
+            }
+
+            if echo > 0.01 {
+                let readIdx = (self.echoPos - delaySamples) & echoMask
+                let delayed = self.echoRing[readIdx]
+                let fb = min(0.55, echo * 0.62)
+                self.echoRing[self.echoPos & echoMask] = max(-1.0, min(1.0, x + delayed * fb))
+                self.echoPos += 1
+                x = x * (1.0 - echo * 0.28) + delayed * (echo * 0.68)
+            }
+
+            let out = softClip(x) * 32767.0
+            samples[i] = Int16(max(-32767.0, min(32767.0, out)))
         }
     }
 
@@ -319,7 +472,7 @@ public final class FullGramVoiceDSP {
     }
 }
 
-/// Records up to 3 seconds from microphone and plays back processed voice + bleep sound.
+/// Records up to 3 seconds from microphone and plays back processed voice + noise reduction + bleep sound.
 public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
     public enum State: Equatable {
         case idle
@@ -461,6 +614,7 @@ public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
         self.state = .processing
 
         let voiceMode = FullGramVoiceMode.current
+        let noiseMode = FullGramNoiseReductionMode.current
         let bleepSound = FullGramBleepSound.current
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -489,8 +643,8 @@ public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
             if bleepSound != .off {
                 FullGramSpeechBleep.recognizeSamples(samples, sampleRate: sampleRate) { ranges in
                     var buffer = samples
-                    if voiceMode != .off {
-                        let dsp = FullGramVoiceDSP(mode: voiceMode, sampleRate: sampleRate)
+                    if voiceMode != .off || noiseMode != .off {
+                        let dsp = FullGramVoiceDSP(mode: voiceMode, noiseMode: noiseMode, sampleRate: sampleRate)
                         buffer.withUnsafeMutableBufferPointer { ptr in
                             if let base = ptr.baseAddress {
                                 dsp.process(base, count: ptr.count)
@@ -523,8 +677,8 @@ public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
                 }
             } else {
                 var buffer = samples
-                if voiceMode != .off {
-                    let dsp = FullGramVoiceDSP(mode: voiceMode, sampleRate: sampleRate)
+                if voiceMode != .off || noiseMode != .off {
+                    let dsp = FullGramVoiceDSP(mode: voiceMode, noiseMode: noiseMode, sampleRate: sampleRate)
                     buffer.withUnsafeMutableBufferPointer { ptr in
                         if let base = ptr.baseAddress {
                             dsp.process(base, count: ptr.count)
@@ -558,5 +712,100 @@ public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
     public func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         self.cleanupFiles()
         self.state = .idle
+    }
+}
+
+/// Records a 1.5-second custom bleep sound from microphone and saves it into `FullGramCustomBleepStore`.
+public final class FullGramCustomBleepRecorder: NSObject {
+    public private(set) var isRecording: Bool = false {
+        didSet {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.onStateChange?(self.isRecording)
+            }
+        }
+    }
+
+    public var onStateChange: ((Bool) -> Void)?
+    public var onCompleted: ((Bool) -> Void)?
+
+    private var recorder: AVAudioRecorder?
+    private var timer: Timer?
+    private var tempURL: URL?
+
+    public func toggleRecord() {
+        if self.isRecording {
+            self.finish()
+        } else {
+            self.start()
+        }
+    }
+
+    private func start() {
+        let session = AVAudioSession.sharedInstance()
+        session.requestRecordPermission { [weak self] granted in
+            DispatchQueue.main.async {
+                guard let self, granted else {
+                    self?.onCompleted?(false)
+                    return
+                }
+                do {
+                    try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
+                    try session.setActive(true)
+                    let url = FileManager.default.temporaryDirectory.appendingPathComponent("fg_custom_bleep_rec_\(UUID().uuidString).wav")
+                    let settings: [String: Any] = [
+                        AVFormatIDKey: Int(kAudioFormatLinearPCM),
+                        AVSampleRateKey: 48000.0,
+                        AVNumberOfChannelsKey: 1,
+                        AVLinearPCMBitDepthKey: 16,
+                        AVLinearPCMIsBigEndianKey: false,
+                        AVLinearPCMIsFloatKey: false,
+                        AVLinearPCMIsNonInterleaved: false
+                    ]
+                    let rec = try AVAudioRecorder(url: url, settings: settings)
+                    rec.prepareToRecord()
+                    guard rec.record(forDuration: 1.6) else {
+                        self.onCompleted?(false)
+                        return
+                    }
+                    self.tempURL = url
+                    self.recorder = rec
+                    self.isRecording = true
+                    self.timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
+                        self?.finish()
+                    }
+                } catch {
+                    self.onCompleted?(false)
+                }
+            }
+        }
+    }
+
+    private func finish() {
+        self.timer?.invalidate()
+        self.timer = nil
+        self.recorder?.stop()
+        self.recorder = nil
+        self.isRecording = false
+
+        guard let url = self.tempURL else {
+            self.onCompleted?(false)
+            return
+        }
+        self.tempURL = nil
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            defer { try? FileManager.default.removeItem(at: url) }
+            guard let loaded = FullGramVoiceDSP.readWAV16Mono(from: url), !loaded.samples.isEmpty else {
+                DispatchQueue.main.async { self?.onCompleted?(false) }
+                return
+            }
+            let ok = FullGramCustomBleepStore.shared.saveCustomSamples(loaded.samples, sampleRate: loaded.sampleRate, name: "Запись с микрофона")
+            if ok {
+                FullGramBleepSound.current = .custom
+            }
+            DispatchQueue.main.async {
+                self?.onCompleted?(ok)
+            }
+        }
     }
 }

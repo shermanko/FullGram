@@ -291,10 +291,45 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
         // Медиа и Аудио
         FullGramSearchItem(
             id: 20,
-            title: "Голос и запикивание матов",
+            title: "Голос, Шумодав и запикивание матов",
             subtitle: "Медиа и Аудио",
-            keywords: "voice changer войс голос робот мультяшный наркоманский низкий маты запикивание",
+            keywords: "voice changer войс голос робот мультяшный наркоманский низкий маты запикивание шумоподавление шумодав студийный микрофон",
             destination: { fullGramVoiceController(context: $0) }
+        ),
+        FullGramSearchItem(
+            id: 24,
+            title: "Шумоподавление и Студийный микрофон",
+            subtitle: "Медиа и Аудио → Голос",
+            keywords: "шумоподавление шумодав микрофон ветер улица студийный голос",
+            destination: { fullGramVoiceController(context: $0) }
+        ),
+        FullGramSearchItem(
+            id: 25,
+            title: "Конструктор своего голоса (Pitch / Эхо / Тембр)",
+            subtitle: "Медиа и Аудио → Голос",
+            keywords: "конструктор свой голос питч тон эхо реверберация тембр бас",
+            destination: { fullGramVoiceController(context: $0) }
+        ),
+        FullGramSearchItem(
+            id: 26,
+            title: "Свой звук запикивания матов (запись / файл)",
+            subtitle: "Медиа и Аудио → Голос",
+            keywords: "свой звук кастомный запикивание кряк утки монетка",
+            destination: { fullGramVoiceController(context: $0) }
+        ),
+        FullGramSearchItem(
+            id: 27,
+            title: "Авто-резюме голосовых (⚡️ Суть ГС)",
+            subtitle: "Медиа и Аудио → Голос",
+            keywords: "авто резюме суть гс коротко выжимка расшифровка голосовых",
+            destination: { fullGramVoiceController(context: $0) }
+        ),
+        FullGramSearchItem(
+            id: 17,
+            title: "Авто-ответчик (AFK без Telegram Premium)",
+            subtitle: "Чаты",
+            keywords: "автоответчик авто ответчик afk занят сплю за рулем без премиума",
+            destination: { fullGramAutoResponderController(context: $0) }
         ),
         FullGramSearchItem(
             id: 21,

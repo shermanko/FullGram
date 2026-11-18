@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import UniformTypeIdentifiers
 import Display
 import AsyncDisplayKit
 import SwiftSignalKit
@@ -123,45 +124,98 @@ func fullGramMediaAudioCategoryController(context: AccountContext) -> ViewContro
     return controller
 }
 
-// MARK: - Голос (изменение голоса + запикивание матов)
+// MARK: - Голос (шумоподавление + изменение голоса + конструктор + запикивание + авто-резюме)
+
+private final class FullGramAudioPickerBridge: NSObject, UIDocumentPickerDelegate {
+    var onPicked: ((URL) -> Void)?
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        guard let url = urls.first else { return }
+        self.onPicked?(url)
+    }
+}
 
 private final class FullGramVoiceArguments {
+    let selectNoise: (FullGramNoiseReductionMode) -> Void
     let selectVoice: (FullGramVoiceMode) -> Void
+    let chooseCustomPitch: () -> Void
+    let chooseCustomEcho: () -> Void
+    let chooseCustomWarmth: () -> Void
+    let resetCustomVoice: () -> Void
     let selectBleep: (FullGramBleepSound) -> Void
+    let recordCustomBleep: () -> Void
+    let importCustomBleepFile: () -> Void
+    let selectSummaryMode: (FullGramVoiceSummaryMode) -> Void
     let runTest: () -> Void
+
     init(
+        selectNoise: @escaping (FullGramNoiseReductionMode) -> Void,
         selectVoice: @escaping (FullGramVoiceMode) -> Void,
+        chooseCustomPitch: @escaping () -> Void,
+        chooseCustomEcho: @escaping () -> Void,
+        chooseCustomWarmth: @escaping () -> Void,
+        resetCustomVoice: @escaping () -> Void,
         selectBleep: @escaping (FullGramBleepSound) -> Void,
+        recordCustomBleep: @escaping () -> Void,
+        importCustomBleepFile: @escaping () -> Void,
+        selectSummaryMode: @escaping (FullGramVoiceSummaryMode) -> Void,
         runTest: @escaping () -> Void
     ) {
+        self.selectNoise = selectNoise
         self.selectVoice = selectVoice
+        self.chooseCustomPitch = chooseCustomPitch
+        self.chooseCustomEcho = chooseCustomEcho
+        self.chooseCustomWarmth = chooseCustomWarmth
+        self.resetCustomVoice = resetCustomVoice
         self.selectBleep = selectBleep
+        self.recordCustomBleep = recordCustomBleep
+        self.importCustomBleepFile = importCustomBleepFile
+        self.selectSummaryMode = selectSummaryMode
         self.runTest = runTest
     }
 }
 
 private enum FullGramVoiceSection: Int32 {
     case previewTest
+    case noiseReduction
     case voiceMode
+    case customVoice
     case bleepSound
+    case voiceSummary
 }
 
 private enum FullGramVoiceEntry: ItemListNodeEntry {
     case testHeader(String)
     case testButton(String, ItemListActionKind)
     case testFooter(String)
+    case noiseHeader(String)
+    case noiseOption(Int32, FullGramNoiseReductionMode, String, Bool)
+    case noiseFooter(String)
     case voiceHeader(String)
     case voiceOption(Int32, FullGramVoiceMode, String, Bool)
     case voiceFooter(String)
+    case customHeader(String)
+    case customPitch(String, String)
+    case customEcho(String, String)
+    case customWarmth(String, String)
+    case customReset(String)
+    case customFooter(String)
     case bleepHeader(String)
     case bleepOption(Int32, FullGramBleepSound, String, Bool)
+    case bleepRecordCustom(String, ItemListActionKind)
+    case bleepImportCustom(String)
     case bleepFooter(String)
+    case summaryHeader(String)
+    case summaryOption(Int32, FullGramVoiceSummaryMode, String, Bool)
+    case summaryFooter(String)
 
     var section: ItemListSectionId {
         switch self {
         case .testHeader, .testButton, .testFooter: return FullGramVoiceSection.previewTest.rawValue
+        case .noiseHeader, .noiseOption, .noiseFooter: return FullGramVoiceSection.noiseReduction.rawValue
         case .voiceHeader, .voiceOption, .voiceFooter: return FullGramVoiceSection.voiceMode.rawValue
-        case .bleepHeader, .bleepOption, .bleepFooter: return FullGramVoiceSection.bleepSound.rawValue
+        case .customHeader, .customPitch, .customEcho, .customWarmth, .customReset, .customFooter: return FullGramVoiceSection.customVoice.rawValue
+        case .bleepHeader, .bleepOption, .bleepRecordCustom, .bleepImportCustom, .bleepFooter: return FullGramVoiceSection.bleepSound.rawValue
+        case .summaryHeader, .summaryOption, .summaryFooter: return FullGramVoiceSection.voiceSummary.rawValue
         }
     }
 
@@ -170,12 +224,26 @@ private enum FullGramVoiceEntry: ItemListNodeEntry {
         case .testHeader: return 0
         case .testButton: return 1
         case .testFooter: return 2
-        case .voiceHeader: return 10
-        case let .voiceOption(idx, _, _, _): return 20 + idx
-        case .voiceFooter: return 60
+        case .noiseHeader: return 10
+        case let .noiseOption(idx, _, _, _): return 11 + idx
+        case .noiseFooter: return 29
+        case .voiceHeader: return 30
+        case let .voiceOption(idx, _, _, _): return 31 + idx
+        case .voiceFooter: return 59
+        case .customHeader: return 60
+        case .customPitch: return 61
+        case .customEcho: return 62
+        case .customWarmth: return 63
+        case .customReset: return 64
+        case .customFooter: return 65
         case .bleepHeader: return 100
         case let .bleepOption(idx, _, _, _): return 110 + idx
+        case .bleepRecordCustom: return 140
+        case .bleepImportCustom: return 141
         case .bleepFooter: return 150
+        case .summaryHeader: return 200
+        case let .summaryOption(idx, _, _, _): return 201 + idx
+        case .summaryFooter: return 220
         }
     }
 
@@ -194,6 +262,14 @@ private enum FullGramVoiceEntry: ItemListNodeEntry {
             })
         case let .testFooter(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
+        case let .noiseHeader(text):
+            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+        case let .noiseOption(_, mode, title, selected):
+            return ItemListCheckboxItem(presentationData: presentationData, title: title, style: .left, checked: selected, zeroSeparatorInsets: false, sectionId: self.section, action: {
+                args.selectNoise(mode)
+            })
+        case let .noiseFooter(text):
+            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         case let .voiceHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .voiceOption(_, mode, title, selected):
@@ -202,13 +278,37 @@ private enum FullGramVoiceEntry: ItemListNodeEntry {
             })
         case let .voiceFooter(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
+        case let .customHeader(text):
+            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+        case let .customPitch(title, value):
+            return ItemListDisclosureItem(presentationData: presentationData, title: title, label: value, sectionId: self.section, style: .blocks, action: args.chooseCustomPitch)
+        case let .customEcho(title, value):
+            return ItemListDisclosureItem(presentationData: presentationData, title: title, label: value, sectionId: self.section, style: .blocks, action: args.chooseCustomEcho)
+        case let .customWarmth(title, value):
+            return ItemListDisclosureItem(presentationData: presentationData, title: title, label: value, sectionId: self.section, style: .blocks, action: args.chooseCustomWarmth)
+        case let .customReset(title):
+            return ItemListActionItem(presentationData: presentationData, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.resetCustomVoice)
+        case let .customFooter(text):
+            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         case let .bleepHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .bleepOption(_, sound, title, selected):
             return ItemListCheckboxItem(presentationData: presentationData, title: title, style: .left, checked: selected, zeroSeparatorInsets: false, sectionId: self.section, action: {
                 args.selectBleep(sound)
             })
+        case let .bleepRecordCustom(title, kind):
+            return ItemListActionItem(presentationData: presentationData, title: title, kind: kind, alignment: .natural, sectionId: self.section, style: .blocks, action: args.recordCustomBleep)
+        case let .bleepImportCustom(title):
+            return ItemListActionItem(presentationData: presentationData, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.importCustomBleepFile)
         case let .bleepFooter(text):
+            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
+        case let .summaryHeader(text):
+            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+        case let .summaryOption(_, mode, title, selected):
+            return ItemListCheckboxItem(presentationData: presentationData, title: title, style: .left, checked: selected, zeroSeparatorInsets: false, sectionId: self.section, action: {
+                args.selectSummaryMode(mode)
+            })
+        case let .summaryFooter(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         }
     }
@@ -229,13 +329,111 @@ func fullGramVoiceController(context: AccountContext, onChanged: @escaping () ->
         refresh.set(tick)
     }
 
+    let customRecorder = FullGramCustomBleepRecorder()
+    customRecorder.onStateChange = { _ in
+        tick += 1
+        refresh.set(tick)
+    }
+    customRecorder.onCompleted = { _ in
+        bump()
+    }
+
+    let pickerBridge = FullGramAudioPickerBridge()
+    pickerBridge.onPicked = { url in
+        if FullGramCustomBleepStore.shared.importAudioFile(from: url) {
+            FullGramBleepSound.current = .custom
+        }
+        bump()
+    }
+
+    var presentUIKitImpl: ((UIViewController) -> Void)?
+
     let args = FullGramVoiceArguments(
+        selectNoise: { mode in
+            FullGramNoiseReductionMode.current = mode
+            bump()
+        },
         selectVoice: { mode in
             FullGramVoiceMode.current = mode
             bump()
         },
+        chooseCustomPitch: {
+            let sheet = UIAlertController(title: "Тон голоса (Pitch)", message: "Выберите высоту тона для своего голоса:", preferredStyle: .actionSheet)
+            let options: [(String, Float)] = [
+                ("0.60x — Ультра-бас (-9 пт)", 0.60),
+                ("0.72x — Глубокий бас (-6 пт)", 0.72),
+                ("0.85x — Мягкий баритон (-3 пт)", 0.85),
+                ("1.00x — Оригинальный тон (0 пт)", 1.00),
+                ("1.18x — Слегка выше (+3 пт)", 1.18),
+                ("1.35x — Мультяшный (+5 пт)", 1.35),
+                ("1.55x — Гелий / Бурундук (+8 пт)", 1.55)
+            ]
+            for (label, val) in options {
+                sheet.addAction(UIAlertAction(title: label, style: .default) { _ in
+                    FullGramCustomVoiceSettings.pitch = val
+                    FullGramVoiceMode.current = .custom
+                    bump()
+                })
+            }
+            sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            presentUIKitImpl?(sheet)
+        },
+        chooseCustomEcho: {
+            let sheet = UIAlertController(title: "Эхо и Реверберация", message: "Выберите уровень объёмного эха:", preferredStyle: .actionSheet)
+            let options: [(String, Float)] = [
+                ("Выкл (0%)", 0.0),
+                ("Лёгкая комната (15%)", 0.15),
+                ("Студийный холл (30%)", 0.30),
+                ("Глубокое эхо (50%)", 0.50),
+                ("Космос / Собор (70%)", 0.70)
+            ]
+            for (label, val) in options {
+                sheet.addAction(UIAlertAction(title: label, style: .default) { _ in
+                    FullGramCustomVoiceSettings.echo = val
+                    FullGramVoiceMode.current = .custom
+                    bump()
+                })
+            }
+            sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            presentUIKitImpl?(sheet)
+        },
+        chooseCustomWarmth: {
+            let sheet = UIAlertController(title: "Тембр (Warmth / EQ)", message: "Настройте окраску голоса:", preferredStyle: .actionSheet)
+            let options: [(String, Float)] = [
+                ("Яркий радио-голос (-80%)", -0.8),
+                ("Чёткий диктор (-40%)", -0.4),
+                ("Нейтральный (0%)", 0.0),
+                ("Тёплый подкаст (+50%)", 0.5),
+                ("Бархатный бас (+100%)", 1.0)
+            ]
+            for (label, val) in options {
+                sheet.addAction(UIAlertAction(title: label, style: .default) { _ in
+                    FullGramCustomVoiceSettings.warmth = val
+                    FullGramVoiceMode.current = .custom
+                    bump()
+                })
+            }
+            sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            presentUIKitImpl?(sheet)
+        },
+        resetCustomVoice: {
+            FullGramCustomVoiceSettings.reset()
+            bump()
+        },
         selectBleep: { sound in
             FullGramBleepSound.current = sound
+            bump()
+        },
+        recordCustomBleep: {
+            customRecorder.toggleRecord()
+        },
+        importCustomBleepFile: {
+            let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.audio], asCopy: true)
+            picker.delegate = pickerBridge
+            presentUIKitImpl?(picker)
+        },
+        selectSummaryMode: { mode in
+            FullGramVoiceSummaryMode.current = mode
             bump()
         },
         runTest: {
@@ -246,14 +444,16 @@ func fullGramVoiceController(context: AccountContext, onChanged: @escaping () ->
     let signal = combineLatest(context.sharedContext.presentationData, refresh.get())
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+        let currentNoise = FullGramNoiseReductionMode.current
         let currentVoice = FullGramVoiceMode.current
         let currentBleep = FullGramBleepSound.current
+        let currentSummary = FullGramVoiceSummaryMode.current
 
         let testTitle: String
         let testKind: ItemListActionKind
         switch tester.state {
         case .idle:
-            testTitle = "🎙 Тест голоса и запикивания (3 сек)"
+            testTitle = "🎙 Тест голоса, шумодава и запикивания (3 сек)"
             testKind = .generic
         case let .recording(remaining):
             testTitle = "🔴 Запись: \(remaining) сек… (нажмите чтобы прослушать)"
@@ -272,24 +472,54 @@ func fullGramVoiceController(context: AccountContext, onChanged: @escaping () ->
         var entries: [FullGramVoiceEntry] = []
         entries.append(.testHeader("ПРОВЕРКА ПЕРЕД ОТПРАВКОЙ"))
         entries.append(.testButton(testTitle, testKind))
-        entries.append(.testFooter("Запишите 3 секунды голоса и сразу услышьте результат с выбранным эффектом (\(currentVoice.title(ru))) и запикиванием (\(currentBleep.title(ru)))."))
+        entries.append(.testFooter("Запишите 3 секунды голоса и сразу услышьте результат: шумодав (\(currentNoise.title(ru))), голос (\(currentVoice.title(ru))) и анти-мат (\(currentBleep.title(ru)))."))
+
+        entries.append(.noiseHeader("ШУМОПОДАВЛЕНИЕ И СТУДИЙНЫЙ МИКРОФОН"))
+        for (idx, nMode) in FullGramNoiseReductionMode.allCases.enumerated() {
+            entries.append(.noiseOption(Int32(idx), nMode, nMode.title(ru), nMode == currentNoise))
+        }
+        entries.append(.noiseFooter(currentNoise.subtitle(ru)))
 
         entries.append(.voiceHeader("ИЗМЕНЕНИЕ ГОЛОСА"))
         for (idx, mode) in FullGramVoiceMode.allCases.enumerated() {
             entries.append(.voiceOption(Int32(idx), mode, mode.title(ru), mode == currentVoice))
         }
-        entries.append(.voiceFooter("«Наркоманский» режим заставляет голос постоянно плавать между высоким и низким тембром."))
+        entries.append(.voiceFooter("Выберите готовый эффект или включите «🎛 Свой голос (Конструктор)» для ручной настройки тона, эха и тембра."))
 
-        entries.append(.bleepHeader("ЗАПИКИВАНИЕ МАТОВ"))
+        entries.append(.customHeader("КОНСТРУКТОР СВОЕГО ГОЛОСА"))
+        entries.append(.customPitch("Тон голоса (Pitch)", FullGramCustomVoiceSettings.pitchFormatted()))
+        entries.append(.customEcho("Эхо / Реверберация", FullGramCustomVoiceSettings.echoFormatted()))
+        entries.append(.customWarmth("Тембр (Warmth EQ)", FullGramCustomVoiceSettings.warmthFormatted()))
+        entries.append(.customReset("Сбросить настройки конструктора"))
+        entries.append(.customFooter("При изменении любого параметра конструктор автоматически включает режим «🎛 Свой голос»."))
+
+        entries.append(.bleepHeader("ЗАПИКИВАНИЕ МАТОВ И СВОЙ ЗВУК"))
         for (idx, sound) in FullGramBleepSound.allCases.enumerated() {
-            entries.append(.bleepOption(Int32(idx), sound, sound.title(ru), sound == currentBleep))
+            let title: String
+            if sound == .custom {
+                title = "\(sound.title(ru)) (\(FullGramCustomBleepStore.shared.customSoundName))"
+            } else {
+                title = sound.title(ru)
+            }
+            entries.append(.bleepOption(Int32(idx), sound, title, sound == currentBleep))
         }
-        entries.append(.bleepFooter("Распознаёт речь на устройстве (русский и английский) и заменяет маты на выбранный звук: звон, пустоту или дельфинячий писк из Губки Боба."))
+        let recTitle = customRecorder.isRecording
+            ? "🔴 Идёт запись звука (1.5 сек)… Нажмите чтобы сохранить"
+            : "🎤 Записать свой звук запикивания (1.5 сек)"
+        entries.append(.bleepRecordCustom(recTitle, customRecorder.isRecording ? .destructive : .generic))
+        entries.append(.bleepImportCustom("📂 Загрузить свой звук из файла (.wav / .mp3 / .m4a)"))
+        entries.append(.bleepFooter("Улучшенная морфологическая система распознаёт русские и английские маты (включая все приставки и окончания) на чистом голосе и заменяет их на выбранный или ваш собственный звук."))
+
+        entries.append(.summaryHeader("АВТО-РЕЗЮМЕ ГОЛОСОВЫХ (⚡️ СУТЬ ГС)"))
+        for (idx, sMode) in FullGramVoiceSummaryMode.allCases.enumerated() {
+            entries.append(.summaryOption(Int32(idx), sMode, sMode.title(ru), sMode == currentSummary))
+        }
+        entries.append(.summaryFooter("При нажатии на расшифровку длинного ГС или кружка сверху автоматически добавляется краткая выжимка главных мыслей (⚡️ Суть ГС)."))
 
         let data = ItemListPresentationData(presentationData)
         let state = ItemListControllerState(
             presentationData: data,
-            title: .text("Голос"),
+            title: .text("Голос и Шумодав"),
             leftNavigationButton: nil,
             rightNavigationButton: nil,
             backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back)
@@ -298,7 +528,16 @@ func fullGramVoiceController(context: AccountContext, onChanged: @escaping () ->
         return (state, (listState, args))
     }
 
-    return ItemListController(context: context, state: signal)
+    let controller = ItemListController(context: context, state: signal)
+    presentUIKitImpl = { [weak controller] vc in
+        guard let controller else { return }
+        if let pop = vc.popoverPresentationController {
+            pop.sourceView = controller.view
+            pop.sourceRect = CGRect(x: controller.view.bounds.midX, y: controller.view.bounds.midY, width: 1.0, height: 1.0)
+        }
+        controller.view.window?.rootViewController?.present(vc, animated: true)
+    }
+    return controller
 }
 
 // MARK: - Кружки и камера

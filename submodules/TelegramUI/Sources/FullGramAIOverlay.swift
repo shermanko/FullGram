@@ -914,6 +914,8 @@ final class FullGramAIOverlayCoordinator {
     private var windowView: FullGramAIChatWindowView?
     private var currentPeerId: PeerId?
     private var observers: [NSObjectProtocol] = []
+    private var autoResponderDisposable: Disposable?
+    private var seenAutoReplyMessageIds = Set<MessageId>()
 
     init(context: AccountContext, rootController: TelegramRootController) {
         self.context = context
@@ -921,17 +923,134 @@ final class FullGramAIOverlayCoordinator {
         self.theme = context.sharedContext.currentPresentationData.with { $0 }.theme
 
         self.observeNotifications()
+        self.startAutoResponderMonitor()
         DispatchQueue.main.async { [weak self] in
             self?.syncPetVisibility()
         }
     }
 
     deinit {
+        self.autoResponderDisposable?.dispose()
         for obs in self.observers {
             NotificationCenter.default.removeObserver(obs)
         }
         self.petView?.removeFromSuperview()
         self.windowView?.removeFromSuperview()
+    }
+
+    private func startAutoResponderMonitor() {
+        let signal = self.context.account.viewTracker.tailChatListView(
+            groupId: .root,
+            filterPredicate: nil,
+            count: 14,
+            shouldLoadCanMessagePeer: false
+        )
+        |> deliverOnMainQueue
+
+        let selfPeerId = self.context.account.peerId
+        self.autoResponderDisposable = signal.start(next: { [weak self] view, _ in
+            guard let self else { return }
+            let settings = FullGramAutoResponderSettings.shared
+            guard settings.isEnabled else { return }
+            let minTimestamp = settings.enabledSinceTimestamp
+
+            for entry in view.entries {
+                guard case let .MessageEntry(data) = entry else { continue }
+                guard let unreadCount = data.readState?.state.count, unreadCount > 0 else { continue }
+                guard let lastMsg = data.messages.last else { continue }
+                guard lastMsg.flags.contains(.Incoming) else { continue }
+                guard lastMsg.timestamp >= minTimestamp else { continue }
+
+                let peerId = lastMsg.id.peerId
+                guard peerId != selfPeerId, peerId.id._internalGetInt64Value() != 777000 else { continue }
+
+                if peerId.namespace == Namespaces.Peer.CloudUser {
+                    guard let user = data.renderedPeer.chatMainPeer as? TelegramUser,
+                          !user.isDeleted,
+                          user.botInfo == nil,
+                          !user.flags.contains(.isSupport) else {
+                        continue
+                    }
+                } else {
+                    guard settings.replyInGroupsOnMention, lastMsg.tags.contains(.unseenPersonalMessage) else {
+                        continue
+                    }
+                }
+
+                guard self.seenAutoReplyMessageIds.insert(lastMsg.id).inserted else { continue }
+                let peerRaw = peerId.toInt64()
+                guard settings.canReply(to: peerRaw) else { continue }
+                settings.markReplied(to: peerRaw)
+
+                self.dispatchAutoReply(to: peerId, incomingText: lastMsg.text, mode: settings.mode, fallbackText: settings.effectiveReplyText)
+            }
+        })
+    }
+
+    private func dispatchAutoReply(to peerId: PeerId, incomingText: String, mode: FullGramAutoResponderSettings.Mode, fallbackText: String) {
+        let sendNow: (String) -> Void = { [weak self] replyText in
+            guard let self, !replyText.isEmpty else { return }
+            let _ = enqueueMessages(account: self.context.account, peerId: peerId, messages: [
+                EnqueueMessage.message(
+                    text: replyText,
+                    attributes: [],
+                    inlineStickers: [:],
+                    mediaReference: nil,
+                    threadId: nil,
+                    replyToMessageId: nil,
+                    replyToStoryId: nil,
+                    localGroupingKey: nil,
+                    correlationId: nil,
+                    bubbleUpEmojiOrStickersets: []
+                )
+            ]).startStandalone()
+        }
+
+        guard mode == .aiSmart else {
+            sendNow(fallbackText)
+            return
+        }
+
+        guard let url = URL(string: "https://text.pollinations.ai/openai") else {
+            sendNow(fallbackText)
+            return
+        }
+
+        var req = URLRequest(url: url, timeoutInterval: 3.5)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let cleanIncoming = incomingText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let payload: [String: Any] = [
+            "model": "openai",
+            "temperature": 0.4,
+            "messages": [
+                [
+                    "role": "system",
+                    "content": "Ты — вежливый автоответчик в Telegram. Владелец аккаунта сейчас не у телефона. Напиши короткий (1 предложение) дружелюбный автоответ с префиксом «✨ [Авто-ответ FullGram]: », учитывая тему входящего сообщения."
+                ],
+                [
+                    "role": "user",
+                    "content": cleanIncoming.isEmpty ? "Привет!" : String(cleanIncoming.prefix(350))
+                ]
+            ]
+        ]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            if let data,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let choices = json["choices"] as? [[String: Any]],
+               let msg = choices.first?["message"] as? [String: Any],
+               let content = msg["content"] as? String {
+                let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    let finalReply = trimmed.hasPrefix("✨") || trimmed.hasPrefix("🤖") ? trimmed : "✨ [Авто-ответ FullGram]: \(trimmed)"
+                    DispatchQueue.main.async { sendNow(finalReply) }
+                    return
+                }
+            }
+            DispatchQueue.main.async { sendNow(fallbackText) }
+        }.resume()
     }
 
     func updateTheme(_ theme: PresentationTheme) {

@@ -471,6 +471,26 @@ public enum FullGramSpeechBleep {
             let carrierFreq = 2900.0 + 1250.0 * sin(2.0 * .pi * modFreq * t) + 550.0 * sin(2.0 * .pi * 7.5 * t)
             let signal = sin(2.0 * .pi * carrierFreq * t)
             return Float(signal * burstEnv * env * 0.44)
+        case .duck:
+            // Nasal formant duck quack ("кря-кря")
+            let quackEnv = sin(.pi * min(1.0, progress * 1.15))
+            let f0 = 285.0 - 75.0 * progress + 18.0 * sin(2.0 * .pi * 38.0 * t)
+            let p = 2.0 * .pi * f0 * t
+            let nasal = 0.45 * sin(p) + 0.35 * sin(2.0 * p) + 0.25 * sin(3.0 * p) + 0.18 * sin(5.0 * p)
+            return Float(nasal * quackEnv * env * 0.52)
+        case .coin:
+            // Classic 8-bit two-tone coin chime: B5 (987.77 Hz) -> E6 (1318.51 Hz)
+            let freq = (t < 0.075) ? 987.77 : 1318.51
+            let decay = exp(-max(0.0, t - 0.075) * 4.8)
+            let sq = sin(2.0 * .pi * freq * t) + 0.33 * sin(6.0 * .pi * freq * t)
+            return Float(sq * decay * env * 0.46)
+        case .custom:
+            if let customVal = FullGramCustomBleepStore.shared.sampleAt(index: index, totalSamples: totalSamples, sampleRate: sampleRate) {
+                return customVal * Float(env)
+            }
+            let decay = exp(-t * 4.2)
+            let tone = 0.65 * sin(2.0 * .pi * 1046.5 * t) + 0.35 * sin(2.0 * .pi * 2093.0 * t)
+            return Float(tone * decay * env * 0.52)
         }
     }
 
@@ -664,7 +684,7 @@ public enum FullGramSpeechBleep {
                         let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !text.isEmpty {
                             if shouldCleanup { try? FileManager.default.removeItem(at: workingURL) }
-                            completion(text)
+                            formatTranscriptionWithSummary(text: text, mode: FullGramVoiceSummaryMode.current, completion: completion)
                         } else {
                             attempt(index: index + 1)
                         }
@@ -692,5 +712,122 @@ public enum FullGramSpeechBleep {
         } else {
             completion(nil)
         }
+    }
+
+    // MARK: - Smart Voice Summary (Auto TL;DR for Voice & Round Video Messages)
+
+    private static func formatTranscriptionWithSummary(
+        text: String,
+        mode: FullGramVoiceSummaryMode,
+        completion: @escaping (String?) -> Void
+    ) {
+        let words = text.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        // Only summarize voice messages that have at least 12 words
+        guard mode != .off, words.count >= 12 else {
+            completion(text)
+            return
+        }
+
+        let fallbackSummary = buildExtractiveSummary(from: text, words: words)
+        let deliverFormatted: (String) -> Void = { summary in
+            let cleanSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleanSummary.isEmpty else {
+                completion(text)
+                return
+            }
+            switch mode {
+            case .off:
+                completion(text)
+            case .summaryAndText:
+                completion("⚡️ Суть ГС: \(cleanSummary)\n\n📝 Текст: \(text)")
+            case .summaryOnly:
+                completion("⚡️ Суть ГС: \(cleanSummary)")
+            }
+        }
+
+        guard let url = URL(string: "https://text.pollinations.ai/openai") else {
+            deliverFormatted(fallbackSummary)
+            return
+        }
+
+        var req = URLRequest(url: url, timeoutInterval: 3.4)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let payload: [String: Any] = [
+            "model": "openai",
+            "temperature": 0.2,
+            "messages": [
+                [
+                    "role": "system",
+                    "content": "Сожми расшифровку голосового сообщения в 1-2 коротких предложения (только сама суть, факты, вопросы или договорённости, без вступлений и кавычек, на языке оригинала)."
+                ],
+                [
+                    "role": "user",
+                    "content": String(text.prefix(1500))
+                ]
+            ]
+        ]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+
+        let lock = NSLock()
+        var done = false
+        let finishOnce: (String) -> Void = { res in
+            lock.lock()
+            guard !done else {
+                lock.unlock()
+                return
+            }
+            done = true
+            lock.unlock()
+            deliverFormatted(res)
+        }
+
+        let task = URLSession.shared.dataTask(with: req) { data, _, _ in
+            if let data,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let choices = json["choices"] as? [[String: Any]],
+               let msg = choices.first?["message"] as? [String: Any],
+               let content = msg["content"] as? String {
+                let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    finishOnce(trimmed)
+                    return
+                }
+            }
+            finishOnce(fallbackSummary)
+        }
+        task.resume()
+
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 3.5) {
+            task.cancel()
+            finishOnce(fallbackSummary)
+        }
+    }
+
+    private static func buildExtractiveSummary(from text: String, words: [String]) -> String {
+        let separators = CharacterSet(charactersIn: ".!?;\n")
+        let clauses = text
+            .components(separatedBy: separators)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.count >= 8 }
+
+        if clauses.count >= 2 {
+            // Score clauses by presence of numbers, question words, action verbs, and compact length
+            let priorityKeywords = ["нужно", "надо", "давай", "когда", "во сколько", "завтра", "сегодня", "оплат", "деньг", "скин", "позвон", "встрет", "вопрос", "важно", "главное", "итог", "короче"]
+            let scored = clauses.enumerated().map { idx, clause -> (Int, Double, String) in
+                let lower = clause.lowercased()
+                var score = (idx == 0 || idx == clauses.count - 1) ? 1.5 : 1.0
+                if clause.contains(where: \.isNumber) { score += 2.2 }
+                for kw in priorityKeywords where lower.contains(kw) {
+                    score += 1.6
+                }
+                return (idx, score, clause)
+            }
+            let top = scored.sorted { $0.1 > $1.1 }.prefix(2).sorted { $0.0 < $1.0 }.map { $0.2 }
+            return top.joined(separator: ". ") + "."
+        }
+
+        let headCount = min(14, words.count)
+        return words.prefix(headCount).joined(separator: " ") + (words.count > headCount ? "…" : "")
     }
 }

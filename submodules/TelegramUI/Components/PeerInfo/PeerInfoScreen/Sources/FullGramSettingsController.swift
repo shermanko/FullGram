@@ -417,7 +417,7 @@ private final class FullGramHeaderItemNode: ListViewItemNode {
 
             let (versionLayout, versionApply) = makeVersionLayout(TextNodeLayoutArguments(
                 attributedString: NSAttributedString(
-                    string: "0.0.1",
+                    string: "1.0.0",
                     font: Font.regular(15.0),
                     textColor: item.theme.list.itemSecondaryTextColor
                 ),
@@ -1220,6 +1220,7 @@ private struct FullGramChatsCategoryArguments {
     let openTranslation: () -> Void
     let openMessageMenu: () -> Void
     let openReactions: () -> Void
+    let openAutoResponder: () -> Void
     let toggle: (FullGramChatsToggle, Bool) -> Void
 }
 
@@ -1231,13 +1232,14 @@ private enum FullGramChatsCategoryEntry: ItemListNodeEntry {
     case translationLink(PresentationTheme, String)
     case messageMenuLink(PresentationTheme)
     case reactionsLink(PresentationTheme, String)
+    case autoResponderLink(PresentationTheme, String)
     case optionsHeader(String)
     case toggle(FullGramChatsToggle, String, Bool)
     case optionsInfo(String)
 
     var section: ItemListSectionId {
         switch self {
-        case .sectionsHeader, .messageHistoryLink, .restrictionBypassLink, .sendingLink, .translationLink, .messageMenuLink, .reactionsLink:
+        case .sectionsHeader, .messageHistoryLink, .restrictionBypassLink, .sendingLink, .translationLink, .messageMenuLink, .reactionsLink, .autoResponderLink:
             return 0
         case .optionsHeader, .toggle, .optionsInfo:
             return 1
@@ -1260,6 +1262,8 @@ private enum FullGramChatsCategoryEntry: ItemListNodeEntry {
             return 5
         case .reactionsLink:
             return 6
+        case .autoResponderLink:
+            return 7
         case .optionsHeader:
             return 100
         case let .toggle(option, _, _):
@@ -1350,6 +1354,18 @@ private enum FullGramChatsCategoryEntry: ItemListNodeEntry {
                 disclosureStyle: .arrow,
                 action: arguments.openReactions
             )
+        case let .autoResponderLink(_, label):
+            return ItemListDisclosureItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                icon: PresentationResourcesSettings.privateChats,
+                title: "Авто-ответчик (AFK без Premium)",
+                label: label,
+                sectionId: self.section,
+                style: .blocks,
+                disclosureStyle: .arrow,
+                action: arguments.openAutoResponder
+            )
         case let .toggle(option, title, value):
             return ItemListSwitchItem(
                 presentationData: presentationData,
@@ -1420,6 +1436,9 @@ func fullGramChatsCategoryController(context: AccountContext) -> ViewController 
         openReactions: {
             pushControllerImpl?(fullGramReactionSettingsController(context: context))
         },
+        openAutoResponder: {
+            pushControllerImpl?(fullGramAutoResponderController(context: context))
+        },
         toggle: { option, value in
             try? store.update { settings in
                 switch option {
@@ -1460,6 +1479,16 @@ func fullGramChatsCategoryController(context: AccountContext) -> ViewController 
             ? "\(ghostSettings.reactionDisplay.maxVisibleCount)"
             : t("Выкл.", "Off")
 
+        let autoResponderObserver = NotificationCenter.default.addObserver(
+            forName: FullGramAutoResponderSettings.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            extrasVersion += 1
+            extrasChanged.set(extrasVersion)
+        }
+        _ = autoResponderObserver
+
         let entries: [FullGramChatsCategoryEntry] = [
             .sectionsHeader(t("РАЗДЕЛЫ ЧАТОВ", "CHAT SECTIONS")),
             .messageHistoryLink(presentationData.theme, historyState.records.count),
@@ -1468,6 +1497,7 @@ func fullGramChatsCategoryController(context: AccountContext) -> ViewController 
             .translationLink(presentationData.theme, fullGramTranslationProviderTitle(ghostSettings.translation.provider)),
             .messageMenuLink(presentationData.theme),
             .reactionsLink(presentationData.theme, reactionsLabel),
+            .autoResponderLink(presentationData.theme, FullGramAutoResponderSettings.shared.mode.title(isRussian)),
             .optionsHeader(t("ПОВЕДЕНИЕ В ЧАТЕ", "CHAT BEHAVIOR")),
             .toggle(.hideStickerTime, t("Скрывать время на стикерах", "Hide time on stickers"), ui.hideStickerTime),
             .toggle(.unlimitedRecentStickers, t("Увеличить недавние стикеры (до 200)", "Unlimited recent stickers (up to 200)"), ui.unlimitedRecentStickers),
@@ -3834,5 +3864,228 @@ public func fullGramBadgesController(context: AccountContext) -> ViewController 
 
     let controller = ItemListController(context: context, state: signal)
     presentNativeImpl = { [weak controller] vc in controller?.present(vc, animated: true) }
+    return controller
+}
+
+// MARK: - Авто-ответчик без Telegram Premium (AFK Mode)
+
+private final class FullGramAutoResponderArguments {
+    let selectMode: (FullGramAutoResponderSettings.Mode) -> Void
+    let editCustomText: () -> Void
+    let selectCooldown: () -> Void
+    let toggleGroupsMention: (Bool) -> Void
+    let resetCooldowns: () -> Void
+
+    init(
+        selectMode: @escaping (FullGramAutoResponderSettings.Mode) -> Void,
+        editCustomText: @escaping () -> Void,
+        selectCooldown: @escaping () -> Void,
+        toggleGroupsMention: @escaping (Bool) -> Void,
+        resetCooldowns: @escaping () -> Void
+    ) {
+        self.selectMode = selectMode
+        self.editCustomText = editCustomText
+        self.selectCooldown = selectCooldown
+        self.toggleGroupsMention = toggleGroupsMention
+        self.resetCooldowns = resetCooldowns
+    }
+}
+
+private enum FullGramAutoResponderSection: Int32 {
+    case mode
+    case template
+    case rules
+}
+
+private enum FullGramAutoResponderEntry: ItemListNodeEntry {
+    case modeHeader(String)
+    case modeOption(Int32, FullGramAutoResponderSettings.Mode, String, Bool)
+    case modeFooter(String)
+    case templateHeader(String)
+    case editCustomText(String, String)
+    case previewText(String)
+    case rulesHeader(String)
+    case cooldown(String, String)
+    case groupsMention(String, Bool)
+    case resetCooldowns(String)
+    case statsFooter(String)
+
+    var section: ItemListSectionId {
+        switch self {
+        case .modeHeader, .modeOption, .modeFooter: return FullGramAutoResponderSection.mode.rawValue
+        case .templateHeader, .editCustomText, .previewText: return FullGramAutoResponderSection.template.rawValue
+        case .rulesHeader, .cooldown, .groupsMention, .resetCooldowns, .statsFooter: return FullGramAutoResponderSection.rules.rawValue
+        }
+    }
+
+    var stableId: Int32 {
+        switch self {
+        case .modeHeader: return 0
+        case let .modeOption(idx, _, _, _): return 1 + idx
+        case .modeFooter: return 20
+        case .templateHeader: return 30
+        case .editCustomText: return 31
+        case .previewText: return 32
+        case .rulesHeader: return 50
+        case .cooldown: return 51
+        case .groupsMention: return 52
+        case .resetCooldowns: return 53
+        case .statsFooter: return 60
+        }
+    }
+
+    static func < (lhs: FullGramAutoResponderEntry, rhs: FullGramAutoResponderEntry) -> Bool {
+        return lhs.stableId < rhs.stableId
+    }
+
+    func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
+        let args = arguments as! FullGramAutoResponderArguments
+        switch self {
+        case let .modeHeader(text):
+            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+        case let .modeOption(_, mode, title, selected):
+            return ItemListCheckboxItem(presentationData: presentationData, title: title, style: .left, checked: selected, zeroSeparatorInsets: false, sectionId: self.section, action: {
+                args.selectMode(mode)
+            })
+        case let .modeFooter(text):
+            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
+        case let .templateHeader(text):
+            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+        case let .editCustomText(title, value):
+            return ItemListDisclosureItem(presentationData: presentationData, title: title, label: value, sectionId: self.section, style: .blocks, action: args.editCustomText)
+        case let .previewText(text):
+            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
+        case let .rulesHeader(text):
+            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+        case let .cooldown(title, label):
+            return ItemListDisclosureItem(presentationData: presentationData, title: title, label: label, sectionId: self.section, style: .blocks, action: args.selectCooldown)
+        case let .groupsMention(title, value):
+            return ItemListSwitchItem(presentationData: presentationData, title: title, value: value, sectionId: self.section, style: .blocks, updated: args.toggleGroupsMention)
+        case let .resetCooldowns(title):
+            return ItemListActionItem(presentationData: presentationData, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.resetCooldowns)
+        case let .statsFooter(text):
+            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
+        }
+    }
+}
+
+func fullGramAutoResponderController(context: AccountContext) -> ViewController {
+    let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
+    var tick = 0
+    let bump: () -> Void = {
+        tick += 1
+        refresh.set(tick)
+    }
+
+    var presentUIKitImpl: ((UIViewController) -> Void)?
+
+    let args = FullGramAutoResponderArguments(
+        selectMode: { mode in
+            FullGramAutoResponderSettings.shared.mode = mode
+            bump()
+        },
+        editCustomText: {
+            let alert = UIAlertController(
+                title: "Свой текст авто-ответа",
+                message: "Введите сообщение, которое будет автоматически отправляться собеседникам:",
+                preferredStyle: .alert
+            )
+            alert.addTextField { tf in
+                tf.placeholder = "Например: Сейчас занят, напишу позже!"
+                tf.text = FullGramAutoResponderSettings.shared.customText
+            }
+            alert.addAction(UIAlertAction(title: "Сохранить", style: .default) { _ in
+                if let text = alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+                    FullGramAutoResponderSettings.shared.customText = text
+                    FullGramAutoResponderSettings.shared.mode = .custom
+                    bump()
+                }
+            })
+            alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            presentUIKitImpl?(alert)
+        },
+        selectCooldown: {
+            let sheet = UIAlertController(title: "Интервал авто-ответа", message: "Как часто отвечать одному и тому же собеседнику:", preferredStyle: .actionSheet)
+            let options: [(String, Int)] = [
+                ("Раз в 5 минут", 300),
+                ("Раз в 15 минут", 900),
+                ("Раз в 30 минут", 1800),
+                ("Раз в 1 час", 3600),
+                ("Раз в 24 часа", 86400)
+            ]
+            for (title, sec) in options {
+                sheet.addAction(UIAlertAction(title: title, style: .default) { _ in
+                    FullGramAutoResponderSettings.shared.cooldownSeconds = sec
+                    bump()
+                })
+            }
+            sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            presentUIKitImpl?(sheet)
+        },
+        toggleGroupsMention: { val in
+            FullGramAutoResponderSettings.shared.replyInGroupsOnMention = val
+            bump()
+        },
+        resetCooldowns: {
+            FullGramAutoResponderSettings.shared.resetCooldowns()
+            bump()
+        }
+    )
+
+    let signal = combineLatest(context.sharedContext.presentationData, refresh.get())
+    |> deliverOnMainQueue
+    |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
+        let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+        let s = FullGramAutoResponderSettings.shared
+        let currentMode = s.mode
+
+        let cooldownLabel: String
+        switch s.cooldownSeconds {
+        case ..<600: cooldownLabel = "5 мин"
+        case ..<1500: cooldownLabel = "15 мин"
+        case ..<2700: cooldownLabel = "30 мин"
+        case ..<7200: cooldownLabel = "1 час"
+        default: cooldownLabel = "24 часа"
+        }
+
+        var entries: [FullGramAutoResponderEntry] = []
+        entries.append(.modeHeader("РЕЖИМ АВТО-ОТВЕТЧИКА (БЕЗ TELEGRAM PREMIUM)"))
+        for (idx, m) in FullGramAutoResponderSettings.Mode.allCases.enumerated() {
+            entries.append(.modeOption(Int32(idx), m, m.title(ru), m == currentMode))
+        }
+        entries.append(.modeFooter("Работает бесплатно и без подписки Telegram Premium/Business. При получении нового сообщения автоматически отправляет выбранный ответ (боты и каналы игнорируются)."))
+
+        entries.append(.templateHeader("ТЕКСТ АВТО-ОТВЕТА"))
+        entries.append(.editCustomText("Изменить свой текст", "Настроить"))
+        let preview = currentMode == .off ? "Авто-ответчик сейчас выключен." : "Текущий ответ: «\(s.effectiveReplyText)»"
+        entries.append(.previewText(preview))
+
+        entries.append(.rulesHeader("ПРАВИЛА И ЗАЩИТА ОТ СПАМА"))
+        entries.append(.cooldown("Пауза для одного собеседника", cooldownLabel))
+        entries.append(.groupsMention("Отвечать в группах при упоминании (@тег / реплай)", s.replyInGroupsOnMention))
+        entries.append(.resetCooldowns("Сбросить таймеры ответов сейчас"))
+        entries.append(.statsFooter("Всего отправлено авто-ответов за всё время: \(s.totalRepliesSent)."))
+
+        let data = ItemListPresentationData(presentationData)
+        let state = ItemListControllerState(
+            presentationData: data,
+            title: .text("Авто-ответчик (AFK)"),
+            leftNavigationButton: nil,
+            rightNavigationButton: nil,
+            backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back)
+        )
+        let listState = ItemListNodeState(presentationData: data, entries: entries, style: .blocks)
+        return (state, (listState, args))
+    }
+
+    let controller = ItemListController(context: context, state: signal)
+    presentUIKitImpl = { [weak controller] vc in
+        guard let controller else { return }
+        if let pop = vc.popoverPresentationController {
+            pop.sourceView = controller.view
+            pop.sourceRect = CGRect(x: controller.view.bounds.midX, y: controller.view.bounds.midY, width: 1.0, height: 1.0)
+        }
+        controller.view.window?.rootViewController?.present(vc, animated: true)
+    }
     return controller
 }
