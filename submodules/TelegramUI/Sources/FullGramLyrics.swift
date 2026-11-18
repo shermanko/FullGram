@@ -206,7 +206,7 @@ enum FullGramLyricsFetcher {
         }
     }
 
-    private static func searchLRCLIB(title: String, artist: String?, duration: Double, completion: @escaping (FullGramLyricsResult?) -> Void) {
+    private static func searchLRCLIB(title: String, artist: String?, duration: Double, completion: @escaping @Sendable (FullGramLyricsResult?) -> Void) {
         var components = URLComponents(string: "https://lrclib.net/api/search")!
         let q = [artist ?? "", title].filter { !$0.isEmpty }.joined(separator: " ")
         components.queryItems = [URLQueryItem(name: "q", value: q)]

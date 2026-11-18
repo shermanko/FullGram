@@ -717,14 +717,15 @@ private enum FullGramActivityExtraToggle: Int32 {
 }
 
 private struct FullGramActivityAndTracesArguments {
-    let toggleStatus: (FullGramActivityFilter.Kind, Bool) -> Void
+    let openActivityFilter: () -> Void
     let toggleExtra: (FullGramActivityExtraToggle, Bool) -> Void
     let selectUndoSend: () -> Void
 }
 
 private enum FullGramActivityAndTracesEntry: ItemListNodeEntry {
     case statusesHeader(String)
-    case statusToggle(Int32, FullGramActivityFilter.Kind, Bool)
+    case activityFilterLink(String, String)
+    case statusesInfo(String)
     case otherHeader(String)
     case extraToggle(FullGramActivityExtraToggle, String, Bool)
     case extraInfo(Int32, String)
@@ -732,7 +733,7 @@ private enum FullGramActivityAndTracesEntry: ItemListNodeEntry {
 
     var section: ItemListSectionId {
         switch self {
-        case .statusesHeader, .statusToggle:
+        case .statusesHeader, .activityFilterLink, .statusesInfo:
             return 0
         case .otherHeader, .extraToggle, .extraInfo, .undoSend:
             return 1
@@ -742,7 +743,8 @@ private enum FullGramActivityAndTracesEntry: ItemListNodeEntry {
     var stableId: Int32 {
         switch self {
         case .statusesHeader: return 0
-        case let .statusToggle(idx, _, _): return 1 + idx
+        case .activityFilterLink: return 1
+        case .statusesInfo: return 2
         case .otherHeader: return 50
         case .extraToggle(.alwaysOnline, _, _): return 51
         case .extraToggle(.confirmCalls, _, _): return 52
@@ -757,7 +759,8 @@ private enum FullGramActivityAndTracesEntry: ItemListNodeEntry {
     static func ==(lhs: FullGramActivityAndTracesEntry, rhs: FullGramActivityAndTracesEntry) -> Bool {
         switch (lhs, rhs) {
         case let (.statusesHeader(a), .statusesHeader(b)): return a == b
-        case let (.statusToggle(ai, ak, av), .statusToggle(bi, bk, bv)): return ai == bi && ak == bk && av == bv
+        case let (.activityFilterLink(at, al), .activityFilterLink(bt, bl)): return at == bt && al == bl
+        case let (.statusesInfo(a), .statusesInfo(b)): return a == b
         case let (.otherHeader(a), .otherHeader(b)): return a == b
         case let (.extraToggle(ao, at, av), .extraToggle(bo, bt, bv)): return ao == bo && at == bt && av == bv
         case let (.extraInfo(ai, at), .extraInfo(bi, bt)): return ai == bi && at == bt
@@ -775,16 +778,19 @@ private enum FullGramActivityAndTracesEntry: ItemListNodeEntry {
         switch self {
         case let .statusesHeader(text), let .otherHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
-        case let .statusToggle(_, kind, value):
-            return ItemListSwitchItem(
+        case let .activityFilterLink(title, label):
+            return ItemListDisclosureItem(
                 presentationData: presentationData,
                 systemStyle: .glass,
-                title: kind.titleRu,
-                value: value,
+                title: title,
+                label: label,
                 sectionId: self.section,
                 style: .blocks,
-                updated: { args.toggleStatus(kind, $0) }
+                disclosureStyle: .arrow,
+                action: args.openActivityFilter
             )
+        case let .statusesInfo(text), let .extraInfo(_, text):
+            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         case let .extraToggle(opt, title, value):
             return ItemListSwitchItem(
                 presentationData: presentationData,
@@ -795,8 +801,6 @@ private enum FullGramActivityAndTracesEntry: ItemListNodeEntry {
                 style: .blocks,
                 updated: { args.toggleExtra(opt, $0) }
             )
-        case let .extraInfo(_, text):
-            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         case let .undoSend(title, label):
             return ItemListDisclosureItem(
                 presentationData: presentationData,
@@ -812,19 +816,147 @@ private enum FullGramActivityAndTracesEntry: ItemListNodeEntry {
     }
 }
 
+private struct FullGramActivityFilterArguments {
+    let toggleAll: (Bool) -> Void
+    let toggleStatus: (FullGramActivityFilter.Kind, Bool) -> Void
+}
+
+private enum FullGramActivityFilterEntry: ItemListNodeEntry {
+    case allHeader(String)
+    case toggleAll(String, Bool)
+    case statusesHeader(String)
+    case statusToggle(Int32, FullGramActivityFilter.Kind, Bool)
+    case statusesInfo(String)
+
+    var section: ItemListSectionId {
+        switch self {
+        case .allHeader, .toggleAll:
+            return 0
+        case .statusesHeader, .statusToggle, .statusesInfo:
+            return 1
+        }
+    }
+
+    var stableId: Int32 {
+        switch self {
+        case .allHeader: return 0
+        case .toggleAll: return 1
+        case .statusesHeader: return 10
+        case let .statusToggle(idx, _, _): return 11 + idx
+        case .statusesInfo: return 100
+        }
+    }
+
+    static func ==(lhs: FullGramActivityFilterEntry, rhs: FullGramActivityFilterEntry) -> Bool {
+        switch (lhs, rhs) {
+        case let (.allHeader(a), .allHeader(b)): return a == b
+        case let (.toggleAll(at, av), .toggleAll(bt, bv)): return at == bt && av == bv
+        case let (.statusesHeader(a), .statusesHeader(b)): return a == b
+        case let (.statusToggle(ai, ak, av), .statusToggle(bi, bk, bv)): return ai == bi && ak == bk && av == bv
+        case let (.statusesInfo(a), .statusesInfo(b)): return a == b
+        default: return false
+        }
+    }
+
+    static func <(lhs: FullGramActivityFilterEntry, rhs: FullGramActivityFilterEntry) -> Bool {
+        return lhs.stableId < rhs.stableId
+    }
+
+    func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
+        let args = arguments as! FullGramActivityFilterArguments
+        switch self {
+        case let .allHeader(text), let .statusesHeader(text):
+            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+        case let .toggleAll(title, value):
+            return ItemListSwitchItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                title: title,
+                value: value,
+                sectionId: self.section,
+                style: .blocks,
+                updated: args.toggleAll
+            )
+        case let .statusToggle(_, kind, value):
+            return ItemListSwitchItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                title: kind.titleRu,
+                value: value,
+                sectionId: self.section,
+                style: .blocks,
+                updated: { args.toggleStatus(kind, $0) }
+            )
+        case let .statusesInfo(text):
+            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
+        }
+    }
+}
+
+func fullGramActivityFilterController(context: AccountContext) -> ViewController {
+    let changed = ValuePromise<Int>(0, ignoreRepeated: false)
+    let version = Atomic<Int>(value: 0)
+    let observer = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { _ in
+        changed.set(version.modify { $0 + 1 })
+    }
+
+    let args = FullGramActivityFilterArguments(
+        toggleAll: { value in
+            for kind in FullGramActivityFilter.Kind.allCases {
+                FullGramActivityFilter.setHidden(kind, value)
+            }
+        },
+        toggleStatus: { kind, value in
+            FullGramActivityFilter.setHidden(kind, value)
+        }
+    )
+
+    let signal = combineLatest(context.sharedContext.presentationData, changed.get())
+    |> deliverOnMainQueue
+    |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
+        let allKinds = FullGramActivityFilter.Kind.allCases
+        let allHidden = allKinds.allSatisfy { FullGramActivityFilter.isHidden($0) }
+        var entries: [FullGramActivityFilterEntry] = [
+            .allHeader("ОБЩЕЕ"),
+            .toggleAll("Скрывать все статусы", allHidden),
+            .statusesHeader("ВЫБРАТЬ СТАТУСЫ")
+        ]
+        for (index, kind) in allKinds.enumerated() {
+            entries.append(.statusToggle(Int32(index), kind, FullGramActivityFilter.isHidden(kind)))
+        }
+        entries.append(.statusesInfo("Выбранные статусы активности («печатает», запись голосовых и др.) не будут отправляться собеседникам."))
+
+        let data = ItemListPresentationData(presentationData)
+        let state = ItemListControllerState(
+            presentationData: data,
+            title: .text("Скрытие статусов"),
+            leftNavigationButton: nil,
+            rightNavigationButton: nil,
+            backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back)
+        )
+        let listState = ItemListNodeState(presentationData: data, entries: entries, style: .blocks, animateChanges: false)
+        return (state, (listState, args))
+    }
+    |> afterDisposed {
+        NotificationCenter.default.removeObserver(observer)
+    }
+
+    return ItemListController(context: context, state: signal)
+}
+
 func fullGramActivityAndTracesController(context: AccountContext) -> ViewController {
+    var pushControllerImpl: ((ViewController) -> Void)?
     var presentControllerImpl: ((ViewController) -> Void)?
     var presentNativeImpl: ((UIViewController) -> Void)?
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
-    var version = 0
+    let version = Atomic<Int>(value: 0)
     let observer = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { _ in
-        version += 1
-        changed.set(version)
+        changed.set(version.modify { $0 + 1 })
     }
 
     let args = FullGramActivityAndTracesArguments(
-        toggleStatus: { kind, value in
-            FullGramActivityFilter.setHidden(kind, value)
+        openActivityFilter: {
+            pushControllerImpl?(fullGramActivityFilterController(context: context))
         },
         toggleExtra: { opt, value in
             switch opt {
@@ -891,12 +1023,14 @@ func fullGramActivityAndTracesController(context: AccountContext) -> ViewControl
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let extras = FullGramExtras.shared
         let undoLabel = extras.undoSendSeconds == 0 ? "Выкл." : "\(extras.undoSendSeconds) сек."
+        let allKinds = FullGramActivityFilter.Kind.allCases
+        let hiddenCount = allKinds.filter { FullGramActivityFilter.isHidden($0) }.count
+        let statusesLabel = hiddenCount == 0 ? "Выкл." : "\(hiddenCount) из \(allKinds.count)"
         var entries: [FullGramActivityAndTracesEntry] = [
-            .statusesHeader("СКРЫТИЕ СТАТУСОВ")
+            .statusesHeader("СКРЫТИЕ СТАТУСОВ"),
+            .activityFilterLink("Скрытие статусов", statusesLabel),
+            .statusesInfo("Печатает, запись голосовых, кружки, стикеры и др.")
         ]
-        for (index, kind) in FullGramActivityFilter.Kind.allCases.enumerated() {
-            entries.append(.statusToggle(Int32(index), kind, FullGramActivityFilter.isHidden(kind)))
-        }
         entries.append(.otherHeader("ДОПОЛНИТЕЛЬНО"))
         entries.append(.extraToggle(.alwaysOnline, "Всегда онлайн", extras.alwaysOnline))
         entries.append(.extraToggle(.confirmCalls, "Подтверждать звонки", extras.confirmCalls))
@@ -923,6 +1057,9 @@ func fullGramActivityAndTracesController(context: AccountContext) -> ViewControl
     }
 
     let controller = ItemListController(context: context, state: signal)
+    pushControllerImpl = { [weak controller] c in
+        controller?.push(c)
+    }
     presentControllerImpl = { [weak controller] c in
         controller?.present(c, in: .window(.root))
     }

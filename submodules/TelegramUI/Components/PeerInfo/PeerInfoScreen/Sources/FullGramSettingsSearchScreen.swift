@@ -193,8 +193,15 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
             id: 2,
             title: "Деятельность и следы",
             subtitle: "Приватность",
-            keywords: "следы статусы игра печать фото видео голос",
+            keywords: "следы метаданные ссылки онлайн звонки",
             destination: { fullGramActivityAndTracesController(context: $0) }
+        ),
+        FullGramSearchItem(
+            id: 8,
+            title: "Скрытие статусов",
+            subtitle: "Приватность → Следы",
+            keywords: "статусы печатает голосовое кружок стикер игра фото видео файл",
+            destination: { fullGramActivityFilterController(context: $0) }
         ),
         FullGramSearchItem(
             id: 3,

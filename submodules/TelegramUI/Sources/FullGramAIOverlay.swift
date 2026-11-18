@@ -1130,16 +1130,19 @@ final class FullGramAIOverlayCoordinator {
                   let text = (note.userInfo as? [String: Any])?["text"] as? String,
                   !text.isEmpty else { return }
             let presentationData = self.context.sharedContext.currentPresentationData.with { $0 }
-            let targetController: ViewController? = (self.activeChatController() as ViewController?) ?? self.rootController
-            targetController?.present(
-                UndoOverlayController(
-                    presentationData: presentationData,
-                    content: .succeed(text: text, timeout: nil, customUndoText: nil),
-                    elevatedLayout: false,
-                    action: { _ in return false }
-                ),
-                in: .current
+            let overlay = UndoOverlayController(
+                presentationData: presentationData,
+                content: .succeed(text: text, timeout: nil, customUndoText: nil),
+                elevatedLayout: false,
+                action: { _ in return false }
             )
+            if let chatController = self.activeChatController() {
+                chatController.present(overlay, in: .current)
+            } else if let topController = self.rootController?.viewControllers.last as? ViewController {
+                topController.present(overlay, in: .window(.root))
+            } else {
+                self.context.sharedContext.presentGlobalController(overlay, nil)
+            }
         })
     }
 

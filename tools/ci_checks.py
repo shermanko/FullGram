@@ -326,6 +326,8 @@ def check_swift_sources() -> int:
             raise AssertionError(f"{rel} uses deprecated UITableViewCell.textLabel/detailTextLabel (use UIListContentConfiguration)")
         if re.search(r"^\s*_\s*=\s*\w*[Oo]bserver\b", text, re.M):
             raise AssertionError(f"{rel} discards NotificationCenter observer without removing it in afterDisposed")
+        if re.search(r"(?:\?\?\s*self\.rootController\b|rootController\s+as\??\s*ViewController\b)", text):
+            raise AssertionError(f"{rel} treats TelegramRootController (NavigationController) as ViewController")
 
     return len(swift_files)
 
