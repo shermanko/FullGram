@@ -163,7 +163,7 @@ final class ManagedAudioRecorderContext {
     private var oggWriter: TGOggOpusWriter
     private var dataItem: TGDataItem
     private var audioBuffer = Data()
-    private var voiceChanger: FullGramVoiceChanger? = FullGramVoiceChanger.makeIfEnabled()
+    private var voiceChanger: FullGramVoiceChanger? = FullGramBleepSound.current.isEnabled ? nil : FullGramVoiceChanger.makeIfEnabled(sampleRate: 48000.0)
     
     private let audioUnit = Atomic<AudioUnit?>(value: nil)
     

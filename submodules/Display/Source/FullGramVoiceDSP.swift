@@ -1,27 +1,30 @@
 import Foundation
 import AVFoundation
 
-/// Real-time 16 kHz mono Int16 voice processor shared by recorder and voice preview tester.
+/// Real-time mono Int16 voice processor shared by recorder and voice preview tester.
 public final class FullGramVoiceDSP {
     private let mode: FullGramVoiceMode
-    private let sampleRate: Double = 16000.0
+    private let sampleRate: Double
     private var robotPhase: Double = 0.0
     private var lfoPhase: Double = 0.0
+    private var grainPhase: Double = 0.0
+    private var lpState: Double = 0.0
 
     private var ring: [Double]
     private var writePos: Int = 0
-    private var readPos: Double = 0.0
-    private let ringSize = 8192
+    private var filledCount: Int = 0
+    private let ringSize = 16384
 
-    public init(mode: FullGramVoiceMode) {
+    public init(mode: FullGramVoiceMode, sampleRate: Double = 48000.0) {
         self.mode = mode
-        self.ring = [Double](repeating: 0.0, count: 8192)
+        self.sampleRate = max(8000.0, sampleRate)
+        self.ring = [Double](repeating: 0.0, count: 16384)
     }
 
-    public static func makeIfEnabled() -> FullGramVoiceDSP? {
+    public static func makeIfEnabled(sampleRate: Double = 48000.0) -> FullGramVoiceDSP? {
         let mode = FullGramVoiceMode.current
         guard mode != .off else { return nil }
-        return FullGramVoiceDSP(mode: mode)
+        return FullGramVoiceDSP(mode: mode, sampleRate: sampleRate)
     }
 
     public func process(_ samples: UnsafeMutablePointer<Int16>, count: Int) {
@@ -30,38 +33,66 @@ public final class FullGramVoiceDSP {
         case .off:
             return
         case .robot:
-            let step = 2.0 * .pi * 110.0 / self.sampleRate
-            for i in 0 ..< count {
-                let x = Double(samples[i]) / 32768.0
-                let mod = 0.65 * sin(self.robotPhase) + 0.35 * sin(self.robotPhase * 2.0)
-                self.robotPhase += step
-                if self.robotPhase > 2.0 * .pi {
-                    self.robotPhase -= 2.0 * .pi
-                }
-                let y = max(-1.0, min(1.0, x * mod * 1.4))
-                samples[i] = Int16(y * 32767.0)
-            }
+            self.processRobot(samples, count: count)
         case .low:
-            self.processPitch(samples, count: count, basePitch: 0.72, lfoDepth: 0.0)
+            self.processPitch(samples, count: count, basePitch: 0.74, lfoDepth: 0.0)
         case .cartoon:
-            self.processPitch(samples, count: count, basePitch: 1.45, lfoDepth: 0.0)
+            self.processPitch(samples, count: count, basePitch: 1.42, lfoDepth: 0.0)
         case .trippy:
-            self.processPitch(samples, count: count, basePitch: 1.08, lfoDepth: 0.40)
+            self.processPitch(samples, count: count, basePitch: 1.05, lfoDepth: 0.34)
         }
     }
 
-    private func processPitch(_ samples: UnsafeMutablePointer<Int16>, count: Int, basePitch: Double, lfoDepth: Double) {
+    private func processRobot(_ samples: UnsafeMutablePointer<Int16>, count: Int) {
         let mask = self.ringSize - 1
-        let lfoStep = 2.0 * .pi * 1.35 / self.sampleRate
-        let windowSize = 512.0
+        let carrierFreq = 105.0
+        let step = 2.0 * .pi * carrierFreq / self.sampleRate
+        let combDelay = max(16, Int((self.sampleRate * 0.0075).rounded()))
 
         for i in 0 ..< count {
-            self.ring[self.writePos & mask] = Double(samples[i])
+            let dry = Double(samples[i]) / 32768.0
+            let delayedIndex = (self.writePos - combDelay) & mask
+            let combOut = dry + 0.36 * self.ring[delayedIndex]
+            self.ring[self.writePos & mask] = max(-1.0, min(1.0, combOut))
             self.writePos += 1
+
+            let carrier = 0.60 * sin(self.robotPhase)
+                + 0.28 * sin(self.robotPhase * 2.0)
+                + 0.12 * cos(self.robotPhase * 3.0)
+            self.robotPhase += step
+            if self.robotPhase > 2.0 * .pi {
+                self.robotPhase -= 2.0 * .pi
+            }
+
+            // Blend ring-modulated harmonic carrier with comb-filtered dry voice for clear intelligibility
+            let ringMod = combOut * carrier * 1.35
+            let raw = 0.68 * ringMod + 0.32 * combOut
+            self.lpState += 0.55 * (raw - self.lpState)
+            let limited = softClip(self.lpState * 1.15)
+            samples[i] = Int16(max(-32767.0, min(32767.0, limited * 32767.0)))
+        }
+    }
+
+    /// Dual-tap synchronous Hann-windowed overlap-add pitch shifter.
+    /// Both read taps always stay strictly behind `writePos` and wrap only when their Hann window weight is 0.
+    private func processPitch(_ samples: UnsafeMutablePointer<Int16>, count: Int, basePitch: Double, lfoDepth: Double) {
+        let mask = self.ringSize - 1
+        let lfoStep = 2.0 * .pi * 1.45 / self.sampleRate
+        let windowSize = max(256.0, (self.sampleRate * 0.036).rounded())
+        let minDelay = 32.0
+
+        for i in 0 ..< count {
+            let inputSample = Double(samples[i])
+            let latestWrite = self.writePos
+            self.ring[latestWrite & mask] = inputSample
+            self.writePos = latestWrite + 1
+            if self.filledCount < self.ringSize {
+                self.filledCount += 1
+            }
 
             let pitch: Double
             if lfoDepth > 0.0 {
-                pitch = basePitch + lfoDepth * sin(self.lfoPhase)
+                pitch = max(0.55, min(1.75, basePitch + lfoDepth * sin(self.lfoPhase)))
                 self.lfoPhase += lfoStep
                 if self.lfoPhase > 2.0 * .pi {
                     self.lfoPhase -= 2.0 * .pi
@@ -70,29 +101,221 @@ public final class FullGramVoiceDSP {
                 pitch = basePitch
             }
 
-            let rp0 = self.readPos
-            let idx0 = Int(floor(rp0))
-            let frac0 = rp0 - Double(idx0)
-            let s0 = self.ring[idx0 & mask] * (1.0 - frac0) + self.ring[(idx0 + 1) & mask] * frac0
+            // Delay d(n) changes by (1 - pitch) per sample so read position advances by `pitch` per sample.
+            let phaseStep = (1.0 - pitch) / windowSize
+            self.grainPhase += phaseStep
+            self.grainPhase -= floor(self.grainPhase)
 
-            let rp1 = rp0 + windowSize
-            let idx1 = Int(floor(rp1))
-            let frac1 = rp1 - Double(idx1)
-            let s1 = self.ring[idx1 & mask] * (1.0 - frac1) + self.ring[(idx1 + 1) & mask] * frac1
+            let phi0 = self.grainPhase
+            var phi1 = phi0 + 0.5
+            if phi1 >= 1.0 {
+                phi1 -= 1.0
+            }
 
-            let distance = Double(self.writePos) - rp0
-            let phase = (distance.truncatingRemainder(dividingBy: windowSize) + windowSize).truncatingRemainder(dividingBy: windowSize) / windowSize
-            let weight = 0.5 - 0.5 * cos(2.0 * .pi * phase)
-            let mixed = s0 * weight + s1 * (1.0 - weight)
+            let maxAvailableDelay = Double(max(2, self.filledCount - 2))
+            let d0 = min(maxAvailableDelay, minDelay + phi0 * windowSize)
+            let d1 = min(maxAvailableDelay, minDelay + phi1 * windowSize)
 
-            samples[i] = Int16(max(-32768.0, min(32767.0, mixed)))
-            self.readPos += pitch
+            let s0 = self.readInterpolated(writeIndex: latestWrite, delay: d0, mask: mask)
+            let s1 = self.readInterpolated(writeIndex: latestWrite, delay: d1, mask: mask)
 
-            let ahead = Double(self.writePos) - self.readPos
-            if ahead < 64.0 || ahead > windowSize * 2.0 {
-                self.readPos = Double(self.writePos) - windowSize * 0.5
+            // Complementary Hann weights: w0(0) = 0, w0(0.5) = 1, w0(1) = 0, and w0 + w1 == 1 everywhere.
+            let w0 = 0.5 - 0.5 * cos(2.0 * .pi * phi0)
+            let w1 = 1.0 - w0
+            let mixed = (s0 * w0 + s1 * w1) / 32768.0
+
+            self.lpState += 0.65 * (mixed - self.lpState)
+            let out = softClip(self.lpState) * 32767.0
+            samples[i] = Int16(max(-32767.0, min(32767.0, out)))
+        }
+    }
+
+    @inline(__always)
+    private func readInterpolated(writeIndex: Int, delay: Double, mask: Int) -> Double {
+        let pos = Double(writeIndex) - delay
+        let idx0 = Int(floor(pos))
+        let frac = pos - Double(idx0)
+        let a = self.ring[idx0 & mask]
+        let b = self.ring[(idx0 + 1) & mask]
+        return a + (b - a) * frac
+    }
+
+    @inline(__always)
+    private func softClip(_ x: Double) -> Double {
+        if x > 1.25 { return 1.0 }
+        if x < -1.25 { return -1.0 }
+        // Smooth cubic soft-knee limiter around [-1, 1]
+        if x > 0.8 {
+            let t = (x - 0.8) / 0.45
+            return 0.8 + 0.2 * (t / (1.0 + abs(t)))
+        } else if x < -0.8 {
+            let t = (x + 0.8) / 0.45
+            return -0.8 + 0.2 * (t / (1.0 + abs(t)))
+        }
+        return x
+    }
+
+    // MARK: - Direct Spec-Compliant RIFF/WAVE PCM16 Helpers
+
+    public static func writeWAV16Mono(samples: [Int16], sampleRate: Int, to url: URL) -> Bool {
+        let numChannels: UInt16 = 1
+        let bitsPerSample: UInt16 = 16
+        let byteRate = UInt32(sampleRate) * UInt32(numChannels) * UInt32(bitsPerSample / 8)
+        let blockAlign = numChannels * (bitsPerSample / 8)
+        let dataByteCount = UInt32(samples.count * 2)
+        let chunkSize = 36 &+ dataByteCount
+
+        var data = Data(capacity: 44 + Int(dataByteCount))
+        data.append(contentsOf: [0x52, 0x49, 0x46, 0x46]) // "RIFF"
+        appendUInt32LE(&data, chunkSize)
+        data.append(contentsOf: [0x57, 0x41, 0x56, 0x45]) // "WAVE"
+        data.append(contentsOf: [0x66, 0x6D, 0x74, 0x20]) // "fmt "
+        appendUInt32LE(&data, 16)                          // Subchunk1Size (16 for PCM)
+        appendUInt16LE(&data, 1)                           // AudioFormat (1 = PCM)
+        appendUInt16LE(&data, numChannels)
+        appendUInt32LE(&data, UInt32(sampleRate))
+        appendUInt32LE(&data, byteRate)
+        appendUInt16LE(&data, blockAlign)
+        appendUInt16LE(&data, bitsPerSample)
+        data.append(contentsOf: [0x64, 0x61, 0x74, 0x61]) // "data"
+        appendUInt32LE(&data, dataByteCount)
+
+        samples.withUnsafeBufferPointer { ptr in
+            if let base = ptr.baseAddress {
+                data.append(UnsafeBufferPointer(start: UnsafeRawPointer(base).assumingMemoryBound(to: UInt8.self), count: samples.count * 2))
             }
         }
+
+        do {
+            try data.write(to: url, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    public static func readWAV16Mono(from url: URL) -> (samples: [Int16], sampleRate: Double)? {
+        // 1. Fast & exact RIFF/WAVE chunk parser (handles FLLR/JUNK/LIST padding chunks from AVAudioRecorder)
+        if let raw = try? Data(contentsOf: url), raw.count > 44 {
+            if raw[0] == 0x52, raw[1] == 0x49, raw[2] == 0x46, raw[3] == 0x46,
+               raw[8] == 0x57, raw[9] == 0x41, raw[10] == 0x56, raw[11] == 0x45 {
+                var offset = 12
+                var audioFormat: UInt16 = 1
+                var channels: UInt16 = 1
+                var sampleRate: UInt32 = 16000
+                var bitsPerSample: UInt16 = 16
+
+                while offset + 8 <= raw.count {
+                    let c0 = raw[offset]
+                    let c1 = raw[offset + 1]
+                    let c2 = raw[offset + 2]
+                    let c3 = raw[offset + 3]
+                    let chunkSize = Int(readUInt32LE(raw, offset + 4))
+                    let bodyStart = offset + 8
+                    guard chunkSize >= 0, bodyStart <= raw.count else { break }
+                    let bodyEnd = min(raw.count, bodyStart + chunkSize)
+
+                    if c0 == 0x66 && c1 == 0x6D && c2 == 0x74 && c3 == 0x20 && bodyEnd - bodyStart >= 16 {
+                        audioFormat = readUInt16LE(raw, bodyStart)
+                        channels = max(1, readUInt16LE(raw, bodyStart + 2))
+                        sampleRate = max(8000, readUInt32LE(raw, bodyStart + 4))
+                        bitsPerSample = readUInt16LE(raw, bodyStart + 14)
+                    } else if c0 == 0x64 && c1 == 0x61 && c2 == 0x74 && c3 == 0x61 {
+                        let byteLen = bodyEnd - bodyStart
+                        let ch = Int(channels)
+                        if audioFormat == 1 && bitsPerSample == 16 && byteLen >= 2 * ch {
+                            let frameCount = byteLen / (2 * ch)
+                            var out = [Int16](repeating: 0, count: frameCount)
+                            for f in 0 ..< frameCount {
+                                var sum = 0
+                                for c in 0 ..< ch {
+                                    let samplePos = bodyStart + (f * ch + c) * 2
+                                    let u = readUInt16LE(raw, samplePos)
+                                    sum += Int(Int16(bitPattern: u))
+                                }
+                                out[f] = Int16(max(-32768, min(32767, sum / ch)))
+                            }
+                            if !out.isEmpty {
+                                return (out, Double(sampleRate))
+                            }
+                        } else if audioFormat == 3 && bitsPerSample == 32 && byteLen >= 4 * ch {
+                            let frameCount = byteLen / (4 * ch)
+                            var out = [Int16](repeating: 0, count: frameCount)
+                            for f in 0 ..< frameCount {
+                                var sum: Float = 0.0
+                                for c in 0 ..< ch {
+                                    let samplePos = bodyStart + (f * ch + c) * 4
+                                    let bits = readUInt32LE(raw, samplePos)
+                                    let val = Float(bitPattern: bits)
+                                    if val.isFinite {
+                                        sum += val
+                                    }
+                                }
+                                let avg = Double(sum) / Double(ch)
+                                out[f] = Int16(max(-32767.0, min(32767.0, avg * 32767.0)))
+                            }
+                            if !out.isEmpty {
+                                return (out, Double(sampleRate))
+                            }
+                        }
+                    }
+
+                    let paddedSize = chunkSize + (chunkSize & 1)
+                    offset = bodyStart + paddedSize
+                }
+            }
+        }
+
+        // 2. Fallback via AVAudioFile using file.processingFormat (Float32) so format mismatch never occurs
+        guard let file = try? AVAudioFile(forReading: url) else {
+            return nil
+        }
+        let procFormat = file.processingFormat
+        let capacity = AVAudioFrameCount(max(1, file.length))
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: procFormat, frameCapacity: capacity) else {
+            return nil
+        }
+        do {
+            try file.read(into: buffer)
+        } catch {
+            return nil
+        }
+        let count = Int(buffer.frameLength)
+        guard count > 0 else { return nil }
+        if let floatCh = buffer.floatChannelData?[0] {
+            var out = [Int16](repeating: 0, count: count)
+            for i in 0 ..< count {
+                let v = Double(floatCh[i])
+                if v.isFinite {
+                    out[i] = Int16(max(-32767.0, min(32767.0, v * 32767.0)))
+                }
+            }
+            return (out, procFormat.sampleRate)
+        } else if let int16Ch = buffer.int16ChannelData?[0] {
+            return (Array(UnsafeBufferPointer(start: int16Ch, count: count)), procFormat.sampleRate)
+        }
+        return nil
+    }
+
+    private static func appendUInt16LE(_ data: inout Data, _ value: UInt16) {
+        let le = value.littleEndian
+        withUnsafeBytes(of: le) { data.append(contentsOf: $0) }
+    }
+
+    private static func appendUInt32LE(_ data: inout Data, _ value: UInt32) {
+        let le = value.littleEndian
+        withUnsafeBytes(of: le) { data.append(contentsOf: $0) }
+    }
+
+    private static func readUInt16LE(_ data: Data, _ offset: Int) -> UInt16 {
+        return UInt16(data[offset]) | (UInt16(data[offset + 1]) << 8)
+    }
+
+    private static func readUInt32LE(_ data: Data, _ offset: Int) -> UInt32 {
+        return UInt32(data[offset])
+            | (UInt32(data[offset + 1]) << 8)
+            | (UInt32(data[offset + 2]) << 16)
+            | (UInt32(data[offset + 3]) << 24)
     }
 }
 
@@ -123,6 +346,7 @@ public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
     private var remainingSeconds: Int = 0
     private var rawURL: URL?
     private var processedURL: URL?
+    private let recordingSampleRate: Double = 48000.0
 
     deinit {
         self.stop()
@@ -191,16 +415,17 @@ public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("fg_voice_test_raw_\(UUID().uuidString).wav")
         let settings: [String: Any] = [
             AVFormatIDKey: Int(kAudioFormatLinearPCM),
-            AVSampleRateKey: 16000.0,
+            AVSampleRateKey: self.recordingSampleRate,
             AVNumberOfChannelsKey: 1,
             AVLinearPCMBitDepthKey: 16,
             AVLinearPCMIsBigEndianKey: false,
-            AVLinearPCMIsFloatKey: false
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsNonInterleaved: false
         ]
         do {
             let rec = try AVAudioRecorder(url: url, settings: settings)
             rec.prepareToRecord()
-            guard rec.record(forDuration: 3.0) else {
+            guard rec.record(forDuration: 3.2) else {
                 self.state = .error("Запись не запустилась")
                 return
             }
@@ -240,15 +465,17 @@ public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-            guard let samples = self.loadPCM16Mono(from: rawURL), !samples.isEmpty else {
+            guard let loaded = FullGramVoiceDSP.readWAV16Mono(from: rawURL), !loaded.samples.isEmpty else {
                 self.cleanupFiles()
                 self.state = .error("Пустая запись")
                 return
             }
+            let samples = loaded.samples
+            let sampleRate = loaded.sampleRate
 
             let finalizeAndPlay: ([Int16]) -> Void = { finalSamples in
                 let outURL = FileManager.default.temporaryDirectory.appendingPathComponent("fg_voice_test_out_\(UUID().uuidString).wav")
-                guard self.writePCM16Mono(samples: finalSamples, to: outURL) else {
+                guard FullGramVoiceDSP.writeWAV16Mono(samples: finalSamples, sampleRate: Int(sampleRate.rounded()), to: outURL) else {
                     self.cleanupFiles()
                     self.state = .error("Не удалось сохранить тест")
                     return
@@ -260,10 +487,10 @@ public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
             }
 
             if bleepSound != .off {
-                FullGramSpeechBleep.recognizeSamples(samples, sampleRate: 16000.0) { ranges in
+                FullGramSpeechBleep.recognizeSamples(samples, sampleRate: sampleRate) { ranges in
                     var buffer = samples
                     if voiceMode != .off {
-                        let dsp = FullGramVoiceDSP(mode: voiceMode)
+                        let dsp = FullGramVoiceDSP(mode: voiceMode, sampleRate: sampleRate)
                         buffer.withUnsafeMutableBufferPointer { ptr in
                             if let base = ptr.baseAddress {
                                 dsp.process(base, count: ptr.count)
@@ -273,18 +500,20 @@ public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
                     if !ranges.isEmpty {
                         buffer.withUnsafeMutableBufferPointer { ptr in
                             if let base = ptr.baseAddress {
-                                FullGramSpeechBleep.applyBleep(to: base, count: ptr.count, sampleRate: 16000.0, ranges: ranges, sound: bleepSound)
+                                FullGramSpeechBleep.applyBleep(to: base, count: ptr.count, sampleRate: sampleRate, ranges: ranges, sound: bleepSound)
                             }
                         }
                     } else {
-                        // Append a short preview of the chosen bleep sound when no profanity was spoken.
-                        let bleepCount = Int(16000.0 * 0.55)
+                        // Append a short pause + preview of the chosen bleep sound when no profanity was detected.
+                        let pauseCount = Int(sampleRate * 0.14)
+                        let bleepCount = Int(sampleRate * 0.45)
+                        buffer.append(contentsOf: [Int16](repeating: 0, count: pauseCount))
                         let tailStart = buffer.count
                         buffer.append(contentsOf: [Int16](repeating: 0, count: bleepCount))
                         buffer.withUnsafeMutableBufferPointer { ptr in
                             if let base = ptr.baseAddress {
                                 for i in 0 ..< bleepCount {
-                                    let val = FullGramSpeechBleep.sample(sound: bleepSound, index: i, totalSamples: bleepCount, sampleRate: 16000.0)
+                                    let val = FullGramSpeechBleep.sample(sound: bleepSound, index: i, totalSamples: bleepCount, sampleRate: sampleRate)
                                     base[tailStart + i] = Int16(max(-32767.0, min(32767.0, Double(val) * 32767.0)))
                                 }
                             }
@@ -295,7 +524,7 @@ public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
             } else {
                 var buffer = samples
                 if voiceMode != .off {
-                    let dsp = FullGramVoiceDSP(mode: voiceMode)
+                    let dsp = FullGramVoiceDSP(mode: voiceMode, sampleRate: sampleRate)
                     buffer.withUnsafeMutableBufferPointer { ptr in
                         if let base = ptr.baseAddress {
                             dsp.process(base, count: ptr.count)
@@ -309,9 +538,13 @@ public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
 
     private func playFile(at url: URL) {
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
+            try session.overrideOutputAudioPort(.speaker)
+            try session.setActive(true)
             let audioPlayer = try AVAudioPlayer(contentsOf: url)
             audioPlayer.delegate = self
+            audioPlayer.volume = 1.0
             audioPlayer.prepareToPlay()
             self.player = audioPlayer
             self.state = .playing
@@ -325,47 +558,5 @@ public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
     public func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         self.cleanupFiles()
         self.state = .idle
-    }
-
-    private func loadPCM16Mono(from url: URL) -> [Int16]? {
-        guard let file = try? AVAudioFile(forReading: url),
-              let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000.0, channels: 1, interleaved: true) else {
-            return nil
-        }
-        let capacity = AVAudioFrameCount(max(1, file.length))
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else {
-            return nil
-        }
-        do {
-            try file.read(into: buffer)
-        } catch {
-            return nil
-        }
-        let count = Int(buffer.frameLength)
-        guard count > 0, let channel = buffer.int16ChannelData?[0] else {
-            return nil
-        }
-        return Array(UnsafeBufferPointer(start: channel, count: count))
-    }
-
-    private func writePCM16Mono(samples: [Int16], to url: URL) -> Bool {
-        guard let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000.0, channels: 1, interleaved: true),
-              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)),
-              let dst = buffer.int16ChannelData?[0] else {
-            return false
-        }
-        buffer.frameLength = AVAudioFrameCount(samples.count)
-        samples.withUnsafeBufferPointer { src in
-            if let base = src.baseAddress {
-                dst.update(from: base, count: samples.count)
-            }
-        }
-        do {
-            let file = try AVAudioFile(forWriting: url, settings: format.settings, commonFormat: .pcmFormatInt16, interleaved: true)
-            try file.write(from: buffer)
-            return true
-        } catch {
-            return false
-        }
     }
 }

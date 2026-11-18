@@ -5,14 +5,17 @@ import Display
 import AccountContext
 import OpusBinding
 
-/// Post-recording profanity bleeping for voice messages using on-device speech recognition
-/// and user-selected replacement sound (bell chime, silence, or SpongeBob dolphin chirp).
+/// Post-recording profanity bleeping (and deferred voice DSP when bleeping is active) for voice messages
+/// using speech recognition on the clean voice before applying pitch/robot effects and bleep sound.
 enum FullGramProfanityBleep {
+    private static let opusSampleRate: Double = 48000.0
+
     static func process(_ data: RecordedAudioData) -> Signal<RecordedAudioData?, NoError> {
         let sound = FullGramBleepSound.current
         guard sound.isEnabled else {
             return .single(data)
         }
+        let voiceMode = FullGramVoiceMode.current
         return Signal { subscriber in
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("fullgram_bleep_\(Int64.random(in: 1 ... Int64.max)).ogg")
             guard (try? data.compressedData.write(to: url)) != nil, var samples = decode(path: url.path) else {
@@ -23,15 +26,21 @@ enum FullGramProfanityBleep {
             }
             try? FileManager.default.removeItem(at: url)
 
-            FullGramSpeechBleep.recognizeSamples(samples, sampleRate: 16000.0) { ranges in
-                guard !ranges.isEmpty else {
+            // Recognize profanity on the clean, natural human voice BEFORE applying voice changer effects.
+            FullGramSpeechBleep.recognizeSamples(samples, sampleRate: opusSampleRate) { ranges in
+                guard !ranges.isEmpty || voiceMode != .off else {
                     subscriber.putNext(data)
                     subscriber.putCompletion()
                     return
                 }
                 samples.withUnsafeMutableBufferPointer { buf in
-                    if let base = buf.baseAddress {
-                        FullGramSpeechBleep.applyBleep(to: base, count: buf.count, sampleRate: 16000.0, ranges: ranges, sound: sound)
+                    guard let base = buf.baseAddress else { return }
+                    if voiceMode != .off {
+                        let dsp = FullGramVoiceDSP(mode: voiceMode, sampleRate: opusSampleRate)
+                        dsp.process(base, count: buf.count)
+                    }
+                    if !ranges.isEmpty {
+                        FullGramSpeechBleep.applyBleep(to: base, count: buf.count, sampleRate: opusSampleRate, ranges: ranges, sound: sound)
                     }
                 }
                 if let encoded = encode(samples) {
@@ -44,9 +53,10 @@ enum FullGramProfanityBleep {
             return EmptyDisposable
         }
         |> runOn(Queue.concurrentDefaultQueue())
-        |> timeout(30.0, queue: .concurrentDefaultQueue(), alternate: .single(data))
+        |> timeout(12.0, queue: .concurrentDefaultQueue(), alternate: .single(data))
     }
 
+    /// OggOpusReader (`op_read`) decodes Opus at 48,000 Hz mono Int16, matching TGOggOpusWriter's 48,000 Hz input rate.
     private static func decode(path: String) -> [Int16]? {
         guard let reader = OggOpusReader(path: path) else { return nil }
         var result: [Int16] = []
@@ -57,12 +67,8 @@ enum FullGramProfanityBleep {
                 reader.read(raw.baseAddress!, bufSize: capacity)
             }
             if read <= 0 { break }
-            let count = Int(read)
-            var index = 0
-            while index + 2 < count {
-                result.append(Int16((Int(buffer[index]) + Int(buffer[index + 1]) + Int(buffer[index + 2])) / 3))
-                index += 3
-            }
+            let count = min(buffer.count, Int(read))
+            result.append(contentsOf: buffer[0 ..< count])
         }
         return result.isEmpty ? nil : result
     }
