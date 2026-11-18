@@ -312,12 +312,33 @@ def check_swift_sources() -> int:
     if not swift_files:
         raise AssertionError("No FullGram*.swift files found")
 
-    for path in swift_files:
+    display_syms: set[str] = set()
+    for p in (ROOT / "submodules" / "Display").rglob("*.swift"):
+        for m in re.finditer(
+            r"\bpublic\s+(?:final\s+)?(?:class|struct|enum|protocol|func|let|var|typealias)\s+(FullGram\w+)",
+            p.read_text(encoding="utf-8", errors="replace"),
+        ):
+            display_syms.add(m.group(1))
+
+    extra_paths = {
+        ROOT / "submodules" / "TelegramUI" / "Sources" / "ManagedAudioRecorder.swift",
+        ROOT / "submodules" / "TelegramUI" / "Sources" / "OverlayAudioPlayerControllerNode.swift",
+        ROOT / "submodules" / "TelegramUI" / "Sources" / "Chat" / "ChatControllerLoadDisplayNode.swift",
+        ROOT / "submodules" / "TelegramUI" / "Components" / "PeerInfo" / "PeerInfoScreen" / "Sources" / "PeerInfoScreenPerformButtonAction.swift",
+        ROOT / "submodules" / "TelegramUI" / "Components" / "VideoMessageCameraScreen" / "Sources" / "VideoMessageCameraScreen.swift",
+    }
+    audit_files = list(dict.fromkeys([*swift_files, *(p for p in extra_paths if p.exists())]))
+
+    for path in audit_files:
         check_swift_delimiters(path)
         text = path.read_text(encoding="utf-8")
         rel = path.relative_to(ROOT)
         imports = set(re.findall(r"^import\s+(\S+)", text, re.M))
 
+        if not rel.as_posix().startswith("submodules/Display/") and "Display" not in imports:
+            used_display = [s for s in sorted(display_syms) if re.search(rf"\b{s}\b", text)]
+            if used_display:
+                raise AssertionError(f"{rel} uses {used_display[0]} without 'import Display'")
         if "UndoOverlayController" in text and "UndoUI" not in imports:
             raise AssertionError(f"{rel} uses UndoOverlayController without 'import UndoUI'")
         if re.search(r"UIBarButtonItem\([^)]*style:\s*\.done\b", text):
@@ -329,7 +350,7 @@ def check_swift_sources() -> int:
         if re.search(r"(?:\?\?\s*self\.rootController\b|rootController\s+as\??\s*ViewController\b)", text):
             raise AssertionError(f"{rel} treats TelegramRootController (NavigationController) as ViewController")
 
-    return len(swift_files)
+    return len(audit_files)
 
 
 def read_png_dimensions(path: Path) -> tuple[int, int]:
