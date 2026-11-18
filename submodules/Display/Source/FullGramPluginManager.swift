@@ -984,8 +984,117 @@ def on_command(ctx):
                 code: Self.chatInfoPluginCode(),
                 isEnabled: true,
                 isBuiltIn: true
+            ),
+            FullGramPluginDescriptor(
+                id: "fg_snippets",
+                name: "Быстрые шаблоны (.tpl)",
+                language: .lua,
+                version: "1.0",
+                author: "FullGram",
+                description: "Шаблоны ответов: .tpl add <ключ> <текст>, .tpl <ключ>, .tpl list",
+                code: Self.snippetsPluginCode(),
+                isEnabled: true,
+                isBuiltIn: true
+            ),
+            FullGramPluginDescriptor(
+                id: "fg_notes",
+                name: "Быстрые заметки (.note)",
+                language: .lua,
+                version: "1.0",
+                author: "FullGram",
+                description: "Личные заметки: .note add <текст>, .note list, .note clear",
+                code: Self.notesPluginCode(),
+                isEnabled: true,
+                isBuiltIn: true
             )
         ]
+    }
+
+    private static func snippetsPluginCode() -> String {
+        return """
+-- @name Быстрые шаблоны (.tpl)
+-- @id fg_snippets
+-- @version 1.0
+-- @author FullGram
+-- @description Шаблоны ответов: .tpl add <ключ> <текст>, .tpl <ключ>, .tpl list
+
+function on_command(ctx)
+    if ctx.command ~= "tpl" then return nil end
+    local raw = tostring(ctx.args or "")
+    if raw == "" or raw == "list" then
+        local keys = tostring(fullgram.storage_get("tpl_keys", ""))
+        if keys == "" then
+            return { cancel = true, toast = "Шаблонов нет. Добавьте: .tpl add привет Привет! Как дела?" }
+        end
+        return { cancel = true, toast = "Шаблоны: " .. keys }
+    end
+
+    local space1 = string.find(raw, " ")
+    local sub = space1 and string.sub(raw, 1, space1 - 1) or raw
+    local rest = space1 and string.sub(raw, space1 + 1) or ""
+
+    if sub == "add" and rest ~= "" then
+        local space2 = string.find(rest, " ")
+        if not space2 then
+            return { cancel = true, toast = "Формат: .tpl add <ключ> <текст>" }
+        end
+        local key = string.lower(string.sub(rest, 1, space2 - 1))
+        local body = string.sub(rest, space2 + 1)
+        fullgram.storage_set("tpl_" .. key, body)
+        local keys = tostring(fullgram.storage_get("tpl_keys", ""))
+        if not string.find(keys, key, 1, true) then
+            keys = (keys == "") and key or (keys .. ", " .. key)
+            fullgram.storage_set("tpl_keys", keys)
+        end
+        return { cancel = true, toast = "Шаблон «" .. key .. "» сохранён!" }
+    end
+
+    local saved = fullgram.storage_get("tpl_" .. string.lower(sub), "")
+    if saved ~= nil and saved ~= "" then
+        return tostring(saved)
+    end
+    return { cancel = true, toast = "Шаблон «" .. sub .. "» не найден." }
+end
+"""
+    }
+
+    private static func notesPluginCode() -> String {
+        return """
+-- @name Быстрые заметки (.note)
+-- @id fg_notes
+-- @version 1.0
+-- @author FullGram
+-- @description Личные заметки: .note add <текст>, .note list, .note clear
+
+function on_command(ctx)
+    if ctx.command ~= "note" then return nil end
+    local raw = tostring(ctx.args or "")
+    local saved = tostring(fullgram.storage_get("notes_list", ""))
+
+    if raw == "" or raw == "list" then
+        if saved == "" then
+            return { cancel = true, toast = "Заметок пока нет. Добавьте: .note add <текст>" }
+        end
+        return { cancel = true, toast = "📝 Заметки:\\n" .. saved }
+    end
+
+    if raw == "clear" then
+        fullgram.storage_set("notes_list", "")
+        return { cancel = true, toast = "Все заметки очищены." }
+    end
+
+    local text = raw
+    if string.sub(raw, 1, 4) == "add " then
+        text = string.sub(raw, 5)
+    end
+    if text == "" then
+        return { cancel = true, toast = "Укажите текст заметки." }
+    end
+    local updated = (saved == "") and ("• " .. text) or (saved .. "\\n• " .. text)
+    fullgram.storage_set("notes_list", updated)
+    return { cancel = true, toast = "Заметка сохранена!" }
+end
+"""
     }
 
     private static func chatInfoPluginCode() -> String {

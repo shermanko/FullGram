@@ -234,7 +234,7 @@ def on_outgoing_message(ctx):
 
         var entries: [FullGramPluginsEntry] = [
             .systemSwitch(manager.isSystemEnabled),
-            .systemInfo("Встроенные движки Lua и Python работают локально. Можно создавать свои скрипты, скачивать из маркета, а также импортировать .lua и .py прямо из чатов и Файлов."),
+            .systemInfo("Как использовать плагины:\n• В чате введите точку «.» (появятся подсказки) или нажмите «⚡ Плагины» над полем ввода.\n• В любом чате/канале: долгое нажатие на аватар вверху или в профиле «...» → «Плагины FullGram».\n• Нажмите на любой плагин ниже, чтобы открыть код, команды и тест."),
             .remoteCatalog("Каталог"),
             .createLua,
             .createPython,
@@ -414,6 +414,10 @@ private final class FullGramPluginEditorViewController: UIViewController {
             self.testInputField.text = ".upper fullgram"
         case "fg_message_counter":
             self.testInputField.text = ".stats"
+        case "fg_snippets":
+            self.testInputField.text = ".tpl list"
+        case "fg_notes":
+            self.testInputField.text = ".note list"
         default:
             self.testInputField.text = ".shrug тест"
         }
@@ -464,7 +468,8 @@ private final class FullGramPluginEditorViewController: UIViewController {
             self.metaLabel.textColor = self.theme.list.itemDestructiveColor
         } else {
             let desc = self.descriptor.description.isEmpty ? "Без описания" : self.descriptor.description
-            self.metaLabel.text = "ID: \(self.descriptor.id) • v\(self.descriptor.version) • \(self.descriptor.author)\n\(desc)"
+            let usage = "\nОткрыть в чате: введите «.» или нажмите «⚡ Плагины» / «...» → «Плагины FullGram»."
+            self.metaLabel.text = "ID: \(self.descriptor.id) • v\(self.descriptor.version) • \(self.descriptor.author)\n\(desc)\(usage)"
             self.metaLabel.textColor = self.theme.list.itemSecondaryTextColor
         }
     }
