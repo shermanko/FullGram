@@ -1129,7 +1129,7 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
     private var effectiveHeaderHeight: CGFloat {
         var headerHeight: CGFloat = 38.0
         if let playlistLocation = self.playlistLocation as? PeerMessagesPlaylistLocation, case .savedMusic = playlistLocation {
-            headerHeight = 78.0
+            headerHeight = 104.0
         }
         return headerHeight
     }
@@ -1172,26 +1172,41 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
             }
             return false
         }()
-        let hasSavedMusicRightAddButton: Bool = {
-            if let playlistLocation = self.playlistLocation as? PeerMessagesPlaylistLocation,
-               case let .savedMusic(savedMusicContext, _, _) = playlistLocation,
-               savedMusicContext.peerId == self.context.account.peerId {
-                return true
-            }
-            return false
-        }()
-        let buttonTopY: CGFloat = isSavedMusicHeader ? 23.0 : 4.0
-        let rightButtonOffset: CGFloat = hasSavedMusicRightAddButton ? 50.0 : 0.0
 
-        if let lyricsButton = self.lyricsButton {
-            lyricsButton.frame = CGRect(x: layout.size.width - listSideMargins.right - rightButtonOffset - 34.0, y: buttonTopY, width: 30.0, height: 30.0)
-        }
-        if let mixerButton = self.mixerButton {
-            mixerButton.frame = CGRect(x: layout.size.width - listSideMargins.right - rightButtonOffset - 70.0, y: buttonTopY, width: 30.0, height: 30.0)
-        }
-        if let sleepTimerButton = self.sleepTimerButton {
-            let width: CGFloat = FullGramSleepTimer.shared.isActive ? 48.0 : 30.0
-            sleepTimerButton.frame = CGRect(x: layout.size.width - listSideMargins.right - rightButtonOffset - 76.0 - width, y: buttonTopY, width: width, height: 30.0)
+        if isSavedMusicHeader {
+            let sleepW: CGFloat = FullGramSleepTimer.shared.isActive ? 48.0 : 30.0
+            let gap: CGFloat = 14.0
+            let hasSleep = (self.sleepTimerButton != nil)
+            let hasMixer = (self.mixerButton != nil)
+            let hasLyrics = (self.lyricsButton != nil)
+            let totalW = (hasSleep ? sleepW : 0.0)
+                + (hasMixer ? 30.0 + (hasSleep ? gap : 0.0) : 0.0)
+                + (hasLyrics ? 30.0 + ((hasSleep || hasMixer) ? gap : 0.0) : 0.0)
+            var cursorX = floor((layout.size.width - totalW) * 0.5)
+            let rowY: CGFloat = 66.0
+            if let sleepTimerButton = self.sleepTimerButton {
+                sleepTimerButton.frame = CGRect(x: cursorX, y: rowY, width: sleepW, height: 30.0)
+                cursorX += sleepW + gap
+            }
+            if let mixerButton = self.mixerButton {
+                mixerButton.frame = CGRect(x: cursorX, y: rowY, width: 30.0, height: 30.0)
+                cursorX += 30.0 + gap
+            }
+            if let lyricsButton = self.lyricsButton {
+                lyricsButton.frame = CGRect(x: cursorX, y: rowY, width: 30.0, height: 30.0)
+            }
+        } else {
+            let buttonTopY: CGFloat = 4.0
+            if let lyricsButton = self.lyricsButton {
+                lyricsButton.frame = CGRect(x: layout.size.width - listSideMargins.right - 34.0, y: buttonTopY, width: 30.0, height: 30.0)
+            }
+            if let mixerButton = self.mixerButton {
+                mixerButton.frame = CGRect(x: layout.size.width - listSideMargins.right - 70.0, y: buttonTopY, width: 30.0, height: 30.0)
+            }
+            if let sleepTimerButton = self.sleepTimerButton {
+                let width: CGFloat = FullGramSleepTimer.shared.isActive ? 48.0 : 30.0
+                sleepTimerButton.frame = CGRect(x: layout.size.width - listSideMargins.right - 76.0 - width, y: buttonTopY, width: width, height: 30.0)
+            }
         }
         if let lyricsOverlayView = self.lyricsOverlayView, lyricsOverlayView.superview != nil {
             lyricsOverlayView.frame = CGRect(origin: .zero, size: layout.size)
