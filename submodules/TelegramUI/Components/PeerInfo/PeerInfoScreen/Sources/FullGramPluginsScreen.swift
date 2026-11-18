@@ -370,7 +370,7 @@ private final class FullGramPluginEditorViewController: UIViewController {
         scroll.addSubview(stack)
 
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.topAnchor),
+            scroll.topAnchor.constraint(equalTo: self.view.topAnchor),
             scroll.bottomAnchor.constraint(equalTo: self.view.bottomAnchor),
             scroll.leadingAnchor.constraint(equalTo: self.view.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: self.view.trailingAnchor),

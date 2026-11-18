@@ -1062,7 +1062,7 @@ public final class FullGramLuaVM {
                 return .nil
             case .hash:
                 switch v {
-                case let .string(s): return .int(Int64(s.utf8.count))
+                case let .string(s): return .int(Int64(s.count))
                 case let .table(box): return .int(Int64(box.arrayPart.count))
                 case let .list(arr): return .int(Int64(arr.count))
                 default: return .int(0)
@@ -1256,8 +1256,19 @@ public final class FullGramLuaVM {
             "gsub": .function { args in
                 let s = args.first?.asString ?? ""
                 let pat = args.count > 1 ? args[1].asString : ""
-                let repl = args.count > 2 ? args[2].asString : ""
-                return .string(s.replacingOccurrences(of: pat, with: repl))
+                let rawRepl = args.count > 2 ? args[2].asString : ""
+                if pat.contains("%") || pat.contains("[") || pat.contains("^") || pat.contains("$") || pat.contains("+") || pat.contains("*") {
+                    let regexPat = Self.luaPatternToRegex(pat)
+                    if let regex = try? NSRegularExpression(pattern: regexPat) {
+                        var repl = rawRepl
+                        for g in 1 ... 9 {
+                            repl = repl.replacingOccurrences(of: "%\(g)", with: "$\(g)")
+                        }
+                        let ns = s as NSString
+                        return .string(regex.stringByReplacingMatches(in: s, range: NSRange(location: 0, length: ns.length), withTemplate: repl))
+                    }
+                }
+                return .string(s.replacingOccurrences(of: pat, with: rawRepl))
             },
             "match": .function { args in
                 let s = args.first?.asString ?? ""

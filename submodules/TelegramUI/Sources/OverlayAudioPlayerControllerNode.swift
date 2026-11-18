@@ -544,22 +544,43 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
         |> deliverOnMainQueue).startStrict(next: { [weak self] state in
             guard let self else { return }
             if let (_, valueOrLoading, _) = state, case let .state(itemState) = valueOrLoading {
+                var extractedTitle = ""
+                var extractedArtist: String?
+                var extractedDuration: Double = itemState.status.duration > 0 ? itemState.status.duration : 0.0
+
                 if case let .telegramFile(fileReference, _, _) = itemState.item.playbackData?.source {
                     let file = fileReference.media
                     for attr in file.attributes {
                         if case let .Audio(_, duration, title, performer, _) = attr {
-                            let trackTitle = title ?? file.fileName ?? ""
-                            let hadTrack = self.currentTrackInfo != nil
-                            let changed = self.currentTrackInfo?.title != trackTitle || self.currentTrackInfo?.artist != performer
-                            self.currentTrackInfo = (trackTitle, performer, Double(duration))
-                            if changed && hadTrack {
-                                FullGramSleepTimer.shared.handleTrackChanged()
-                            }
-                            if changed, let overlay = self.lyricsOverlayView, overlay.superview != nil {
-                                overlay.load(title: trackTitle, artist: performer, duration: Double(duration))
+                            extractedTitle = title ?? file.fileName ?? ""
+                            extractedArtist = performer
+                            if duration > 0 {
+                                extractedDuration = Double(duration)
                             }
                             break
                         }
+                    }
+                    if extractedTitle.isEmpty {
+                        extractedTitle = file.fileName ?? ""
+                    }
+                }
+                if extractedTitle.isEmpty, let displayData = itemState.item.displayData {
+                    if case let .music(title, performer, _, _, _) = displayData {
+                        extractedTitle = title ?? ""
+                        if extractedArtist == nil || extractedArtist?.isEmpty == true {
+                            extractedArtist = performer
+                        }
+                    }
+                }
+                if !extractedTitle.isEmpty {
+                    let hadTrack = self.currentTrackInfo != nil
+                    let changed = self.currentTrackInfo?.title != extractedTitle || self.currentTrackInfo?.artist != extractedArtist
+                    self.currentTrackInfo = (extractedTitle, extractedArtist, extractedDuration)
+                    if changed && hadTrack {
+                        FullGramSleepTimer.shared.handleTrackChanged()
+                    }
+                    if changed, let overlay = self.lyricsOverlayView, overlay.superview != nil {
+                        overlay.load(title: extractedTitle, artist: extractedArtist, duration: extractedDuration)
                     }
                 }
                 self.lyricsOverlayView?.updatePlayback(time: itemState.status.timestamp)
@@ -722,6 +743,7 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
         overlay.frame = self.bounds
         overlay.alpha = 0.0
         self.view.addSubview(overlay)
+        self.view.bringSubviewToFront(overlay)
         self.mixerOverlayView = overlay
         UIView.animate(withDuration: 0.22) {
             overlay.alpha = 1.0
@@ -757,15 +779,15 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
         overlay.frame = self.bounds
         overlay.alpha = 0.0
         self.view.addSubview(overlay)
+        self.view.bringSubviewToFront(overlay)
         self.lyricsOverlayView = overlay
-        if let info = self.currentTrackInfo {
-            overlay.load(title: info.title, artist: info.artist, duration: info.duration)
-        }
+        let info = self.currentTrackInfo
+        overlay.load(title: info?.title ?? "", artist: info?.artist, duration: info?.duration ?? 0.0)
         UIView.animate(withDuration: 0.22) {
             overlay.alpha = 1.0
         }
     }
-    
+
     override func didLoad() {
         super.didLoad()
         
@@ -778,6 +800,18 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
         panRecognizer.shouldBegin = { [weak self] point in
             guard let self else {
                 return false
+            }
+            if let mixer = self.mixerOverlayView, mixer.superview != nil {
+                return false
+            }
+            if let lyrics = self.lyricsOverlayView, lyrics.superview != nil {
+                return false
+            }
+            for btn in [self.lyricsButton, self.mixerButton, self.sleepTimerButton].compactMap({ $0 }) {
+                let localPt = self.view.convert(point, to: btn)
+                if btn.bounds.insetBy(dx: -8.0, dy: -8.0).contains(localPt) {
+                    return false
+                }
             }
             if self.historyFrameTopOverlayNode.bounds.contains(self.view.convert(point, to: self.historyFrameTopOverlayNode.view)) {
                 return true
@@ -1131,22 +1165,41 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
 
         let listTopInset = layoutTopInset + headerHeight
         let listNodeSize = CGSize(width: layout.size.width, height: layout.size.height - listTopInset - controlsHeight)
-        
+
+        let isSavedMusicHeader: Bool = {
+            if let playlistLocation = self.playlistLocation as? PeerMessagesPlaylistLocation, case .savedMusic = playlistLocation {
+                return true
+            }
+            return false
+        }()
+        let hasSavedMusicRightAddButton: Bool = {
+            if let playlistLocation = self.playlistLocation as? PeerMessagesPlaylistLocation,
+               case let .savedMusic(savedMusicContext, _, _) = playlistLocation,
+               savedMusicContext.peerId == self.context.account.peerId {
+                return true
+            }
+            return false
+        }()
+        let buttonTopY: CGFloat = isSavedMusicHeader ? 23.0 : 4.0
+        let rightButtonOffset: CGFloat = hasSavedMusicRightAddButton ? 50.0 : 0.0
+
         if let lyricsButton = self.lyricsButton {
-            lyricsButton.frame = CGRect(x: layout.size.width - listSideMargins.right - 34.0, y: layoutTopInset + 4.0, width: 30.0, height: 30.0)
+            lyricsButton.frame = CGRect(x: layout.size.width - listSideMargins.right - rightButtonOffset - 34.0, y: buttonTopY, width: 30.0, height: 30.0)
         }
         if let mixerButton = self.mixerButton {
-            mixerButton.frame = CGRect(x: layout.size.width - listSideMargins.right - 70.0, y: layoutTopInset + 4.0, width: 30.0, height: 30.0)
+            mixerButton.frame = CGRect(x: layout.size.width - listSideMargins.right - rightButtonOffset - 70.0, y: buttonTopY, width: 30.0, height: 30.0)
         }
         if let sleepTimerButton = self.sleepTimerButton {
             let width: CGFloat = FullGramSleepTimer.shared.isActive ? 48.0 : 30.0
-            sleepTimerButton.frame = CGRect(x: layout.size.width - listSideMargins.right - 76.0 - width, y: layoutTopInset + 4.0, width: width, height: 30.0)
+            sleepTimerButton.frame = CGRect(x: layout.size.width - listSideMargins.right - rightButtonOffset - 76.0 - width, y: buttonTopY, width: width, height: 30.0)
         }
         if let lyricsOverlayView = self.lyricsOverlayView, lyricsOverlayView.superview != nil {
             lyricsOverlayView.frame = CGRect(origin: .zero, size: layout.size)
+            self.view.bringSubviewToFront(lyricsOverlayView)
         }
         if let mixerOverlayView = self.mixerOverlayView, mixerOverlayView.superview != nil {
             mixerOverlayView.frame = CGRect(origin: .zero, size: layout.size)
+            self.view.bringSubviewToFront(mixerOverlayView)
         }
         
         insets.top = max(0.0, listNodeSize.height - floor(62.0 * 3.5))
@@ -1256,6 +1309,15 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
         }
         
         transition.updateFrame(node: self.collapseNode, frame: CGRect(origin: CGPoint(x: 0.0, y: -7.0), size: CGSize(width: layout.size.width, height: 30.0)))
+        if let lyricsButton = self.lyricsButton {
+            self.historyFrameNode.view.bringSubviewToFront(lyricsButton)
+        }
+        if let mixerButton = self.mixerButton {
+            self.historyFrameNode.view.bringSubviewToFront(mixerButton)
+        }
+        if let sleepTimerButton = self.sleepTimerButton {
+            self.historyFrameNode.view.bringSubviewToFront(sleepTimerButton)
+        }
         
         self.updateHistoryContentOffset(self.historyNode.visibleContentOffset(), transition: transition)
         

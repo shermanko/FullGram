@@ -982,6 +982,12 @@ public final class FullGramPythonVM {
             let key = try self.evalExpr(keyExpr, env: env)
             if case let .table(box) = obj {
                 box.set(key: key, value: value)
+            } else if case var .list(arr) = obj, let i = key.asInt.map(Int.init) {
+                let idx = i < 0 ? arr.count + i : i
+                if idx >= 0 && idx < arr.count {
+                    arr[idx] = value
+                    try? self.assignTarget(objExpr, value: .list(arr), env: env)
+                }
             }
         case let .attr(objExpr, field):
             let obj = try self.evalExpr(objExpr, env: env)
@@ -1073,9 +1079,61 @@ public final class FullGramPythonVM {
             let eVal = try endE.map { try self.evalExpr($0, env: env).asInt.map(Int.init) } ?? nil
             return self.resolveSlice(obj: obj, start: sVal, end: eVal)
         case let .call(fnExpr, argExprs, kwExprs):
-            let fnVal = try self.evalExpr(fnExpr, env: env)
             var args = try argExprs.map { try self.evalExpr($0, env: env) }
             for (_, vE) in kwExprs { args.append(try self.evalExpr(vE, env: env)) }
+            if case let .attr(targetExpr, methodName) = fnExpr {
+                let targetObj = try self.evalExpr(targetExpr, env: env)
+                if case var .list(arr) = targetObj {
+                    switch methodName {
+                    case "append":
+                        arr.append(args.first ?? .nil)
+                        try? self.assignTarget(targetExpr, value: .list(arr), env: env)
+                        return .nil
+                    case "extend":
+                        if let first = args.first {
+                            arr.append(contentsOf: self.iterableItems(first))
+                            try? self.assignTarget(targetExpr, value: .list(arr), env: env)
+                        }
+                        return .nil
+                    case "insert":
+                        if args.count >= 2, let idx = args[0].asInt {
+                            let pos = max(0, min(arr.count, Int(idx) < 0 ? arr.count + Int(idx) : Int(idx)))
+                            arr.insert(args[1], at: pos)
+                            try? self.assignTarget(targetExpr, value: .list(arr), env: env)
+                        }
+                        return .nil
+                    case "pop":
+                        guard !arr.isEmpty else { return .nil }
+                        let rawIdx = args.first?.asInt.map(Int.init) ?? (arr.count - 1)
+                        let idx = rawIdx < 0 ? arr.count + rawIdx : rawIdx
+                        guard idx >= 0 && idx < arr.count else { return .nil }
+                        let removed = arr.remove(at: idx)
+                        try? self.assignTarget(targetExpr, value: .list(arr), env: env)
+                        return removed
+                    case "remove":
+                        if let first = args.first, let idx = arr.firstIndex(where: { Self.pyEqual($0, first) }) {
+                            arr.remove(at: idx)
+                            try? self.assignTarget(targetExpr, value: .list(arr), env: env)
+                        }
+                        return .nil
+                    case "clear":
+                        arr.removeAll()
+                        try? self.assignTarget(targetExpr, value: .list(arr), env: env)
+                        return .nil
+                    case "reverse":
+                        arr.reverse()
+                        try? self.assignTarget(targetExpr, value: .list(arr), env: env)
+                        return .nil
+                    case "sort":
+                        arr.sort { ($0.asDouble ?? 0) < ($1.asDouble ?? 0) || $0.asString < $1.asString }
+                        try? self.assignTarget(targetExpr, value: .list(arr), env: env)
+                        return .nil
+                    default:
+                        break
+                    }
+                }
+            }
+            let fnVal = try self.evalExpr(fnExpr, env: env)
             guard case let .function(fn) = fnVal else {
                 throw FullGramPluginError("Python: '\(fnVal.asString)' object is not callable")
             }
@@ -1395,9 +1453,14 @@ public final class FullGramPythonVM {
         let reMod = FullGramPluginTableBox(dict: [
             "sub": .function { args in
                 let pat = args.count > 0 ? args[0].asString : ""
-                let repl = args.count > 1 ? args[1].asString : ""
+                let rawRepl = args.count > 1 ? args[1].asString : ""
                 let text = args.count > 2 ? args[2].asString : ""
                 guard let regex = try? NSRegularExpression(pattern: pat) else { return .string(text) }
+                var repl = rawRepl
+                for groupIdx in 1 ... 9 {
+                    repl = repl.replacingOccurrences(of: "\\\(groupIdx)", with: "$\(groupIdx)")
+                    repl = repl.replacingOccurrences(of: "\\g<\(groupIdx)>", with: "$\(groupIdx)")
+                }
                 let ns = text as NSString
                 return .string(regex.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: ns.length), withTemplate: repl))
             },

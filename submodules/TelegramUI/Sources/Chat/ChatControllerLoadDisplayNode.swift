@@ -1051,6 +1051,18 @@ extension ChatControllerImpl {
                     }
                 }
                 
+                let clearPendingSendTransitionOnCancel: () -> Void = { [weak self] in
+                    Queue.mainQueue().async {
+                        guard let strongSelf = self else { return }
+                        if let action = strongSelf.layoutActionOnViewTransitionAction {
+                            strongSelf.layoutActionOnViewTransitionAction = nil
+                            action()
+                        }
+                        strongSelf.chatDisplayNode.historyNode.layoutActionOnViewTransition = nil
+                        strongSelf.chatDisplayNode.historyNode.setCurrentSendAnimationCorrelationIds(Set())
+                    }
+                }
+
                 if FullGramAIStore.shared.isEnabled, messages.count == 1,
                    case let .message(rawText, _, _, mediaReference, _, _, _, _, _, _) = messages[0],
                    mediaReference == nil {
@@ -1058,6 +1070,7 @@ extension ChatControllerImpl {
                     let lowerAI = trimmedAI.lowercased()
                     if lowerAI == ".ai" || lowerAI.hasPrefix(".ai ") || lowerAI.hasPrefix(".ai\n") {
                         let query = String(trimmedAI.dropFirst(3)).trimmingCharacters(in: .whitespacesAndNewlines)
+                        clearPendingSendTransitionOnCancel()
                         NotificationCenter.default.post(
                             name: FullGramAINotifications.openWindow,
                             object: nil,
@@ -1086,7 +1099,7 @@ extension ChatControllerImpl {
                     let needsChatStats = initialMessages.contains { msg in
                         if case let .message(text, _, _, _, _, _, _, _, _, _) = msg {
                             let lower = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                            return lower.hasPrefix(".plug") || lower.hasPrefix(".info-chat")
+                            return lower.hasPrefix(".plug") || lower.hasPrefix(".info-chat") || lower.hasPrefix(".export") || lower.hasPrefix(".chatstats")
                         }
                         return false
                     }
@@ -1116,6 +1129,10 @@ extension ChatControllerImpl {
                                         case .pass:
                                             pluginFiltered.append(msg)
                                         case let .replaceText(updatedText):
+                                            guard !updatedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                                                pluginFiltered.append(msg)
+                                                break
+                                            }
                                             var updatedAttributes = attributes.filter { !($0 is TextEntitiesMessageAttribute) }
                                             let entities = generateTextEntities(updatedText, enabledTypes: .all)
                                             if !entities.isEmpty {
@@ -1181,6 +1198,7 @@ extension ChatControllerImpl {
                 let _ = (translateSignal
                 |> deliverOnMainQueue).start(next: { [weak self] transformedMessages in
                     guard let strongSelf = self, !transformedMessages.isEmpty else {
+                        clearPendingSendTransitionOnCancel()
                         return
                     }
                     var forwardedMessages: [[EnqueueMessage]] = []

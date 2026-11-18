@@ -175,7 +175,6 @@ public final class FullGramPluginManager {
                     existingIds.insert(starter.id)
                     changed = true
                 } else if let idx = self.descriptors.firstIndex(where: { $0.id == starter.id }),
-                          self.descriptors[idx].isBuiltIn,
                           self.descriptors[idx].version != starter.version {
                     let wasEnabled = self.descriptors[idx].isEnabled
                     var updated = starter
@@ -753,8 +752,10 @@ public final class FullGramPluginManager {
                     case .pass:
                         break
                     case let .replaceText(newText):
-                        currentText = newText
-                        didModify = true
+                        if !newText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            currentText = newText
+                            didModify = true
+                        }
                     case let .cancel(toast):
                         return .cancel(toast: toast)
                     }
@@ -879,6 +880,9 @@ public final class FullGramPluginManager {
         case .nil:
             return .pass
         case let .string(s):
+            if s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return .pass
+            }
             return .replaceText(s)
         case let .table(box):
             let cancelVal = box.get(key: .string("cancel"))
@@ -895,6 +899,9 @@ public final class FullGramPluginManager {
                     DispatchQueue.main.async {
                         NotificationCenter.default.post(name: FullGramPluginNotifications.toastRequested, object: nil, userInfo: ["text": toastStr])
                     }
+                }
+                if newText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return .pass
                 }
                 return .replaceText(newText)
             }
@@ -1120,7 +1127,7 @@ def on_command(ctx):
                 id: "fg_anti_typos",
                 name: "Анти-опечатки",
                 language: .python,
-                version: "1.0",
+                version: "2.0",
                 author: "FullGram",
                 description: "Автоматически исправляет частые клавиатурные опечатки, двойные заглавные буквы и лишние пробелы перед знаками препинания.",
                 code: Self.antiTyposPluginCode(),
@@ -1131,7 +1138,7 @@ def on_command(ctx):
                 id: "fg_deadlines",
                 name: "Дедлайны (.dl / .deadline)",
                 language: .python,
-                version: "1.0",
+                version: "2.0",
                 author: "FullGram",
                 description: "Управление сроками: .dl add <срок> | <задача>, .dl list, .dl done <№>, .dl send, .dl clear.",
                 code: Self.deadlinesPluginCode(),
@@ -1248,7 +1255,7 @@ end
         return """
 # @name Анти-опечатки
 # @id fg_anti_typos
-# @version 1.0
+# @version 2.0
 # @author FullGram
 # @description Автоматически исправляет клавиатурные опечатки, двойные заглавные буквы и пробелы у знаков препинания (без сленг-макросов)
 
@@ -1296,11 +1303,12 @@ def fix_word(w):
         return fixed
     return w
 
-def clean_text(text):
-    if not text or text.startswith("."):
-        return text
-    out = re.sub(r"[ \\t]{2,}", " ", text)
-    out = re.sub(r"\\s+([,.:;!?])", r"\\1", out)
+def clean_line(line):
+    if not line:
+        return line
+    out = re.sub(r"[ \\t]{2,}", " ", line)
+    for p in [",", ".", ":", ";", "!", "?"]:
+        out = out.replace(" " + p, p)
     words = out.split(" ")
     res = []
     for w in words:
@@ -1311,15 +1319,29 @@ def clean_text(text):
         if len(w) > 1 and w[-1] in ",.!?:;":
             punct = w[-1]
             core = w[:-1]
-        res.append(fix_word(core) + punct)
+        res = res + [fix_word(core) + punct]
+    if len(res) == 0:
+        return line
     return " ".join(res)
+
+def clean_text(text):
+    if not text or text.startswith("."):
+        return text
+    lines = text.split("\\n")
+    fixed_lines = []
+    for ln in lines:
+        fixed_lines = fixed_lines + [clean_line(ln)]
+    result = "\\n".join(fixed_lines)
+    if not result:
+        return text
+    return result
 
 def on_outgoing_message(ctx):
     original = str(ctx["text"])
     if not original or original.startswith("."):
         return None
     fixed = clean_text(original)
-    if fixed != original:
+    if fixed and fixed != original:
         return fixed
     return None
 
@@ -1337,7 +1359,7 @@ def on_command(ctx):
         return """
 # @name Дедлайны (.dl / .deadline)
 # @id fg_deadlines
-# @version 1.0
+# @version 2.0
 # @author FullGram
 # @description Управление сроками: .dl add <срок> | <задача>, .dl list, .dl done <№>, .dl send, .dl clear
 
@@ -1363,7 +1385,7 @@ def format_list(items):
         due = item.get("due", "Без срока")
         task = item.get("task", "")
         num = idx + 1
-        lines.append(f"{num}. {status} [{due}] — {task}")
+        lines = lines + [f"{num}. {status} [{due}] — {task}"]
     return "\\n".join(lines)
 
 def on_command(ctx):
@@ -1393,9 +1415,9 @@ def on_command(ctx):
             updated = []
             for i, it in enumerate(items):
                 if i == idx:
-                    updated.append({"due": cur.get("due", ""), "task": cur.get("task", ""), "done": True})
+                    updated = updated + [{"due": cur.get("due", ""), "task": cur.get("task", ""), "done": True}]
                 else:
-                    updated.append(it)
+                    updated = updated + [it]
             save_items(updated)
             return {"cancel": True, "toast": f"✅ Дедлайн №{idx + 1} выполнен!"}
         return {"cancel": True, "toast": "Неверный номер дедлайна."}
@@ -1407,7 +1429,7 @@ def on_command(ctx):
             updated = []
             for i, it in enumerate(items):
                 if i != idx:
-                    updated.append(it)
+                    updated = updated + [it]
             save_items(updated)
             return {"cancel": True, "toast": f"🗑 Дедлайн №{idx + 1} удалён."}
         return {"cancel": True, "toast": "Неверный номер дедлайна."}

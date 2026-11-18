@@ -25,17 +25,56 @@ enum FullGramLyricsResult: Equatable {
 enum FullGramLyricsFetcher {
     private static let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 10.0
+        config.timeoutIntervalForRequest = 4.5
+        config.timeoutIntervalForResource = 7.0
         config.httpMaximumConnectionsPerHost = 4
         return URLSession(configuration: config)
     }()
 
+    private static func normalizeMetadata(rawTitle: String, rawArtist: String?) -> (title: String, artist: String?) {
+        var title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        var artist = rawArtist?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let extPattern = #"\.(mp3|flac|m4a|wav|ogg|aac|opus)$"#
+        if let extRegex = try? NSRegularExpression(pattern: extPattern, options: .caseInsensitive) {
+            let ns = title as NSString
+            title = extRegex.stringByReplacingMatches(in: title, range: NSRange(location: 0, length: ns.length), withTemplate: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let tagPattern = #"\s*[\(\[](?:official\s*(?:music\s*)?(?:video|audio|lyric\s*video)|lyrics?|hd|hq|4k|320\s*kbps|prod\.[^\)\]]*)[\)\]]"#
+        if let tagRegex = try? NSRegularExpression(pattern: tagPattern, options: .caseInsensitive) {
+            let ns = title as NSString
+            title = tagRegex.stringByReplacingMatches(in: title, range: NSRange(location: 0, length: ns.length), withTemplate: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        if let a = artist, a.lowercased() == "unknown" || a.lowercased() == "unknown artist" || a == "<unknown>" {
+            artist = nil
+        }
+
+        if artist == nil || artist?.isEmpty == true {
+            for sep in [" — ", " – ", " - "] {
+                if let range = title.range(of: sep) {
+                    let left = String(title[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    let right = String(title[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !left.isEmpty && !right.isEmpty {
+                        artist = left
+                        title = right
+                        break
+                    }
+                }
+            }
+        }
+
+        return (title, artist)
+    }
+
     static func fetch(title: String, artist: String?, duration: Double) -> Signal<FullGramLyricsResult, NoError> {
-        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = normalizeMetadata(rawTitle: title, rawArtist: artist)
+        let cleanTitle = normalized.title
         guard !cleanTitle.isEmpty else {
             return .single(.empty)
         }
-        let cleanArtist = artist?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanArtist = normalized.artist
 
         return Signal { subscriber in
             var signals: [Signal<FullGramLyricsResult?, NoError>] = []
@@ -54,29 +93,53 @@ enum FullGramLyricsFetcher {
                 return EmptyDisposable
             }
 
-            let combined = combineLatest(signals)
-            let disposable = combined.startStandalone(next: { results in
-                var bestSynced: FullGramLyricsResult?
-                var bestPlain: FullGramLyricsResult?
-                for item in results {
-                    guard let item else { continue }
-                    switch item {
-                    case .synced:
-                        if bestSynced == nil {
-                            bestSynced = item
-                        }
-                    case .plain:
-                        if bestPlain == nil {
-                            bestPlain = item
-                        }
-                    case .empty:
-                        break
+            let lock = NSLock()
+            let total = signals.count
+            var completedCount = 0
+            var didFinish = false
+            var bestPlain: FullGramLyricsResult?
+            let compositeDisposable = MetaDisposable()
+            let disposables = DisposableSet()
+
+            for sig in signals {
+                let d = sig.startStandalone(next: { item in
+                    lock.lock()
+                    guard !didFinish else {
+                        lock.unlock()
+                        return
                     }
-                }
-                subscriber.putNext(bestSynced ?? bestPlain ?? .empty)
-                subscriber.putCompletion()
-            })
-            return disposable
+                    completedCount += 1
+                    if let item {
+                        switch item {
+                        case .synced:
+                            didFinish = true
+                            lock.unlock()
+                            subscriber.putNext(item)
+                            subscriber.putCompletion()
+                            disposables.dispose()
+                            return
+                        case .plain:
+                            if bestPlain == nil {
+                                bestPlain = item
+                            }
+                        case .empty:
+                            break
+                        }
+                    }
+                    if completedCount >= total {
+                        didFinish = true
+                        let finalResult = bestPlain ?? .empty
+                        lock.unlock()
+                        subscriber.putNext(finalResult)
+                        subscriber.putCompletion()
+                        return
+                    }
+                    lock.unlock()
+                })
+                disposables.add(d)
+            }
+            compositeDisposable.set(disposables)
+            return compositeDisposable
         }
     }
 

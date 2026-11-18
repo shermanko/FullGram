@@ -1123,6 +1123,23 @@ final class FullGramAIOverlayCoordinator {
             let info = (note.userInfo as? [String: Any]) ?? [:]
             self.presentPluginGUI(spec: info)
         })
+
+        self.observers.append(nc.addObserver(forName: FullGramPluginNotifications.toastRequested, object: nil, queue: .main) { [weak self] note in
+            guard let self,
+                  let text = (note.userInfo as? [String: Any])?["text"] as? String,
+                  !text.isEmpty else { return }
+            let presentationData = self.context.sharedContext.currentPresentationData.with { $0 }
+            let targetController: ViewController? = self.activeChatController() ?? self.rootController
+            targetController?.present(
+                UndoOverlayController(
+                    presentationData: presentationData,
+                    content: .succeed(text: text, timeout: nil, customUndoText: nil),
+                    elevatedLayout: false,
+                    action: { _ in return false }
+                ),
+                in: .current
+            )
+        })
     }
 
     private func presentPluginGUI(spec: [String: Any]) {
@@ -1209,7 +1226,7 @@ final class FullGramAIOverlayCoordinator {
         guard !trimmed.isEmpty else { return }
         let commandText = trimmed.hasPrefix(".") ? trimmed : ".\(trimmed)"
         let lower = commandText.lowercased()
-        let needsStats = lower.hasPrefix(".plug") || lower.hasPrefix(".info-chat")
+        let needsStats = lower.hasPrefix(".plug") || lower.hasPrefix(".info-chat") || lower.hasPrefix(".export") || lower.hasPrefix(".chatstats")
 
         let statsSignal: Signal<[String: FullGramPluginValue]?, NoError>
         if needsStats, let peerId {
@@ -1594,6 +1611,17 @@ func fullGramBuildChatStatsSignal(
             ]))
         }
 
+        let exportedMessages: [FullGramPluginValue] = sortedByTime.suffix(50).map { msg in
+            let authorName = msg.author.map { EnginePeer($0).compactDisplayTitle } ?? (msg.flags.contains(.Incoming) ? "Собеседник" : "Вы")
+            let dateStr = df.string(from: Date(timeIntervalSince1970: TimeInterval(msg.timestamp)))
+            let textStr = msg.text.isEmpty ? "[Медиа]" : msg.text
+            return .table(FullGramPluginTableBox(dict: [
+                "date": .string(dateStr),
+                "author": .string(authorName),
+                "text": .string(textStr)
+            ]))
+        }
+
         return [
             "title": .string(chatTitle),
             "first_date": .string(firstDate),
@@ -1603,7 +1631,8 @@ func fullGramBuildChatStatsSignal(
             "rare_words": .table(FullGramPluginTableBox(array: rareValues)),
             "profanity_count": .int(Int64(profanityCount)),
             "voice_count": .int(Int64(voiceCount)),
-            "round_count": .int(Int64(roundCount))
+            "round_count": .int(Int64(roundCount)),
+            "messages": .table(FullGramPluginTableBox(array: exportedMessages))
         ]
     }
 }
@@ -2024,8 +2053,13 @@ private final class FullGramCasinoGUIViewController: UIViewController {
     }
 
     @objc private func bonusTapped() {
+        let prev = self.balance
         _ = FullGramPluginManager.shared.dispatchUIEvent(pluginId: "fg_casino", action: "bonus")
-        self.balance += 1000
+        if self.balance == prev {
+            self.balance = prev + 1000
+        } else {
+            self.refreshHeader()
+        }
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         self.statusBannerLabel.text = "🎁 Начислен бонус +1000 🪙!"
     }

@@ -44,6 +44,11 @@ internal class FullGramHostedViewController<Content: UIViewController>: ViewCont
         self.displayNodeDidLoad()
     }
 
+    override func displayNodeDidLoad() {
+        super.displayNodeDidLoad()
+        self.attachHostedIfNeeded()
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         self.attachHostedIfNeeded()
@@ -53,12 +58,12 @@ internal class FullGramHostedViewController<Content: UIViewController>: ViewCont
         guard !self.didAttachHosted else { return }
         self.didAttachHosted = true
         self.addChild(self.hosted)
-        self.hosted.view.frame = self.view.bounds
-        self.hosted.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        if let navView = self.navigationBar?.view, navView.superview === self.view {
-            self.view.insertSubview(self.hosted.view, belowSubview: navView)
+        self.hosted.view.frame = self.displayNode.view.bounds
+        self.hosted.view.autoresizingMask = []
+        if let navView = self.navigationBar?.view, navView.superview === self.displayNode.view {
+            self.displayNode.view.insertSubview(self.hosted.view, belowSubview: navView)
         } else {
-            self.view.insertSubview(self.hosted.view, at: 0)
+            self.displayNode.view.insertSubview(self.hosted.view, at: 0)
         }
         self.hosted.didMove(toParent: self)
     }
@@ -66,14 +71,18 @@ internal class FullGramHostedViewController<Content: UIViewController>: ViewCont
     override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
         super.containerLayoutUpdated(layout, transition: transition)
         self.attachHostedIfNeeded()
-        self.hosted.view.frame = CGRect(origin: .zero, size: layout.size)
         let topInset = self.navigationLayout(layout: layout).navigationFrame.maxY
-        self.hosted.additionalSafeAreaInsets = UIEdgeInsets(
-            top: topInset,
-            left: layout.safeInsets.left,
-            bottom: layout.intrinsicInsets.bottom,
-            right: layout.safeInsets.right
+        let bottomInset = layout.intrinsicInsets.bottom
+        self.hosted.additionalSafeAreaInsets = .zero
+        self.hosted.view.frame = CGRect(
+            x: layout.safeInsets.left,
+            y: topInset,
+            width: max(0.0, layout.size.width - layout.safeInsets.left - layout.safeInsets.right),
+            height: max(0.0, layout.size.height - topInset - bottomInset)
         )
+        if let navView = self.navigationBar?.view, navView.superview === self.displayNode.view {
+            self.displayNode.view.bringSubviewToFront(navView)
+        }
     }
 }
 

@@ -389,6 +389,7 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
 
 private final class FullGramAISecurityPromptController: ViewController {
     private var theme: PresentationTheme
+    private var scrollTopConstraint: NSLayoutConstraint?
 
     init(context: AccountContext) {
         self.theme = context.sharedContext.currentPresentationData.with { $0 }.theme
@@ -398,6 +399,12 @@ private final class FullGramAISecurityPromptController: ViewController {
 
     required init(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
+        super.containerLayoutUpdated(layout, transition: transition)
+        let topInset = self.navigationLayout(layout: layout).navigationFrame.maxY
+        self.scrollTopConstraint?.constant = topInset
     }
 
     override func displayNodeDidLoad() {
@@ -490,8 +497,10 @@ private final class FullGramAISecurityPromptController: ViewController {
         copyButton.addTarget(self, action: #selector(self.copyTapped), for: .touchUpInside)
         stack.addArrangedSubview(copyButton)
 
+        let topC = scroll.topAnchor.constraint(equalTo: root.topAnchor, constant: 88.0)
+        self.scrollTopConstraint = topC
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor),
+            topC,
             scroll.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
