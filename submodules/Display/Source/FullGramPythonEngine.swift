@@ -1083,54 +1083,10 @@ public final class FullGramPythonVM {
             for (_, vE) in kwExprs { args.append(try self.evalExpr(vE, env: env)) }
             if case let .attr(targetExpr, methodName) = fnExpr {
                 let targetObj = try self.evalExpr(targetExpr, env: env)
-                if case var .list(arr) = targetObj {
-                    switch methodName {
-                    case "append":
-                        arr.append(args.first ?? .nil)
-                        try? self.assignTarget(targetExpr, value: .list(arr), env: env)
-                        return .nil
-                    case "extend":
-                        if let first = args.first {
-                            arr.append(contentsOf: self.iterableItems(first))
-                            try? self.assignTarget(targetExpr, value: .list(arr), env: env)
-                        }
-                        return .nil
-                    case "insert":
-                        if args.count >= 2, let idx = args[0].asInt {
-                            let pos = max(0, min(arr.count, Int(idx) < 0 ? arr.count + Int(idx) : Int(idx)))
-                            arr.insert(args[1], at: pos)
-                            try? self.assignTarget(targetExpr, value: .list(arr), env: env)
-                        }
-                        return .nil
-                    case "pop":
-                        guard !arr.isEmpty else { return .nil }
-                        let rawIdx = args.first?.asInt.map(Int.init) ?? (arr.count - 1)
-                        let idx = rawIdx < 0 ? arr.count + rawIdx : rawIdx
-                        guard idx >= 0 && idx < arr.count else { return .nil }
-                        let removed = arr.remove(at: idx)
-                        try? self.assignTarget(targetExpr, value: .list(arr), env: env)
-                        return removed
-                    case "remove":
-                        if let first = args.first, let idx = arr.firstIndex(where: { Self.pyEqual($0, first) }) {
-                            arr.remove(at: idx)
-                            try? self.assignTarget(targetExpr, value: .list(arr), env: env)
-                        }
-                        return .nil
-                    case "clear":
-                        arr.removeAll()
-                        try? self.assignTarget(targetExpr, value: .list(arr), env: env)
-                        return .nil
-                    case "reverse":
-                        arr.reverse()
-                        try? self.assignTarget(targetExpr, value: .list(arr), env: env)
-                        return .nil
-                    case "sort":
-                        arr.sort { ($0.asDouble ?? 0) < ($1.asDouble ?? 0) || $0.asString < $1.asString }
-                        try? self.assignTarget(targetExpr, value: .list(arr), env: env)
-                        return .nil
-                    default:
-                        break
-                    }
+                if case var .list(arr) = targetObj,
+                   let result = self.mutateList(&arr, method: methodName, args: args) {
+                    try? self.assignTarget(targetExpr, value: .list(arr), env: env)
+                    return result
                 }
             }
             let fnVal = try self.evalExpr(fnExpr, env: env)
@@ -1138,6 +1094,47 @@ public final class FullGramPythonVM {
                 throw FullGramPluginError("Python: '\(fnVal.asString)' object is not callable")
             }
             return try fn(args)
+        }
+    }
+
+    private func mutateList(_ arr: inout [FullGramPluginValue], method: String, args: [FullGramPluginValue]) -> FullGramPluginValue? {
+        switch method {
+        case "append":
+            arr.append(args.first ?? .nil)
+            return .nil
+        case "extend":
+            if let first = args.first {
+                arr.append(contentsOf: self.iterableItems(first))
+            }
+            return .nil
+        case "insert":
+            if args.count >= 2, let idx = args[0].asInt {
+                let pos = max(0, min(arr.count, Int(idx) < 0 ? arr.count + Int(idx) : Int(idx)))
+                arr.insert(args[1], at: pos)
+            }
+            return .nil
+        case "pop":
+            guard !arr.isEmpty else { return .nil }
+            let rawIdx = args.first?.asInt.map(Int.init) ?? (arr.count - 1)
+            let idx = rawIdx < 0 ? arr.count + rawIdx : rawIdx
+            guard idx >= 0 && idx < arr.count else { return .nil }
+            return arr.remove(at: idx)
+        case "remove":
+            if let first = args.first, let idx = arr.firstIndex(where: { Self.pyEqual($0, first) }) {
+                arr.remove(at: idx)
+            }
+            return .nil
+        case "clear":
+            arr.removeAll()
+            return .nil
+        case "reverse":
+            arr.reverse()
+            return .nil
+        case "sort":
+            arr.sort { ($0.asDouble ?? 0) < ($1.asDouble ?? 0) || $0.asString < $1.asString }
+            return .nil
+        default:
+            return nil
         }
     }
 

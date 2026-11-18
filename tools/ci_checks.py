@@ -314,6 +314,19 @@ def check_swift_sources() -> int:
 
     for path in swift_files:
         check_swift_delimiters(path)
+        text = path.read_text(encoding="utf-8")
+        rel = path.relative_to(ROOT)
+        imports = set(re.findall(r"^import\s+(\S+)", text, re.M))
+
+        if "UndoOverlayController" in text and "UndoUI" not in imports:
+            raise AssertionError(f"{rel} uses UndoOverlayController without 'import UndoUI'")
+        if re.search(r"UIBarButtonItem\([^)]*style:\s*\.done\b", text):
+            raise AssertionError(f"{rel} uses deprecated UIBarButtonItem.Style.done (use .plain)")
+        if re.search(r"cell\.(?:textLabel|detailTextLabel)\b", text):
+            raise AssertionError(f"{rel} uses deprecated UITableViewCell.textLabel/detailTextLabel (use UIListContentConfiguration)")
+        if re.search(r"^\s*_\s*=\s*\w*[Oo]bserver\b", text, re.M):
+            raise AssertionError(f"{rel} discards NotificationCenter observer without removing it in afterDisposed")
+
     return len(swift_files)
 
 

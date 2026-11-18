@@ -93,54 +93,82 @@ enum FullGramLyricsFetcher {
                 return EmptyDisposable
             }
 
-            let lock = NSLock()
-            let total = signals.count
-            var completedCount = 0
-            var didFinish = false
-            var bestPlain: FullGramLyricsResult?
-            let compositeDisposable = MetaDisposable()
+            let state = LyricsFetchState(total: signals.count)
             let disposables = DisposableSet()
 
             for sig in signals {
                 let d = sig.startStandalone(next: { item in
-                    lock.lock()
-                    guard !didFinish else {
-                        lock.unlock()
-                        return
-                    }
-                    completedCount += 1
-                    if let item {
-                        switch item {
-                        case .synced:
-                            didFinish = true
-                            lock.unlock()
-                            subscriber.putNext(item)
-                            subscriber.putCompletion()
-                            disposables.dispose()
-                            return
-                        case .plain:
-                            if bestPlain == nil {
-                                bestPlain = item
-                            }
-                        case .empty:
-                            break
-                        }
-                    }
-                    if completedCount >= total {
-                        didFinish = true
-                        let finalResult = bestPlain ?? .empty
-                        lock.unlock()
+                    let decision = state.record(item: item)
+                    if let finalResult = decision.finalResult {
                         subscriber.putNext(finalResult)
                         subscriber.putCompletion()
-                        return
+                        if decision.shouldDisposeOthers {
+                            disposables.dispose()
+                        }
                     }
-                    lock.unlock()
                 })
                 disposables.add(d)
             }
-            compositeDisposable.set(disposables)
-            return compositeDisposable
+            return disposables
         }
+    }
+
+    private final class LyricsFetchState {
+        private let lock = NSLock()
+        private let total: Int
+        private var completedCount: Int = 0
+        private var didFinish: Bool = false
+        private var bestPlain: FullGramLyricsResult?
+
+        init(total: Int) {
+            self.total = total
+        }
+
+        func record(item: FullGramLyricsResult?) -> (finalResult: FullGramLyricsResult?, shouldDisposeOthers: Bool) {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            guard !self.didFinish else {
+                return (nil, false)
+            }
+            self.completedCount += 1
+            if let item {
+                switch item {
+                case .synced:
+                    self.didFinish = true
+                    return (item, true)
+                case .plain:
+                    if self.bestPlain == nil {
+                        self.bestPlain = item
+                    }
+                case .empty:
+                    break
+                }
+            }
+            if self.completedCount >= self.total {
+                self.didFinish = true
+                return (self.bestPlain ?? .empty, false)
+            }
+            return (nil, false)
+        }
+    }
+
+    private static func makeLRCLIBRequest(url: URL) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.setValue("FullGram/1.0 (https://fullgram.app)", forHTTPHeaderField: "User-Agent")
+        return request
+    }
+
+    private static func parseLRCLIBEntry(_ json: [String: Any], duration: Double) -> FullGramLyricsResult? {
+        if let synced = json["syncedLyrics"] as? String, !synced.isEmpty {
+            let lines = parseLRC(synced, duration: duration)
+            if !lines.isEmpty {
+                return .synced(lines)
+            }
+        }
+        if let plain = json["plainLyrics"] as? String, !plain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .plain(plain)
+        }
+        return nil
     }
 
     private static func fetchLRCLIB(title: String, artist: String?, duration: Double) -> Signal<FullGramLyricsResult?, NoError> {
@@ -159,24 +187,13 @@ enum FullGramLyricsFetcher {
                 subscriber.putCompletion()
                 return EmptyDisposable
             }
-            var request = URLRequest(url: url)
-            request.setValue("FullGram/1.0 (https://fullgram.app)", forHTTPHeaderField: "User-Agent")
-            let task = session.dataTask(with: request) { data, response, _ in
+            let task = session.dataTask(with: makeLRCLIBRequest(url: url)) { data, response, _ in
                 if let http = response as? HTTPURLResponse, http.statusCode == 200,
-                   let data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    if let synced = json["syncedLyrics"] as? String, !synced.isEmpty {
-                        let lines = parseLRC(synced, duration: duration)
-                        if !lines.isEmpty {
-                            subscriber.putNext(.synced(lines))
-                            subscriber.putCompletion()
-                            return
-                        }
-                    }
-                    if let plain = json["plainLyrics"] as? String, !plain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        subscriber.putNext(.plain(plain))
-                        subscriber.putCompletion()
-                        return
-                    }
+                   let data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let result = parseLRCLIBEntry(json, duration: duration) {
+                    subscriber.putNext(result)
+                    subscriber.putCompletion()
+                    return
                 }
                 // Fallback to LRCLIB search endpoint
                 searchLRCLIB(title: title, artist: artist, duration: duration) { result in
@@ -197,25 +214,12 @@ enum FullGramLyricsFetcher {
             completion(nil)
             return
         }
-        var request = URLRequest(url: url)
-        request.setValue("FullGram/1.0 (https://fullgram.app)", forHTTPHeaderField: "User-Agent")
-        session.dataTask(with: request) { data, _, _ in
+        session.dataTask(with: makeLRCLIBRequest(url: url)) { data, _, _ in
             guard let data, let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]], let first = array.first else {
                 completion(nil)
                 return
             }
-            if let synced = first["syncedLyrics"] as? String, !synced.isEmpty {
-                let lines = parseLRC(synced, duration: duration)
-                if !lines.isEmpty {
-                    completion(.synced(lines))
-                    return
-                }
-            }
-            if let plain = first["plainLyrics"] as? String, !plain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                completion(.plain(plain))
-                return
-            }
-            completion(nil)
+            completion(parseLRCLIBEntry(first, duration: duration))
         }.resume()
     }
 

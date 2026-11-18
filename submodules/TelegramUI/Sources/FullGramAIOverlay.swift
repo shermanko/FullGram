@@ -7,6 +7,7 @@ import TelegramPresentationData
 import SwiftSignalKit
 import AccountContext
 import ChatInterfaceState
+import UndoUI
 
 // MARK: - Local Telegram Context Builder for AI Agent
 
@@ -1639,6 +1640,10 @@ func fullGramBuildChatStatsSignal(
 
 // MARK: - Graphical UI Engine for Lua & Python Plugins (`fullgram.open_ui`)
 
+private final class FullGramSpinStepBox {
+    var value: Int = 0
+}
+
 private final class FullGramCasinoGUIViewController: UIViewController {
     private enum GameTab: Int {
         case slots = 0
@@ -1726,7 +1731,7 @@ private final class FullGramCasinoGUIViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         self.view.backgroundColor = UIColor(rgb: 0x11131A)
-        self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Закрыть", style: .done, target: self, action: #selector(self.closeTapped))
+        self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Закрыть", style: .plain, target: self, action: #selector(self.closeTapped))
         self.navigationItem.rightBarButtonItem = UIBarButtonItem(title: "🎁 +1000", style: .plain, target: self, action: #selector(self.bonusTapped))
 
         let scroll = UIScrollView()
@@ -2112,14 +2117,15 @@ private final class FullGramCasinoGUIViewController: UIViewController {
         let impact = UIImpactFeedbackGenerator(style: .medium)
         impact.prepare()
 
+        let stepBox = FullGramSpinStepBox()
         switch self.currentTab {
         case .slots:
             let finalIdx = [Int.random(in: 0 ..< 5), Int.random(in: 0 ..< 5), Int.random(in: 0 ..< 5)]
-            var step = 0
             self.spinTimer?.invalidate()
             self.spinTimer = Foundation.Timer.scheduledTimer(withTimeInterval: 0.06, repeats: true) { [weak self] timer in
                 guard let self else { timer.invalidate(); return }
-                step += 1
+                stepBox.value += 1
+                let step = stepBox.value
                 if step < 10 {
                     self.reelLabels[0].text = Self.symbols.randomElement()
                 } else if step == 10 {
@@ -2144,11 +2150,11 @@ private final class FullGramCasinoGUIViewController: UIViewController {
 
         case .roulette:
             let targetNum = Int.random(in: 0 ... 36)
-            var step = 0
             self.spinTimer?.invalidate()
             self.spinTimer = Foundation.Timer.scheduledTimer(withTimeInterval: 0.065, repeats: true) { [weak self] timer in
                 guard let self else { timer.invalidate(); return }
-                step += 1
+                stepBox.value += 1
+                let step = stepBox.value
                 if step < 18 {
                     let n = Int.random(in: 0 ... 36)
                     let em = (n == 0) ? "🟢" : (n % 2 == 1 ? "🔴" : "⚫️")
@@ -2162,11 +2168,11 @@ private final class FullGramCasinoGUIViewController: UIViewController {
 
         case .coin:
             let wonEagle = Bool.random()
-            var step = 0
             self.spinTimer?.invalidate()
             self.spinTimer = Foundation.Timer.scheduledTimer(withTimeInterval: 0.11, repeats: true) { [weak self] timer in
                 guard let self else { timer.invalidate(); return }
-                step += 1
+                stepBox.value += 1
+                let step = stepBox.value
                 UIView.transition(with: self.coinEmojiLabel, duration: 0.10, options: .transitionFlipFromLeft) {
                     self.coinEmojiLabel.text = (step % 2 == 0) ? "🦅 ОРЁЛ" : "🪙 РЕШКА"
                 }
@@ -2292,7 +2298,7 @@ private final class FullGramDeadlinesGUIViewController: UIViewController, UITabl
     override func viewDidLoad() {
         super.viewDidLoad()
         self.view.backgroundColor = .systemGroupedBackground
-        self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Закрыть", style: .done, target: self, action: #selector(self.closeTapped))
+        self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Закрыть", style: .plain, target: self, action: #selector(self.closeTapped))
         let addBtn = UIBarButtonItem(barButtonSystemItem: .add, target: self, action: #selector(self.addTapped))
         let shareBtn = UIBarButtonItem(title: "В чат", style: .plain, target: self, action: #selector(self.sendToChatTapped))
         self.navigationItem.rightBarButtonItems = [addBtn, shareBtn]
@@ -2378,13 +2384,15 @@ private final class FullGramDeadlinesGUIViewController: UIViewController, UITabl
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        let cell = tableView.dequeueReusableCell(withIdentifier: "DeadlineCell") ?? UITableViewCell(style: .subtitle, reuseIdentifier: "DeadlineCell")
         let item = self.items[indexPath.row]
         let icon = item.done ? "✅" : "⏳"
-        cell.textLabel?.text = "\(icon) \(item.task)"
-        cell.textLabel?.font = .systemFont(ofSize: 16.0, weight: .semibold)
-        cell.detailTextLabel?.text = "Срок: \(item.due)"
-        cell.detailTextLabel?.textColor = item.done ? .systemGreen : .systemOrange
+        var config = cell.defaultContentConfiguration()
+        config.text = "\(icon) \(item.task)"
+        config.textProperties.font = .systemFont(ofSize: 16.0, weight: .semibold)
+        config.secondaryText = "Срок: \(item.due)"
+        config.secondaryTextProperties.color = item.done ? .systemGreen : .systemOrange
+        cell.contentConfiguration = config
         cell.accessoryType = item.done ? .checkmark : .none
         return cell
     }
@@ -2424,7 +2432,7 @@ private final class FullGramCustomPluginGUIViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         self.view.backgroundColor = .systemGroupedBackground
-        self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Закрыть", style: .done, target: self, action: #selector(self.closeTapped))
+        self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Закрыть", style: .plain, target: self, action: #selector(self.closeTapped))
 
         let stack = UIStackView()
         stack.axis = .vertical

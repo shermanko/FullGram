@@ -1425,6 +1425,14 @@ func fullGramChatsCategoryController(context: AccountContext) -> ViewController 
         extrasVersion += 1
         extrasChanged.set(extrasVersion)
     }
+    let autoResponderObserver = NotificationCenter.default.addObserver(
+        forName: FullGramAutoResponderSettings.didChangeNotification,
+        object: nil,
+        queue: .main
+    ) { _ in
+        extrasVersion += 1
+        extrasChanged.set(extrasVersion)
+    }
 
     let arguments = FullGramChatsCategoryArguments(
         openHistory: {
@@ -1488,16 +1496,6 @@ func fullGramChatsCategoryController(context: AccountContext) -> ViewController 
             ? "\(ghostSettings.reactionDisplay.maxVisibleCount)"
             : t("Выкл.", "Off")
 
-        let autoResponderObserver = NotificationCenter.default.addObserver(
-            forName: FullGramAutoResponderSettings.didChangeNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            extrasVersion += 1
-            extrasChanged.set(extrasVersion)
-        }
-        _ = autoResponderObserver
-
         let entries: [FullGramChatsCategoryEntry] = [
             .sectionsHeader(t("РАЗДЕЛЫ ЧАТОВ", "CHAT SECTIONS")),
             .messageHistoryLink(presentationData.theme, historyState.records.count),
@@ -1537,6 +1535,7 @@ func fullGramChatsCategoryController(context: AccountContext) -> ViewController 
     }
     |> afterDisposed {
         NotificationCenter.default.removeObserver(observer)
+        NotificationCenter.default.removeObserver(autoResponderObserver)
     }
 
     let controller = ItemListController(context: context, state: signal)
