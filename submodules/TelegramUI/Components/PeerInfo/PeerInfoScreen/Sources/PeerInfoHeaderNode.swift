@@ -1056,6 +1056,8 @@ final class PeerInfoHeaderNode: ASDisplayNode {
                         }
                         if case .premium = strongSelf.currentCredibilityIcon {
                             strongSelf.displayPremiumIntro?(strongSelf.titleCredibilityIconView, currentEmojiStatus, strongSelf.emojiStatusFileAndPackTitle.get(), false)
+                        } else if case let .fullGram(badge) = strongSelf.currentCredibilityIcon {
+                            strongSelf.controller?.present(UndoOverlayController(presentationData: presentationData, content: .info(title: badge.chipText, text: badge.label, timeout: 4.0, customUndoText: nil), elevatedLayout: false, action: { _ in return false }), in: .current)
                         }
                     }
                 )),
@@ -1078,6 +1080,8 @@ final class PeerInfoHeaderNode: ASDisplayNode {
                         }
                         if case .premium = strongSelf.currentCredibilityIcon {
                             strongSelf.displayPremiumIntro?(strongSelf.titleExpandedCredibilityIconView, currentEmojiStatus, strongSelf.emojiStatusFileAndPackTitle.get(), true)
+                        } else if case let .fullGram(badge) = strongSelf.currentCredibilityIcon {
+                            strongSelf.controller?.present(UndoOverlayController(presentationData: presentationData, content: .info(title: badge.chipText, text: badge.label, timeout: 4.0, customUndoText: nil), elevatedLayout: false, action: { _ in return false }), in: .current)
                         }
                     }
                 )),
