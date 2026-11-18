@@ -1752,12 +1752,36 @@ private final class FullGramCasinoGUIViewController: UIViewController {
             case .coin: return "🪙 Монетка"
             }
         }
+
+        var rtpPercent: String {
+            switch self {
+            case .zeus: return "96.50%"
+            case .dogs: return "96.51%"
+            case .classic: return "96.20%"
+            case .crash: return "97.00%"
+            case .roulette: return "97.30%"
+            case .coin: return "98.00%"
+            }
+        }
+
+        var volatilityLabel: String {
+            switch self {
+            case .zeus, .dogs: return "Высокая (5/5)"
+            case .crash: return "Динамическая"
+            case .classic: return "Средняя (3/5)"
+            case .roulette, .coin: return "Низкая (1/5)"
+            }
+        }
     }
 
     private let onSendToChat: (String) -> Void
     private var currentBrand: CasinoBrand = .beton
     private var currentTab: GameTab = .zeus
     private var bet: Int = 100
+    private var anteBetEnabled: Bool = false
+    private var freeSpinsLeft: Int = 0
+    private var bonusGlobalMult: Int = 1
+    private var bonusBetBase: Int = 100
     private var rouletteChoice: String = "red"
     private var coinChoice: String = "eagle"
     private var isSpinning = false
@@ -1765,6 +1789,11 @@ private final class FullGramCasinoGUIViewController: UIViewController {
     private var crashMultiplier: Double = 1.0
     private var crashTarget: Double = 1.0
     private var crashBet: Int = 0
+    private var crashHistory: [Double] = [1.84, 3.42, 1.00, 6.15, 2.09]
+    private var sessionRounds: Int = 0
+    private var sessionWins: Int = 0
+    private var sessionWagered: Int = 0
+    private var sessionReturned: Int = 0
     private var spinTimer: Foundation.Timer?
     private var lastShareSummary: String = ""
 
@@ -1772,6 +1801,12 @@ private final class FullGramCasinoGUIViewController: UIViewController {
     private let betCard = UIView()
     private let balanceLabel = UILabel()
     private let recordLabel = UILabel()
+    private let rtpBarCard = UIView()
+    private let rtpInfoLabel = UILabel()
+    private let rtpDetailsButton = UIButton(type: .system)
+    private let slotBonusRow = UIStackView()
+    private let anteButton = UIButton(type: .system)
+    private let buyBonusButton = UIButton(type: .system)
     private let brandScroll = UIScrollView()
     private let brandStack = UIStackView()
     private var brandButtons: [CasinoBrand: UIButton] = [:]
@@ -1789,6 +1824,7 @@ private final class FullGramCasinoGUIViewController: UIViewController {
     private var classicReels: [UILabel] = []
 
     private let crashContainer = UIView()
+    private let crashHistoryLabel = UILabel()
     private let crashMultLabel = UILabel()
     private let crashSubLabel = UILabel()
 
@@ -1809,9 +1845,47 @@ private final class FullGramCasinoGUIViewController: UIViewController {
 
     private static let balanceKey = "fullgram.plugin.store.fg_casino.balance"
     private static let bestKey = "fullgram.plugin.store.fg_casino.best_balance"
-    private static let zeusSymbols = ["⚡", "👑", "💍", "🏆", "⏳", "💎"]
-    private static let dogSymbols = ["🐶", "🦴", "🏠", "🐾", "🎾", "💎"]
+    private static let zeusSymbols = ["💎", "⏳", "🏆", "💍", "👑", "⚡"]
+    private static let zeusWeights: [(symbol: String, weight: Int)] = [
+        ("💎", 30), ("⏳", 23), ("🏆", 18), ("💍", 14), ("👑", 9), ("⚡", 6)
+    ]
+    private static let zeusAnteWeights: [(symbol: String, weight: Int)] = [
+        ("💎", 26), ("⏳", 21), ("🏆", 17), ("💍", 14), ("👑", 10), ("⚡", 12)
+    ]
+    private static let dogSymbols = ["🦴", "🐾", "🎾", "💎", "🐶", "🏠"]
+    private static let dogWeights: [(symbol: String, weight: Int)] = [
+        ("🦴", 27), ("🐾", 22), ("🎾", 18), ("💎", 14), ("🐶", 11), ("🏠", 8)
+    ]
+    private static let dogAnteWeights: [(symbol: String, weight: Int)] = [
+        ("🦴", 23), ("🐾", 20), ("🎾", 17), ("💎", 14), ("🐶", 11), ("🏠", 15)
+    ]
     private static let classicSymbols = ["🍒", "🍋", "🔔", "💎", "7️⃣"]
+    private static let classicWeights: [(symbol: String, weight: Int)] = [
+        ("🍒", 36), ("🍋", 26), ("🔔", 18), ("💎", 13), ("7️⃣", 7)
+    ]
+
+    private static func pickWeighted(_ table: [(symbol: String, weight: Int)]) -> String {
+        let total = table.reduce(0) { $0 + $1.weight }
+        guard total > 0 else { return table.first?.symbol ?? "💎" }
+        var roll = Int.random(in: 0 ..< total)
+        for item in table {
+            if roll < item.weight { return item.symbol }
+            roll -= item.weight
+        }
+        return table[0].symbol
+    }
+
+    private static func pickZeusOrbMultiplier() -> Int {
+        // Реальное распределение орбов в Gates of Olympus: x2 (48%), x3 (24%), x5 (14%), x10 (8%), x25 (4%), x50 (1.5%), x100 (0.5%)
+        let roll = Int.random(in: 0 ..< 1000)
+        if roll < 480 { return 2 }
+        if roll < 720 { return 3 }
+        if roll < 860 { return 5 }
+        if roll < 940 { return 10 }
+        if roll < 980 { return 25 }
+        if roll < 995 { return 50 }
+        return 100
+    }
 
     init(initialTab: String?, onSendToChat: @escaping (String) -> Void) {
         self.onSendToChat = onSendToChat
@@ -1969,6 +2043,27 @@ private final class FullGramCasinoGUIViewController: UIViewController {
         }
         stack.addArrangedSubview(self.modeScroll)
 
+        // 3.5 Live RTP / House Edge Info Bar
+        self.rtpBarCard.layer.cornerRadius = 10.0
+        self.rtpInfoLabel.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
+        self.rtpInfoLabel.textColor = UIColor(white: 0.85, alpha: 1.0)
+        self.rtpDetailsButton.setTitle("ℹ️ Проценты и выплаты", for: .normal)
+        self.rtpDetailsButton.titleLabel?.font = .systemFont(ofSize: 12.0, weight: .bold)
+        self.rtpDetailsButton.addTarget(self, action: #selector(self.paytableTapped), for: .touchUpInside)
+        let rtpRow = UIStackView(arrangedSubviews: [self.rtpInfoLabel, self.rtpDetailsButton])
+        rtpRow.axis = .horizontal
+        rtpRow.alignment = .center
+        rtpRow.spacing = 8.0
+        rtpRow.translatesAutoresizingMaskIntoConstraints = false
+        self.rtpBarCard.addSubview(rtpRow)
+        NSLayoutConstraint.activate([
+            rtpRow.topAnchor.constraint(equalTo: self.rtpBarCard.topAnchor, constant: 7.0),
+            rtpRow.bottomAnchor.constraint(equalTo: self.rtpBarCard.bottomAnchor, constant: -7.0),
+            rtpRow.leadingAnchor.constraint(equalTo: self.rtpBarCard.leadingAnchor, constant: 12.0),
+            rtpRow.trailingAnchor.constraint(equalTo: self.rtpBarCard.trailingAnchor, constant: -12.0)
+        ])
+        stack.addArrangedSubview(self.rtpBarCard)
+
         // 4. Stage Card
         self.stageCard.layer.cornerRadius = 18.0
         self.stageCard.layer.borderWidth = 1.5
@@ -1980,6 +2075,28 @@ private final class FullGramCasinoGUIViewController: UIViewController {
         self.setupRouletteStage()
         self.setupCoinStage()
         stack.addArrangedSubview(self.stageCard)
+
+        // 4.5 Ante Bet (+25% x2 шанс) + Buy Bonus (x100) for Slots
+        self.slotBonusRow.axis = .horizontal
+        self.slotBonusRow.distribution = .fillEqually
+        self.slotBonusRow.spacing = 8.0
+        self.anteButton.titleLabel?.font = .systemFont(ofSize: 12.5, weight: .bold)
+        self.anteButton.layer.cornerRadius = 10.0
+        self.anteButton.layer.borderWidth = 1.2
+        self.anteButton.heightAnchor.constraint(equalToConstant: 36.0).isActive = true
+        self.anteButton.addTarget(self, action: #selector(self.anteTapped), for: .touchUpInside)
+        self.buyBonusButton.setTitle("🎁 Купить бонус (x100)", for: .normal)
+        self.buyBonusButton.titleLabel?.font = .systemFont(ofSize: 12.5, weight: .bold)
+        self.buyBonusButton.backgroundColor = UIColor(rgb: 0xFF9500).withAlphaComponent(0.22)
+        self.buyBonusButton.setTitleColor(UIColor(rgb: 0xFFD60A), for: .normal)
+        self.buyBonusButton.layer.cornerRadius = 10.0
+        self.buyBonusButton.layer.borderWidth = 1.2
+        self.buyBonusButton.layer.borderColor = UIColor(rgb: 0xFF9500).withAlphaComponent(0.65).cgColor
+        self.buyBonusButton.heightAnchor.constraint(equalToConstant: 36.0).isActive = true
+        self.buyBonusButton.addTarget(self, action: #selector(self.buyBonusTapped), for: .touchUpInside)
+        self.slotBonusRow.addArrangedSubview(self.anteButton)
+        self.slotBonusRow.addArrangedSubview(self.buyBonusButton)
+        stack.addArrangedSubview(self.slotBonusRow)
 
         // 5. Status Banner
         self.statusBannerLabel.font = .systemFont(ofSize: 14.5, weight: .semibold)
@@ -2150,18 +2267,23 @@ private final class FullGramCasinoGUIViewController: UIViewController {
             self.crashContainer.trailingAnchor.constraint(equalTo: self.stageCard.trailingAnchor, constant: -14.0)
         ])
 
+        self.crashHistoryLabel.font = .monospacedDigitSystemFont(ofSize: 11.5, weight: .bold)
+        self.crashHistoryLabel.textAlignment = .center
+        self.crashHistoryLabel.textColor = UIColor(white: 0.72, alpha: 1.0)
+        self.crashHistoryLabel.translatesAutoresizingMaskIntoConstraints = false
+
         self.crashMultLabel.font = .monospacedDigitSystemFont(ofSize: 48.0, weight: .heavy)
         self.crashMultLabel.textAlignment = .center
         self.crashMultLabel.text = "🚀 1.00x"
         self.crashMultLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        self.crashSubLabel.font = .systemFont(ofSize: 13.5, weight: .semibold)
+        self.crashSubLabel.font = .systemFont(ofSize: 13.0, weight: .semibold)
         self.crashSubLabel.textColor = UIColor(white: 0.78, alpha: 1.0)
         self.crashSubLabel.textAlignment = .center
-        self.crashSubLabel.text = "Запусти ракету и забери иксы до взрыва!"
+        self.crashSubLabel.text = "RTP 97% · Краш 3% на старте · до x100"
         self.crashSubLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        let v = UIStackView(arrangedSubviews: [self.crashMultLabel, self.crashSubLabel])
+        let v = UIStackView(arrangedSubviews: [self.crashHistoryLabel, self.crashMultLabel, self.crashSubLabel])
         v.axis = .vertical
         v.spacing = 10.0
         v.translatesAutoresizingMaskIntoConstraints = false
@@ -2196,9 +2318,9 @@ private final class FullGramCasinoGUIViewController: UIViewController {
         self.rouletteChoiceStack.distribution = .fillEqually
         self.rouletteChoiceStack.spacing = 8.0
         let choices: [(String, String, UIColor)] = [
-            ("red", "🔴 Красное x2", UIColor(rgb: 0xE53935)),
-            ("green", "🟢 Зеро x14", UIColor(rgb: 0x2E7D32)),
-            ("black", "⚫️ Чёрное x2", UIColor(rgb: 0x262936))
+            ("red", "🔴 48.6% (x2)", UIColor(rgb: 0xE53935)),
+            ("green", "🟢 2.7% (x36)", UIColor(rgb: 0x2E7D32)),
+            ("black", "⚫️ 48.6% (x2)", UIColor(rgb: 0x262936))
         ]
         for (id, title, color) in choices {
             let b = UIButton(type: .system)
@@ -2249,7 +2371,7 @@ private final class FullGramCasinoGUIViewController: UIViewController {
         self.coinChoiceStack.axis = .horizontal
         self.coinChoiceStack.distribution = .fillEqually
         self.coinChoiceStack.spacing = 10.0
-        let sides: [(String, String)] = [("eagle", "🦅 Орёл (x2)"), ("tails", "🪙 Решка (x2)")]
+        let sides: [(String, String)] = [("eagle", "🦅 Орёл · 49% (x2)"), ("tails", "🪙 Решка · 49% (x2)")]
         for (id, title) in sides {
             let b = UIButton(type: .system)
             b.setTitle(title, for: .normal)
@@ -2283,6 +2405,8 @@ private final class FullGramCasinoGUIViewController: UIViewController {
         self.view.backgroundColor = brand.bgColor
         self.headerCard.backgroundColor = brand.cardColor
         self.headerCard.layer.borderColor = accent.withAlphaComponent(0.40).cgColor
+        self.rtpBarCard.backgroundColor = brand.cardColor
+        self.rtpDetailsButton.setTitleColor(accent, for: .normal)
         self.balanceLabel.textColor = accent
         self.stageCard.backgroundColor = brand.cardColor
         self.stageCard.layer.borderColor = accent.withAlphaComponent(0.55).cgColor
@@ -2302,6 +2426,7 @@ private final class FullGramCasinoGUIViewController: UIViewController {
             btn.setTitleColor(active ? brand.buttonTextColor : .white, for: .normal)
         }
         self.refreshHeader()
+        self.refreshAnteButton()
     }
 
     private func highlightRouletteChoice() {
@@ -2318,17 +2443,50 @@ private final class FullGramCasinoGUIViewController: UIViewController {
         }
     }
 
+    private func effectiveBet() -> Int {
+        if (self.currentTab == .zeus || self.currentTab == .dogs) && self.anteBetEnabled {
+            return Int((Double(self.bet) * 1.25).rounded())
+        }
+        return self.bet
+    }
+
+    private func refreshAnteButton() {
+        if self.anteBetEnabled {
+            self.anteButton.setTitle("⚡ Шанс x2: ВКЛ (+25%)", for: .normal)
+            self.anteButton.backgroundColor = self.currentBrand.accentColor.withAlphaComponent(0.24)
+            self.anteButton.setTitleColor(self.currentBrand.accentColor, for: .normal)
+            self.anteButton.layer.borderColor = self.currentBrand.accentColor.cgColor
+        } else {
+            self.anteButton.setTitle("⚡ Шанс x2 (Ante +25%)", for: .normal)
+            self.anteButton.backgroundColor = self.currentBrand.cardColor
+            self.anteButton.setTitleColor(UIColor(white: 0.85, alpha: 1.0), for: .normal)
+            self.anteButton.layer.borderColor = UIColor(white: 1.0, alpha: 0.18).cgColor
+        }
+        self.buyBonusButton.setTitle("🎁 Бонус \(self.bet * 100) 🪙", for: .normal)
+    }
+
     private func refreshHeader() {
         let bal = self.balance
         let best = self.bestBalance
         self.balanceLabel.text = "💰 \(bal) 🪙"
-        self.recordLabel.text = "\(self.currentBrand.subtitle) • 🏆 Рекорд: \(best) 🪙"
+        let winRate = self.sessionRounds > 0 ? Int((Double(self.sessionWins) / Double(self.sessionRounds) * 100.0).rounded()) : 0
+        self.recordLabel.text = "\(self.currentBrand.subtitle) · 🏆 \(best) 🪙 · Винрейт \(winRate)%"
         self.bet = max(10, min(max(10, bal), self.bet))
-        self.betLabel.text = "Ставка: \(self.bet) 🪙"
+        let eff = self.effectiveBet()
+        self.betLabel.text = (eff != self.bet) ? "Ставка: \(self.bet) → \(eff) 🪙 (Ante)" : "Ставка: \(self.bet) 🪙"
+        self.rtpInfoLabel.text = "📊 RTP \(self.currentTab.rtpPercent) · \(self.currentTab.volatilityLabel)"
+        self.refreshAnteButton()
+    }
+
+    private func refreshCrashHistory() {
+        let text = self.crashHistory.prefix(5).map { String(format: "%.2fx", $0) }.joined(separator: "  ·  ")
+        self.crashHistoryLabel.text = "История: " + text
     }
 
     private func updateStageVisibility() {
-        self.gridContainer.isHidden = !(self.currentTab == .zeus || self.currentTab == .dogs)
+        let isGrid = (self.currentTab == .zeus || self.currentTab == .dogs)
+        self.gridContainer.isHidden = !isGrid
+        self.slotBonusRow.isHidden = !isGrid
         self.classicStack.isHidden = (self.currentTab != .classic)
         self.crashContainer.isHidden = (self.currentTab != .crash)
         self.rouletteContainer.isHidden = (self.currentTab != .roulette)
@@ -2343,34 +2501,44 @@ private final class FullGramCasinoGUIViewController: UIViewController {
 
         switch self.currentTab {
         case .zeus:
-            self.zeusBadgeLabel.text = "⚡ GATES OF OLYMPUS · 8+ ОДИНАКОВЫХ ИЛИ МОЛНИЯ"
+            if self.freeSpinsLeft > 0 {
+                self.zeusBadgeLabel.text = "🎁 БОНУС: \(self.freeSpinsLeft) FS · МНОЖИТЕЛЬ x\(self.bonusGlobalMult)"
+            } else {
+                self.zeusBadgeLabel.text = "⚡ GATES OF OLYMPUS · RTP 96.50% · ОРБЫ ДО x100"
+            }
             self.zeusBadgeLabel.backgroundColor = UIColor(rgb: 0xFFD60A).withAlphaComponent(0.18)
             self.zeusBadgeLabel.textColor = UIColor(rgb: 0xFFD60A)
             for (idx, cell) in self.gridCells.enumerated() {
                 cell.text = Self.zeusSymbols[idx % Self.zeusSymbols.count]
                 cell.layer.borderColor = UIColor(white: 1.0, alpha: 0.14).cgColor
             }
-            self.spinButton.setTitle("⚡ КРУТИТЬ ЗЕВСА", for: .normal)
+            self.spinButton.setTitle(self.freeSpinsLeft > 0 ? "⚡ ФРИСПИН (\(self.freeSpinsLeft))" : "⚡ КРУТИТЬ ЗЕВСА", for: .normal)
         case .dogs:
-            self.zeusBadgeLabel.text = "🐶 THE DOG HOUSE · БУДКИ 🏠 ДАЮТ МНОЖИТЕЛЬ"
+            if self.freeSpinsLeft > 0 {
+                self.zeusBadgeLabel.text = "🎁 БОНУС СОБАК: \(self.freeSpinsLeft) FS · ЛИПКИЕ БУДКИ 🏠"
+            } else {
+                self.zeusBadgeLabel.text = "🐶 THE DOG HOUSE · RTP 96.51% · WILD 🏠 x2/x3"
+            }
             self.zeusBadgeLabel.backgroundColor = UIColor(rgb: 0xFF9500).withAlphaComponent(0.20)
             self.zeusBadgeLabel.textColor = UIColor(rgb: 0xFF9500)
             for (idx, cell) in self.gridCells.enumerated() {
                 cell.text = Self.dogSymbols[idx % Self.dogSymbols.count]
                 cell.layer.borderColor = UIColor(white: 1.0, alpha: 0.14).cgColor
             }
-            self.spinButton.setTitle("🐶 КРУТИТЬ СОБАК", for: .normal)
+            self.spinButton.setTitle(self.freeSpinsLeft > 0 ? "🐶 ФРИСПИН (\(self.freeSpinsLeft))" : "🐶 КРУТИТЬ СОБАК", for: .normal)
         case .classic:
             self.spinButton.setTitle("🎰 КРУТИТЬ 3 ЧИСЛА", for: .normal)
         case .crash:
+            self.refreshCrashHistory()
             self.crashMultLabel.text = "🚀 1.00x"
-            self.crashSubLabel.text = "Успей нажать «ЗАБРАТЬ» до взрыва ракеты!"
+            self.crashSubLabel.text = "RTP 97.00% · Инста-краш 3% · забирай до взрыва"
             self.spinButton.setTitle("🚀 СТАРТ РАКЕТЫ", for: .normal)
         case .roulette:
             self.spinButton.setTitle("🎡 ЗАПУСТИТЬ РУЛЕТКУ", for: .normal)
         case .coin:
             self.spinButton.setTitle("🪙 ПОДБРОСИТЬ МОНЕТКУ", for: .normal)
         }
+        self.refreshHeader()
     }
 
     @objc private func closeTapped() {
@@ -2388,6 +2556,118 @@ private final class FullGramCasinoGUIViewController: UIViewController {
         }
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         self.statusBannerLabel.text = "🎁 Начислен бонус +1000 🪙!"
+    }
+
+    @objc private func anteTapped() {
+        guard !self.isSpinning, !self.crashActive, self.freeSpinsLeft == 0 else { return }
+        self.anteBetEnabled.toggle()
+        self.refreshHeader()
+    }
+
+    @objc private func buyBonusTapped() {
+        guard !self.isSpinning, !self.crashActive else { return }
+        let cost = self.bet * 100
+        guard self.balance >= cost else {
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+            self.statusBannerLabel.text = "❌ Нужно \(cost) 🪙 для покупки бонуса (x100 ставки)"
+            return
+        }
+        self.balance -= cost
+        self.sessionWagered += cost
+        self.bonusBetBase = self.bet
+        self.freeSpinsLeft = 10
+        self.bonusGlobalMult = 1
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        self.statusBannerLabel.text = "🎁 БОНУС КУПЛЕН! 10 ФРИСПИНОВ по ставке \(self.bonusBetBase) 🪙!"
+        self.updateStageVisibility()
+    }
+
+    @objc private func paytableTapped() {
+        let sessRTP = self.sessionWagered > 0
+            ? String(format: "%.1f%%", Double(self.sessionReturned) / Double(self.sessionWagered) * 100.0)
+            : "—"
+        let winPct = self.sessionRounds > 0
+            ? String(format: "%.1f%%", Double(self.sessionWins) / Double(self.sessionRounds) * 100.0)
+            : "—"
+        let details: String
+        switch self.currentTab {
+        case .zeus:
+            details = """
+RTP: 96.50% | Волатильность: Высокая (5/5)
+
+Шансы символов (сетка 5×3):
+• 💎 Кристалл — 30% (x0.5–x2)
+• ⏳ Песочные часы — 23% (x0.8–x4)
+• 🏆 Кубок — 18% (x1.2–x6)
+• 💍 Кольцо — 14% (x2–x10)
+• 👑 Корона — 9% (x4–x20)
+• ⚡ Зевс Scatter/Orb — 6% (12% с Ante +25%)
+
+Орбы множителей Зевса:
+x2 (48%), x3 (24%), x5 (14%), x10 (8%), x25 (4%), x50 (1.5%), x100 (0.5%)
+• 4+ ⚡ запускают 10 Фриспинов с накопительным множителем!
+"""
+        case .dogs:
+            details = """
+RTP: 96.51% | Волатильность: Высокая (5/5)
+
+Шансы символов (5×3, линии):
+• 🦴 Косточка — 27%
+• 🐾 Лапка — 22%
+• 🎾 Мячик — 18%
+• 💎 Ошейник — 14%
+• 🐶 Ротвейлер — 11% (топ символ)
+• 🏠 Будка Wild — 8% (15% с Ante +25%), несёт x2 (70%) или x3 (30%)
+
+• 4+ 🏠 запускают 10 Фриспинов!
+"""
+        case .classic:
+            details = """
+RTP: 96.20% | Волатильность: Средняя (3/5)
+
+Шансы барабанов:
+• 🍒 Вишня — 36% (3 в ряд: x3)
+• 🍋 Лимон — 26% (3 в ряд: x5)
+• 🔔 Колокол — 18% (3 в ряд: x8)
+• 💎 Алмаз — 13% (3 в ряд: x15, 2: x2)
+• 7️⃣ Семёрка — 7% (777 Джекпот: x50, две 7️⃣: x3)
+• Любая другая пара — x1.2
+"""
+        case .crash:
+            details = """
+RTP: 97.00% | Преимущество зала: 3.00%
+
+Вероятность долететь до множителя:
+• x1.00 (Мгновенный краш): 3.0%
+• x1.50+: 64.7%
+• x2.00+: 48.5%
+• x3.00+: 32.3%
+• x5.00+: 19.4%
+• x10.00+: 9.7%
+• Максимум: x100.00
+"""
+        case .roulette:
+            details = """
+Европейская рулетка (37 секторов, RTP 97.30%)
+Преимущество зала: 2.70% (1 зеро)
+
+• 🔴 Красное (18/37): шанс 48.65% → выплата x2 (1:1)
+• ⚫️ Чёрное (18/37): шанс 48.65% → выплата x2 (1:1)
+• 🟢 Зеро [0] (1/37): шанс 2.70% → выплата x36 (35:1)
+"""
+        case .coin:
+            details = """
+Монетка Coin Flip (RTP 98.00%)
+Преимущество зала: 2.00%
+
+• 🦅 Орёл — шанс победы 49.00% → выплата x2
+• 🪙 Решка — шанс победы 49.00% → выплата x2
+"""
+        }
+        let sessionBlock = "\nСессия: раундов \(self.sessionRounds) · побед \(winPct) · RTP сессии \(sessRTP)"
+        let alert = UIAlertController(title: "\(self.currentTab.title) — Проценты и выплаты", message: details + sessionBlock, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Понятно", style: .default))
+        self.present(alert, animated: true)
     }
 
     @objc private func brandTapped(_ sender: UIButton) {
@@ -2423,7 +2703,7 @@ private final class FullGramCasinoGUIViewController: UIViewController {
         case -3: self.bet = bal
         default: self.bet = min(bal, max(10, sender.tag))
         }
-        self.betLabel.text = "Ставка: \(self.bet) 🪙"
+        self.refreshHeader()
     }
 
     @objc private func spinTapped() {
@@ -2432,18 +2712,20 @@ private final class FullGramCasinoGUIViewController: UIViewController {
             return
         }
         guard !self.isSpinning else { return }
-        if self.balance < 10 {
+        let isFreeSpin = (self.currentTab == .zeus || self.currentTab == .dogs) && self.freeSpinsLeft > 0
+        if !isFreeSpin && self.balance < 10 {
             self.balance = 500
             self.statusBannerLabel.text = "🎁 Фрибет-пополнение: +500 🪙!"
         }
-        let currentBet = min(self.balance, max(10, self.bet))
-        self.bet = currentBet
+        let baseBet = isFreeSpin ? self.bonusBetBase : min(self.balance, max(10, self.bet))
+        if !isFreeSpin { self.bet = baseBet }
+        let spinCost = isFreeSpin ? 0 : min(self.balance, self.effectiveBet())
 
         let impact = UIImpactFeedbackGenerator(style: .medium)
         impact.prepare()
 
         if self.currentTab == .crash {
-            self.startCrashRound(bet: currentBet, impact: impact)
+            self.startCrashRound(bet: baseBet, impact: impact)
             return
         }
 
@@ -2454,9 +2736,22 @@ private final class FullGramCasinoGUIViewController: UIViewController {
         let stepBox = FullGramSpinStepBox()
         switch self.currentTab {
         case .zeus, .dogs:
-            let pool = (self.currentTab == .zeus) ? Self.zeusSymbols : Self.dogSymbols
             let isZeus = (self.currentTab == .zeus)
-            let finalGrid = (0 ..< 15).map { _ in pool.randomElement() ?? "💎" }
+            let weights: [(symbol: String, weight: Int)]
+            if isZeus {
+                weights = (self.anteBetEnabled || isFreeSpin) ? Self.zeusAnteWeights : Self.zeusWeights
+            } else {
+                weights = (self.anteBetEnabled || isFreeSpin) ? Self.dogAnteWeights : Self.dogWeights
+            }
+            let pool = isZeus ? Self.zeusSymbols : Self.dogSymbols
+            let finalGrid = (0 ..< 15).map { _ in Self.pickWeighted(weights) }
+            if !isFreeSpin {
+                self.balance -= spinCost
+                self.sessionWagered += spinCost
+            } else {
+                self.freeSpinsLeft -= 1
+            }
+            self.sessionRounds += 1
             for cell in self.gridCells {
                 cell.layer.borderColor = UIColor(white: 1.0, alpha: 0.14).cgColor
             }
@@ -2483,12 +2778,17 @@ private final class FullGramCasinoGUIViewController: UIViewController {
                     for idx in 0 ..< min(15, self.gridCells.count) {
                         self.gridCells[idx].text = finalGrid[idx]
                     }
-                    self.finishGridSpin(isZeus: isZeus, grid: finalGrid, bet: currentBet)
+                    self.finishGridSpin(isZeus: isZeus, isFreeSpin: isFreeSpin, grid: finalGrid, baseBet: baseBet, spinCost: spinCost)
                 }
             }
 
         case .classic:
-            let finalIdx = [Int.random(in: 0 ..< Self.classicSymbols.count), Int.random(in: 0 ..< Self.classicSymbols.count), Int.random(in: 0 ..< Self.classicSymbols.count)]
+            let finalIdx = (0 ..< 3).map { _ in
+                let sym = Self.pickWeighted(Self.classicWeights)
+                return Self.classicSymbols.firstIndex(of: sym) ?? 0
+            }
+            self.sessionRounds += 1
+            self.sessionWagered += baseBet
             self.spinTimer?.invalidate()
             self.spinTimer = Foundation.Timer.scheduledTimer(withTimeInterval: 0.06, repeats: true) { [weak self] timer in
                 guard let self else { timer.invalidate(); return }
@@ -2512,12 +2812,14 @@ private final class FullGramCasinoGUIViewController: UIViewController {
                     timer.invalidate()
                     self.classicReels[2].text = Self.classicSymbols[finalIdx[2]]
                     impact.impactOccurred()
-                    self.finishSlotsSpin(finalIdx: finalIdx, bet: currentBet)
+                    self.finishSlotsSpin(finalIdx: finalIdx, bet: baseBet)
                 }
             }
 
         case .roulette:
             let targetNum = Int.random(in: 0 ... 36)
+            self.sessionRounds += 1
+            self.sessionWagered += baseBet
             self.spinTimer?.invalidate()
             self.spinTimer = Foundation.Timer.scheduledTimer(withTimeInterval: 0.065, repeats: true) { [weak self] timer in
                 guard let self else { timer.invalidate(); return }
@@ -2530,12 +2832,16 @@ private final class FullGramCasinoGUIViewController: UIViewController {
                     if step % 3 == 0 { impact.impactOccurred() }
                 } else {
                     timer.invalidate()
-                    self.finishRouletteSpin(num: targetNum, bet: currentBet)
+                    self.finishRouletteSpin(num: targetNum, bet: baseBet)
                 }
             }
 
         case .coin:
-            let wonEagle = Bool.random()
+            // Реальный шанс 49.0% победа (RTP 98.0%, 2% edge)
+            let winRoll = Int.random(in: 0 ..< 100) < 49
+            let wonEagle = (self.coinChoice == "eagle") ? winRoll : !winRoll
+            self.sessionRounds += 1
+            self.sessionWagered += baseBet
             self.spinTimer?.invalidate()
             self.spinTimer = Foundation.Timer.scheduledTimer(withTimeInterval: 0.11, repeats: true) { [weak self] timer in
                 guard let self else { timer.invalidate(); return }
@@ -2547,7 +2853,7 @@ private final class FullGramCasinoGUIViewController: UIViewController {
                 impact.impactOccurred()
                 if step >= 10 {
                     timer.invalidate()
-                    self.finishCoinSpin(wonEagle: wonEagle, bet: currentBet)
+                    self.finishCoinSpin(wonEagle: wonEagle, bet: baseBet)
                 }
             }
 
@@ -2556,7 +2862,7 @@ private final class FullGramCasinoGUIViewController: UIViewController {
         }
     }
 
-    private func finishGridSpin(isZeus: Bool, grid: [String], bet: Int) {
+    private func finishGridSpin(isZeus: Bool, isFreeSpin: Bool, grid: [String], baseBet: Int, spinCost: Int) {
         self.isSpinning = false
         self.spinButton.isEnabled = true
         self.spinButton.alpha = 1.0
@@ -2567,44 +2873,73 @@ private final class FullGramCasinoGUIViewController: UIViewController {
         var mult: Double = 0.0
         var titleStatus = "❌ Пустой спин!"
         if isZeus {
-            let bestCount = counts.values.max() ?? 0
             let bolts = counts["⚡"] ?? 0
-            if bestCount >= 6 {
-                mult = Double(bestCount - 4) * 1.5
-                let zeusMult: Int
-                if bolts >= 3 { zeusMult = 10 }
-                else if bolts == 2 { zeusMult = 5 }
-                else if bolts == 1 { zeusMult = 2 }
-                else { zeusMult = 1 }
-                mult *= Double(zeusMult)
-                titleStatus = zeusMult > 1 ? "⚡ ЗЕВС БЬЁТ МОЛНИЕЙ x\(zeusMult)!" : "👑 СЫГРОВКА x\(String(format: "%.1f", mult))!"
-            } else if bolts >= 3 {
-                mult = 3.0
-                titleStatus = "⚡ БОНУС МОЛНИЙ x3!"
+            // Базовые множители символов Gates of Olympus при 6+ совпадениях на сетке 5x3
+            let symbolBase: [String: Double] = [
+                "💎": 0.4, "⏳": 0.6, "🏆": 0.9, "💍": 1.3, "👑": 2.2
+            ]
+            var bestPay = 0.0
+            var bestSym: String?
+            for (sym, cnt) in counts where sym != "⚡" {
+                guard cnt >= 6, let baseVal = symbolBase[sym] else { continue }
+                let scale = 1.0 + Double(cnt - 6) * 0.65
+                let cand = baseVal * scale
+                if cand > bestPay {
+                    bestPay = cand
+                    bestSym = sym
+                }
             }
-            let topSym = counts.max(by: { $0.value < $1.value })?.key
+            if bestPay > 0.0 {
+                let orbMult = (bolts > 0 || isFreeSpin) ? Self.pickZeusOrbMultiplier() : 1
+                if isFreeSpin && orbMult > 1 {
+                    self.bonusGlobalMult += orbMult
+                }
+                let effectiveOrb = isFreeSpin ? max(1, self.bonusGlobalMult) : orbMult
+                mult = bestPay * Double(effectiveOrb)
+                if effectiveOrb >= 25 {
+                    titleStatus = "🔥 MAX ОРБ ЗЕВСА x\(effectiveOrb)!"
+                } else if effectiveOrb > 1 {
+                    titleStatus = "⚡ МОЛНИЯ ЗЕВСА x\(effectiveOrb)!"
+                } else {
+                    titleStatus = "👑 СЫГРОВКА x\(String(format: "%.1f", mult))!"
+                }
+            }
+            if bolts >= 4 && !isFreeSpin {
+                self.bonusBetBase = baseBet
+                self.freeSpinsLeft += 10
+                self.bonusGlobalMult = 1
+                mult = max(mult, 3.0)
+                titleStatus = "⚡ 4+ SCATTER! БОНУС 10 ФРИСПИНОВ!"
+            } else if bolts >= 4 && isFreeSpin {
+                self.freeSpinsLeft += 5
+                titleStatus = "⚡ РЕТРИГГЕР +5 ФРИСПИНОВ!"
+            }
             for (idx, s) in grid.enumerated() where idx < self.gridCells.count {
-                if s == "⚡" || (bestCount >= 6 && s == topSym) {
+                if s == "⚡" || (bestPay > 0.0 && s == bestSym) {
                     self.gridCells[idx].layer.borderColor = UIColor(rgb: 0xFFD60A).cgColor
                 }
             }
         } else {
-            // Dog House: sticky wild kennels multiply line wins
+            // Dog House: линии слева направо + будки Wild (x2 70% / x3 30%)
             let kennels = counts["🏠"] ?? 0
-            var lineHits = 0
+            let lineWeight: [String: Double] = [
+                "🦴": 0.4, "🐾": 0.6, "🎾": 0.85, "💎": 1.4, "🐶": 2.4
+            ]
+            var lineMultSum = 0.0
             for r in 0 ..< 3 {
                 let rowSyms = (0 ..< 5).map { c in grid[r * 5 + c] }
-                let first = rowSyms[0]
-                var streak = 1
-                for c in 1 ..< 5 {
-                    if rowSyms[c] == first || rowSyms[c] == "🏠" {
+                let anchor = rowSyms.first(where: { $0 != "🏠" }) ?? "🐶"
+                var streak = 0
+                for c in 0 ..< 5 {
+                    if rowSyms[c] == anchor || rowSyms[c] == "🏠" {
                         streak += 1
                     } else {
                         break
                     }
                 }
                 if streak >= 3 {
-                    lineHits += streak - 1
+                    let baseLine = lineWeight[anchor] ?? 0.6
+                    lineMultSum += baseLine * Double(streak - 1)
                     for c in 0 ..< streak {
                         let idx = r * 5 + c
                         if idx < self.gridCells.count {
@@ -2613,28 +2948,49 @@ private final class FullGramCasinoGUIViewController: UIViewController {
                     }
                 }
             }
-            if lineHits > 0 {
-                let kennelBoost = max(1, kennels * 2)
-                mult = Double(lineHits * kennelBoost)
-                titleStatus = kennels > 0 ? "🐶 БУДКИ x\(kennelBoost) · ЗАНОС!" : "🐶 ЛИНИЯ СЫГРАЛА!"
+            if lineMultSum > 0.0 {
+                var kennelMult = 1
+                if kennels > 0 {
+                    var sumWild = 0
+                    for _ in 0 ..< min(kennels, 4) {
+                        sumWild += (Int.random(in: 0 ..< 10) < 7) ? 2 : 3
+                    }
+                    kennelMult = max(1, sumWild)
+                }
+                if isFreeSpin && kennels > 0 {
+                    self.bonusGlobalMult = min(27, self.bonusGlobalMult + kennelMult)
+                    kennelMult = self.bonusGlobalMult
+                }
+                mult = lineMultSum * Double(kennelMult)
+                titleStatus = kennelMult > 1 ? "🐶 БУДКИ x\(kennelMult) · ЗАНОС!" : "🐶 ЛИНИЯ СЫГРАЛА!"
             } else if (counts["🐶"] ?? 0) >= 5 {
-                mult = 2.0
-                titleStatus = "🐶 СТАЯ СОБАК x2!"
+                mult = 2.5
+                titleStatus = "🐶 СТАЯ СОБАК x2.5!"
+            }
+            if kennels >= 4 && !isFreeSpin {
+                self.bonusBetBase = baseBet
+                self.freeSpinsLeft += 10
+                self.bonusGlobalMult = 1
+                mult = max(mult, 2.0)
+                titleStatus = "🏠 БОНУС 10 ФРИСПИНОВ СОБАК!"
             }
         }
 
-        let payout = Int((Double(bet) * mult).rounded())
-        let delta = payout - bet
-        self.balance += delta
-        let sign = delta >= 0 ? "+\(delta)" : "\(delta)"
-        self.statusBannerLabel.text = "\(titleStatus) (\(sign) 🪙)"
-        UINotificationFeedbackGenerator().notificationOccurred(delta >= 0 ? .success : .warning)
+        let payout = Int((Double(baseBet) * mult).rounded())
+        self.balance += payout
+        self.sessionReturned += payout
+        if payout > spinCost { self.sessionWins += 1 }
+        let net = payout - spinCost
+        let sign = net >= 0 ? "+\(net)" : "\(net)"
+        self.statusBannerLabel.text = "\(titleStatus) (\(payout > 0 ? "+\(payout)" : sign) 🪙)"
+        UINotificationFeedbackGenerator().notificationOccurred(payout > 0 ? .success : .warning)
 
+        self.updateStageVisibility()
         let row0 = grid[0 ..< 5].joined(separator: " ")
         let row1 = grid[5 ..< 10].joined(separator: " ")
         let row2 = grid[10 ..< 15].joined(separator: " ")
-        let modeName = isZeus ? "⚡ ЗЕВС (Olympus)" : "🐶 СОБАКИ (Dog House)"
-        self.lastShareSummary = "\(self.currentBrand.title) · \(modeName)\n\(row0)\n\(row1)\n\(row2)\n\(titleStatus) (\(sign) 🪙)\n💰 Баланс: \(self.balance) 🪙"
+        let modeName = isZeus ? "⚡ ЗЕВС (RTP 96.5%)" : "🐶 СОБАКИ (RTP 96.5%)"
+        self.lastShareSummary = "\(self.currentBrand.title) · \(modeName)\n\(row0)\n\(row1)\n\(row2)\n\(titleStatus) (Выплата \(payout) 🪙)\n💰 Баланс: \(self.balance) 🪙"
         self.shareButton.isHidden = false
     }
 
@@ -2642,10 +2998,17 @@ private final class FullGramCasinoGUIViewController: UIViewController {
         self.crashActive = true
         self.crashBet = bet
         self.balance -= bet
+        self.sessionRounds += 1
+        self.sessionWagered += bet
         self.crashMultiplier = 1.0
-        // Fair-ish heavy-tail crash point: ~1.10x to 15.0x
-        let r = Double.random(in: 0.02 ... 0.99)
-        self.crashTarget = min(20.0, max(1.08, 0.96 / (1.0 - r)))
+        // Настоящая математика Crash (RTP 97%): 3% мгновенный краш 1.00x, иначе тяжелый хвост до 100.0x
+        let instantRoll = Int.random(in: 0 ..< 100)
+        if instantRoll < 3 {
+            self.crashTarget = 1.00
+        } else {
+            let u = Double.random(in: 0.001 ... 0.990)
+            self.crashTarget = min(100.0, max(1.03, 0.97 / (1.0 - u)))
+        }
 
         self.spinButton.setTitle("💰 ЗАБРАТЬ (1.00x)", for: .normal)
         self.spinButton.backgroundColor = UIColor(rgb: 0x34C759)
@@ -2656,18 +3019,23 @@ private final class FullGramCasinoGUIViewController: UIViewController {
         self.spinTimer?.invalidate()
         self.spinTimer = Foundation.Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] timer in
             guard let self, self.crashActive else { timer.invalidate(); return }
-            self.crashMultiplier += max(0.03, self.crashMultiplier * 0.045)
+            if self.crashTarget > 1.00 {
+                self.crashMultiplier += max(0.03, self.crashMultiplier * 0.045)
+            }
             if self.crashMultiplier >= self.crashTarget {
                 timer.invalidate()
                 self.crashActive = false
+                self.crashHistory.insert(self.crashTarget, at: 0)
+                if self.crashHistory.count > 8 { self.crashHistory.removeLast() }
+                self.refreshCrashHistory()
                 let crashedAt = String(format: "%.2fx", self.crashTarget)
                 self.crashMultLabel.text = "💥 \(crashedAt)"
-                self.crashSubLabel.text = "Ракета взорвалась!"
+                self.crashSubLabel.text = self.crashTarget <= 1.00 ? "Мгновенный краш (3% шанс)!" : "Ракета взорвалась!"
                 self.statusBannerLabel.text = "💥 КРАШ на \(crashedAt) (-\(bet) 🪙)"
                 self.applyBrandTheme()
                 self.spinButton.setTitle("🚀 СТАРТ РАКЕТЫ", for: .normal)
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
-                self.lastShareSummary = "\(self.currentBrand.title) · 🚀 Краш\n💥 Ракета упала на \(crashedAt) (-\(bet) 🪙)\n💰 Баланс: \(self.balance) 🪙"
+                self.lastShareSummary = "\(self.currentBrand.title) · 🚀 Краш (RTP 97%)\n💥 Ракета упала на \(crashedAt) (-\(bet) 🪙)\n💰 Баланс: \(self.balance) 🪙"
                 self.shareButton.isHidden = false
                 return
             }
@@ -2685,7 +3053,12 @@ private final class FullGramCasinoGUIViewController: UIViewController {
         self.spinTimer?.invalidate()
         let payout = Int((Double(self.crashBet) * self.crashMultiplier).rounded())
         let profit = payout - self.crashBet
+        self.sessionReturned += payout
+        self.sessionWins += 1
         self.balance += payout
+        self.crashHistory.insert(self.crashTarget, at: 0)
+        if self.crashHistory.count > 8 { self.crashHistory.removeLast() }
+        self.refreshCrashHistory()
         let multStr = String(format: "%.2fx", self.crashMultiplier)
         self.crashMultLabel.text = "✅ \(multStr)"
         self.crashSubLabel.text = "Забрали вовремя! (краш был на \(String(format: "%.2fx", self.crashTarget)))"
@@ -2693,7 +3066,7 @@ private final class FullGramCasinoGUIViewController: UIViewController {
         self.applyBrandTheme()
         self.spinButton.setTitle("🚀 СТАРТ РАКЕТЫ", for: .normal)
         UINotificationFeedbackGenerator().notificationOccurred(.success)
-        self.lastShareSummary = "\(self.currentBrand.title) · 🚀 Краш\n✅ Забрал на \(multStr): +\(profit) 🪙 (выплата \(payout) 🪙)\n💰 Баланс: \(self.balance) 🪙"
+        self.lastShareSummary = "\(self.currentBrand.title) · 🚀 Краш (RTP 97%)\n✅ Забрал на \(multStr): +\(profit) 🪙 (выплата \(payout) 🪙)\n💰 Баланс: \(self.balance) 🪙"
         self.shareButton.isHidden = false
     }
 
@@ -2706,26 +3079,37 @@ private final class FullGramCasinoGUIViewController: UIViewController {
         let s2 = Self.classicSymbols[finalIdx[1]]
         let s3 = Self.classicSymbols[finalIdx[2]]
 
-        var mult = 0
+        var mult: Double = 0.0
         var status = "❌ Мимо!"
-        if finalIdx[0] == 4 && finalIdx[1] == 4 && finalIdx[2] == 4 {
-            mult = 15
-            status = "🔥 МЕГА ДЖЕКПОТ 777 (x15)!"
-        } else if finalIdx[0] == finalIdx[1] && finalIdx[1] == finalIdx[2] {
-            mult = 7
-            status = "🎉 ДЖЕКПОТ 3 В РЯД (x7)!"
+        if finalIdx[0] == finalIdx[1] && finalIdx[1] == finalIdx[2] {
+            switch finalIdx[0] {
+            case 4: mult = 50.0; status = "🔥 МЕГА ДЖЕКПОТ 777 (x50)!"
+            case 3: mult = 15.0; status = "💎 АЛМАЗНЫЙ ДЖЕКПОТ (x15)!"
+            case 2: mult = 8.0; status = "🔔 3 КОЛОКОЛА (x8)!"
+            case 1: mult = 5.0; status = "🍋 3 ЛИМОНА (x5)!"
+            default: mult = 3.0; status = "🍒 3 ВИШНИ (x3)!"
+            }
+        } else if finalIdx.filter({ $0 == 4 }).count == 2 {
+            mult = 3.0
+            status = "7️⃣ Две Семёрки (x3)!"
+        } else if finalIdx.filter({ $0 == 3 }).count == 2 {
+            mult = 2.0
+            status = "💎 Два Алмаза (x2)!"
         } else if finalIdx[0] == finalIdx[1] || finalIdx[1] == finalIdx[2] || finalIdx[0] == finalIdx[2] {
-            mult = 2
-            status = "✨ Совпадение 2 из 3 (x2)!"
+            mult = 1.2
+            status = "✨ Пара (x1.2)!"
         }
 
-        let delta = (mult > 0) ? (bet * (mult - 1)) : (-bet)
+        let payout = Int((Double(bet) * mult).rounded())
+        let delta = payout - bet
         self.balance += delta
+        self.sessionReturned += payout
+        if delta > 0 { self.sessionWins += 1 }
         let sign = delta >= 0 ? "+\(delta)" : "\(delta)"
         self.statusBannerLabel.text = "\(status) (\(sign) 🪙)"
         UINotificationFeedbackGenerator().notificationOccurred(mult > 0 ? .success : .warning)
 
-        self.lastShareSummary = "\(self.currentBrand.title) · 🎰 3 числа | Ставка: \(bet) 🪙\n┃  \(s1) │ \(s2) │ \(s3)  ┃\n\(status) (\(sign) 🪙)\n💰 Баланс: \(self.balance) 🪙"
+        self.lastShareSummary = "\(self.currentBrand.title) · 🎰 3 числа (RTP 96.2%) | Ставка: \(bet) 🪙\n┃  \(s1) │ \(s2) │ \(s3)  ┃\n\(status) (\(sign) 🪙)\n💰 Баланс: \(self.balance) 🪙"
         self.shareButton.isHidden = false
     }
 
@@ -2749,14 +3133,17 @@ private final class FullGramCasinoGUIViewController: UIViewController {
         self.rouletteBallLabel.text = "\(badge) [\(num)]"
 
         let won = (self.rouletteChoice == color)
-        let mult = (color == "green") ? 14 : 2
-        let delta = won ? (bet * (mult - 1)) : (-bet)
+        let mult = (color == "green") ? 36 : 2
+        let payout = won ? (bet * mult) : 0
+        let delta = payout - bet
         self.balance += delta
+        self.sessionReturned += payout
+        if won { self.sessionWins += 1 }
         let sign = delta >= 0 ? "+\(delta)" : "\(delta)"
-        self.statusBannerLabel.text = won ? "✅ Выигрыш в рулетке: \(sign) 🪙!" : "❌ Выпало \(badge) (\(sign) 🪙)"
+        self.statusBannerLabel.text = won ? "✅ Выигрыш \(color == "green" ? "x36" : "x2"): \(sign) 🪙!" : "❌ Выпало \(badge) (\(sign) 🪙)"
         UINotificationFeedbackGenerator().notificationOccurred(won ? .success : .warning)
 
-        self.lastShareSummary = "\(self.currentBrand.title) · 🎡 Рулетка\nВыпало: \(badge) [\(num)]\nРезультат: \(sign) 🪙\n💰 Баланс: \(self.balance) 🪙"
+        self.lastShareSummary = "\(self.currentBrand.title) · 🎡 Европейская рулетка (RTP 97.3%)\nВыпало: \(badge) [\(num)]\nРезультат: \(sign) 🪙\n💰 Баланс: \(self.balance) 🪙"
         self.shareButton.isHidden = false
     }
 
@@ -2768,13 +3155,16 @@ private final class FullGramCasinoGUIViewController: UIViewController {
         self.coinEmojiLabel.text = wonEagle ? "🦅 ОРЁЛ" : "🪙 РЕШКА"
         let pickedEagle = (self.coinChoice == "eagle")
         let won = (wonEagle == pickedEagle)
-        let delta = won ? bet : (-bet)
+        let payout = won ? (bet * 2) : 0
+        let delta = payout - bet
         self.balance += delta
+        self.sessionReturned += payout
+        if won { self.sessionWins += 1 }
         let sign = delta >= 0 ? "+\(delta)" : "\(delta)"
-        self.statusBannerLabel.text = won ? "✅ Вы угадали сторону! (\(sign) 🪙)" : "❌ Не угадали (\(sign) 🪙)"
+        self.statusBannerLabel.text = won ? "✅ Победа (49% шанс): \(sign) 🪙!" : "❌ Не угадали (\(sign) 🪙)"
         UINotificationFeedbackGenerator().notificationOccurred(won ? .success : .warning)
 
-        self.lastShareSummary = "\(self.currentBrand.title) · 🪙 Монетка: выпал \(wonEagle ? "🦅 Орёл" : "🪙 Решка")\nРезультат: \(sign) 🪙 (Баланс: \(self.balance) 🪙)"
+        self.lastShareSummary = "\(self.currentBrand.title) · 🪙 Монетка (RTP 98%): \(wonEagle ? "🦅 Орёл" : "🪙 Решка")\nРезультат: \(sign) 🪙 (Баланс: \(self.balance) 🪙)"
         self.shareButton.isHidden = false
     }
 
