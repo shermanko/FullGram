@@ -113,7 +113,7 @@ enum FullGramLyricsFetcher {
         }
     }
 
-    private final class LyricsFetchState {
+    private final class LyricsFetchState: @unchecked Sendable {
         private let lock = NSLock()
         private let total: Int
         private var completedCount: Int = 0

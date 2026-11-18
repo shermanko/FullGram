@@ -19,7 +19,7 @@ enum FullGramProfanityBleep {
         let noiseMode = FullGramNoiseReductionMode.current
         return Signal { subscriber in
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("fullgram_bleep_\(Int64.random(in: 1 ... Int64.max)).ogg")
-            guard (try? data.compressedData.write(to: url)) != nil, var samples = decode(path: url.path) else {
+            guard (try? data.compressedData.write(to: url)) != nil, let decodedSamples = decode(path: url.path) else {
                 try? FileManager.default.removeItem(at: url)
                 subscriber.putNext(data)
                 subscriber.putCompletion()
@@ -28,12 +28,13 @@ enum FullGramProfanityBleep {
             try? FileManager.default.removeItem(at: url)
 
             // Recognize profanity on the clean, natural human voice BEFORE applying voice changer effects.
-            FullGramSpeechBleep.recognizeSamples(samples, sampleRate: opusSampleRate) { ranges in
+            FullGramSpeechBleep.recognizeSamples(decodedSamples, sampleRate: opusSampleRate) { ranges in
                 guard !ranges.isEmpty || voiceMode != .off || noiseMode != .off else {
                     subscriber.putNext(data)
                     subscriber.putCompletion()
                     return
                 }
+                var samples = decodedSamples
                 samples.withUnsafeMutableBufferPointer { buf in
                     guard let base = buf.baseAddress else { return }
                     if voiceMode != .off || noiseMode != .off {

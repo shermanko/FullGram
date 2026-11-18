@@ -1130,7 +1130,7 @@ final class FullGramAIOverlayCoordinator {
                   let text = (note.userInfo as? [String: Any])?["text"] as? String,
                   !text.isEmpty else { return }
             let presentationData = self.context.sharedContext.currentPresentationData.with { $0 }
-            let targetController: ViewController? = self.activeChatController() ?? self.rootController
+            let targetController: ViewController? = (self.activeChatController() as ViewController?) ?? self.rootController
             targetController?.present(
                 UndoOverlayController(
                     presentationData: presentationData,
@@ -1640,7 +1640,7 @@ func fullGramBuildChatStatsSignal(
 
 // MARK: - Graphical UI Engine for Lua & Python Plugins (`fullgram.open_ui`)
 
-private final class FullGramSpinStepBox {
+private final class FullGramSpinStepBox: @unchecked Sendable {
     var value: Int = 0
 }
 
