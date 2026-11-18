@@ -5,6 +5,7 @@ public enum FullGramPluginNotifications {
     public static let pluginsDidChange = Notification.Name("FullGram.PluginsDidChange")
     public static let toastRequested = Notification.Name("FullGram.PluginToastRequested")
     public static let runCommandInChatRequested = Notification.Name("FullGram.PluginRunCommandInChatRequested")
+    public static let openUIRequested = Notification.Name("FullGram.PluginOpenUIRequested")
 }
 
 public struct FullGramRemotePluginItem: Codable, Equatable {
@@ -167,13 +168,23 @@ public final class FullGramPluginManager {
             self.persistLocked()
         } else {
             var existingIds = Set(self.descriptors.map { $0.id })
-            var added = false
-            for starter in starters where !existingIds.contains(starter.id) {
-                self.descriptors.append(starter)
-                existingIds.insert(starter.id)
-                added = true
+            var changed = false
+            for starter in starters {
+                if !existingIds.contains(starter.id) {
+                    self.descriptors.append(starter)
+                    existingIds.insert(starter.id)
+                    changed = true
+                } else if let idx = self.descriptors.firstIndex(where: { $0.id == starter.id }),
+                          self.descriptors[idx].isBuiltIn,
+                          self.descriptors[idx].version != starter.version {
+                    let wasEnabled = self.descriptors[idx].isEnabled
+                    var updated = starter
+                    updated.isEnabled = wasEnabled
+                    self.descriptors[idx] = updated
+                    changed = true
+                }
             }
-            if added {
+            if changed {
                 self.persistLocked()
             }
         }
@@ -387,6 +398,31 @@ public final class FullGramPluginManager {
                 }
                 return .nil
             },
+            "open_ui": .function { args in
+                let first = args.first ?? .nil
+                var specDict: [String: Any] = ["pluginId": pluginId]
+                switch first {
+                case let .string(kind):
+                    specDict["kind"] = kind
+                case let .table(box):
+                    if let dict = box.toJSONObject() as? [String: Any] {
+                        for (k, v) in dict {
+                            specDict[k] = v
+                        }
+                    }
+                default:
+                    break
+                }
+                logCapture?("[open_ui] \(specDict["kind"] ?? pluginId)")
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(
+                        name: FullGramPluginNotifications.openUIRequested,
+                        object: nil,
+                        userInfo: specDict
+                    )
+                }
+                return .bool(true)
+            },
             "clipboard_set": .function { args in
                 let text = args.first?.asString ?? ""
                 DispatchQueue.main.async {
@@ -580,6 +616,33 @@ public final class FullGramPluginManager {
             }
         }
         return nil
+    }
+
+    /// Invokes `on_ui_event(ctx)` inside a Lua or Python plugin for two-way graphical UI interaction.
+    public func dispatchUIEvent(
+        pluginId: String,
+        action: String,
+        payload: [String: FullGramPluginValue] = [:]
+    ) -> FullGramPluginValue {
+        self.ensureLoaded()
+        self.lock.lock()
+        let holder = self.loaded[pluginId]
+        self.lock.unlock()
+        guard let holder else { return .nil }
+
+        var dict = payload
+        dict["action"] = .string(action)
+        let ctx = FullGramPluginTableBox(dict: dict)
+        do {
+            if let lua = holder.luaVM, lua.hasFunction("on_ui_event") {
+                return try lua.callFunction("on_ui_event", args: [.table(ctx)])
+            } else if let py = holder.pythonVM, py.hasFunction("on_ui_event") {
+                return try py.callFunction("on_ui_event", args: [.table(ctx)])
+            }
+        } catch {
+            self.appendLog(pluginId: pluginId, message: "UI event error: \(error.localizedDescription)")
+        }
+        return .nil
     }
 
     // MARK: - Execution Hooks
@@ -1139,11 +1202,11 @@ def on_command(ctx):
 
     private static func casinoPluginCode() -> String {
         return """
--- @name Казино (.slots / .roulette / .bal)
+-- @name Казино (.casino / .slots / .roulette)
 -- @id fg_casino
--- @version 1.0
+-- @version 2.0
 -- @author FullGram
--- @description Слоты (.slots [ставка]), рулетка (.roulette red/black/green [ставка]), монетка (.coin) и баланс фишек (.bal)
+-- @description Графическое казино (.casino) + быстрые команды .slots [ставка], .roulette red/black/green [ставка], .coin [ставка], .bal
 
 function get_balance()
     local b = tonumber(fullgram.storage_get("balance", 1000))
@@ -1159,11 +1222,28 @@ function set_balance(val)
     end
 end
 
+function on_ui_event(ctx)
+    local act = tostring(ctx.action or "")
+    local bal = get_balance()
+    local best = tonumber(fullgram.storage_get("best_balance", 1000)) or 1000
+    if act == "bonus" then
+        bal = bal + 1000
+        set_balance(bal)
+        best = tonumber(fullgram.storage_get("best_balance", 1000)) or 1000
+    end
+    return { balance = bal, best_balance = best }
+end
+
 function on_command(ctx)
     local cmd = ctx.command
     local args = tostring(ctx.args or "")
 
-    if cmd == "bal" or cmd == "casino" then
+    if cmd == "casino" or (cmd == "slots" and args == "") then
+        fullgram.open_ui({ kind = "casino", title = "Казино FullGram" })
+        return { cancel = true }
+    end
+
+    if cmd == "bal" then
         local bal = get_balance()
         local best = tonumber(fullgram.storage_get("best_balance", 1000)) or 1000
         if args == "bonus" or bal < 50 then
@@ -1171,7 +1251,8 @@ function on_command(ctx)
             set_balance(bal)
             return "🎁 Бонус казино FullGram начислен: +1000 🪙\\n💰 Текущий баланс: " .. tostring(bal) .. " 🪙 (Рекорд: " .. tostring(best) .. " 🪙)"
         end
-        return "🎰 Казино FullGram\\n💰 Баланс: " .. tostring(bal) .. " 🪙 (Рекорд: " .. tostring(best) .. " 🪙)\\nКоманды: .slots [ставка], .roulette red/black/green [ставка], .coin [ставка], .bal bonus"
+        fullgram.open_ui({ kind = "casino", title = "Казино FullGram" })
+        return { cancel = true }
     end
 
     if cmd == "slots" then
@@ -1219,6 +1300,10 @@ function on_command(ctx)
     end
 
     if cmd == "roulette" or cmd == "roul" then
+        if args == "" then
+            fullgram.open_ui({ kind = "casino", tab = "roulette", title = "Рулетка FullGram" })
+            return { cancel = true }
+        end
         local bal = get_balance()
         if bal <= 0 then bal = 500 end
         local choice = string.lower(ctx.subcommand or "red")
@@ -1239,7 +1324,7 @@ function on_command(ctx)
 
         local win = false
         local mult = 2
-        if (choice == "green" or choice == "0" or choice == " зеленое" or choice == "зеро") and color == "green" then
+        if (choice == "green" or choice == "0" or choice == "зеленое" or choice == "зеро") and color == "green" then
             win = true
             mult = 14
         elseif (choice == "red" or choice == "красное" or choice == "к") and color == "red" then
@@ -1257,6 +1342,10 @@ function on_command(ctx)
     end
 
     if cmd == "coin" then
+        if args == "" then
+            fullgram.open_ui({ kind = "casino", tab = "coin", title = "Монетка FullGram" })
+            return { cancel = true }
+        end
         local bal = get_balance()
         if bal <= 0 then bal = 500 end
         local bet = tonumber(args) or 100
@@ -1405,8 +1494,9 @@ def on_command(ctx):
     raw = str(ctx["args"]).strip()
     items = load_items()
 
-    if not raw or raw == "list":
-        return {"cancel": True, "toast": format_list(items)}
+    if not raw or raw == "list" or raw == "ui":
+        fullgram.open_ui({"kind": "deadlines", "title": "Дедлайны FullGram"})
+        return {"cancel": True}
 
     if raw == "send":
         return format_list(items)
