@@ -1328,7 +1328,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
             }
 
             titleStringText = title
-            if let nickStyle = FullGramNicknameStyle.style(forPeerId: peer?.id.toInt64(), selfPeerId: self.context.account.peerId.toInt64()) {
+            if let nickStyle = FullGramNicknameStyle.style(forPeerId: peer.id.toInt64(), selfPeerId: self.context.account.peerId.toInt64()) {
                 let nickShadow = nickStyle.glowEnabled ? nickStyle.color.withAlphaComponent(0.75) : titleShadowColor
                 titleAttributes = MultiScaleTextState.Attributes(font: Font.bold(28.0), color: nickStyle.color, shadowColor: nickShadow)
                 smallTitleAttributes = MultiScaleTextState.Attributes(font: Font.bold(28.0), color: nickStyle.color, shadowColor: nickShadow)

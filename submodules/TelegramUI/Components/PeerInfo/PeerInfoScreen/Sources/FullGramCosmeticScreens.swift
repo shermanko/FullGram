@@ -328,15 +328,14 @@ private final class FullGramFrameGridCell: UICollectionViewCell {
 // MARK: - 2. Стиль ника (палитра цветов + неоновое свечение на профиль)
 
 @available(iOS 14.0, *)
-@MainActor
 private final class FullGramNickColorPickerDelegate: NSObject, UIColorPickerViewControllerDelegate {
-    private static var retained: FullGramNickColorPickerDelegate?
+    private var retainedSelf: FullGramNickColorPickerDelegate?
     private let onPick: (String) -> Void
 
     init(onPick: @escaping (String) -> Void) {
         self.onPick = onPick
         super.init()
-        Self.retained = self
+        self.retainedSelf = self
     }
 
     func colorPickerViewControllerDidSelectColor(_ viewController: UIColorPickerViewController) {
@@ -345,7 +344,7 @@ private final class FullGramNickColorPickerDelegate: NSObject, UIColorPickerView
 
     func colorPickerViewControllerDidFinish(_ viewController: UIColorPickerViewController) {
         self.emit(viewController.selectedColor)
-        Self.retained = nil
+        self.retainedSelf = nil
     }
 
     private func emit(_ color: UIColor) {
