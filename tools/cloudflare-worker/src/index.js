@@ -1841,6 +1841,34 @@ export default {
       return jsonResponse(await loadNfts(env));
     }
 
+    if (request.method === "POST" && path === "/decorations/batch") {
+      try {
+        const body = await request.json();
+        const rawIds = Array.isArray(body.peerIds) ? body.peerIds : [];
+        const peerIds = Array.from(new Set(
+          rawIds.map((v) => String(v || "").trim()).filter((v) => /^-?\d{1,20}$/.test(v))
+        )).slice(0, 100);
+        const [badges, cosmetics, nfts] = await Promise.all([
+          loadBadges(env),
+          loadCosmetics(env),
+          loadNfts(env)
+        ]);
+        const users = {};
+        for (const id of peerIds) {
+          const roleId = badges.users[id] || null;
+          const badge = roleId && badges.roles[roleId] ? { roleId, ...badges.roles[roleId] } : null;
+          const cosmetic = cosmetics.users[id] || null;
+          const userNfts = Array.isArray(nfts.users[id]) ? nfts.users[id] : [];
+          if (badge || cosmetic || userNfts.length) {
+            users[id] = { badge, cosmetics: cosmetic, nfts: userNfts };
+          }
+        }
+        return jsonResponse({ ok: true, version: 1, users });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err.message }, 400);
+      }
+    }
+
     if (request.method === "POST" && path === "/cosmetics") {
       const auth = await authenticateRequest(request, env);
       if (!auth) {
@@ -1934,30 +1962,49 @@ export default {
         try {
           const body = await request.json();
           const peerId = body.peerId != null ? String(body.peerId).trim() : "";
-          const nftId = body.nftId != null ? String(body.nftId).trim() : "";
-          if (!/^-?\d{1,20}$/.test(peerId) || !/^[a-zA-Z0-9_-]{1,64}$/.test(nftId)) {
-            throw new Error("Invalid peerId or nftId");
+          if (!/^-?\d{1,20}$/.test(peerId)) {
+            throw new Error("Invalid peerId");
           }
           const nfts = await loadNfts(env);
           const list = Array.isArray(nfts.users[peerId]) ? nfts.users[peerId] : [];
+          const entryId = body.id != null && String(body.id).trim()
+            ? String(body.id).trim().slice(0, 64)
+            : (body.nftId != null && String(body.nftId).trim()
+              ? String(body.nftId).trim().slice(0, 64)
+              : `fg_nft_${Date.now()}_${Math.floor(Math.random() * 10000)}`);
+
           if (body.enabled === false) {
-            nfts.users[peerId] = list.filter((item) => item.id !== nftId);
+            nfts.users[peerId] = list.filter((item) => item.id !== entryId);
             if (!nfts.users[peerId].length) delete nfts.users[peerId];
           } else {
+            const giftId = body.giftId != null ? String(body.giftId).trim() : "";
+            if (!/^-?\d{1,20}$/.test(giftId)) {
+              throw new Error("Invalid giftId");
+            }
+            const rawNum = Number(body.number);
+            const number = Number.isFinite(rawNum) && rawNum >= 1 ? Math.min(9999999, Math.floor(rawNum)) : 1;
+            const rawBackdropId = body.backdropId != null ? Number(body.backdropId) : null;
             const entry = {
-              id: nftId,
-              title: typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 64) : nftId,
-              assetUrl: typeof body.assetUrl === "string" ? body.assetUrl.trim().slice(0, 512) : "",
+              id: entryId,
+              giftId,
+              title: typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 64) : "NFT",
+              modelName: typeof body.modelName === "string" ? body.modelName.trim().slice(0, 64) : "",
+              backdropName: typeof body.backdropName === "string" ? body.backdropName.trim().slice(0, 64) : "",
+              backdropId: Number.isFinite(rawBackdropId) ? Math.floor(rawBackdropId) : null,
+              patternName: typeof body.patternName === "string" ? body.patternName.trim().slice(0, 64) : "",
+              number,
+              note: typeof body.note === "string" ? body.note.trim().slice(0, 120) : "",
+              pinned: body.pinned !== false,
               grantedBy: auth.uid,
               grantedAt: Math.floor(Date.now() / 1000)
             };
-            const idx = list.findIndex((item) => item.id === nftId);
+            const idx = list.findIndex((item) => item.id === entryId);
             if (idx >= 0) list[idx] = entry;
-            else list.push(entry);
-            nfts.users[peerId] = list;
+            else list.unshift(entry);
+            nfts.users[peerId] = list.slice(0, 50);
           }
           await saveNfts(env, nfts);
-          return jsonResponse({ ok: true, items: nfts.users[peerId] || [] });
+          return jsonResponse({ ok: true, id: entryId, items: nfts.users[peerId] || [] });
         } catch (err) {
           return jsonResponse({ ok: false, error: err.message }, 400);
         }

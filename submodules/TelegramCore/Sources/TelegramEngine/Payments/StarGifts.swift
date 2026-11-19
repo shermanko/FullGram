@@ -3135,10 +3135,11 @@ public final class ProfileGiftsContext {
     }
     
     private let queue: Queue = .mainQueue()
+    private let account: Account
     private let impl: QueueLocalObject<ProfileGiftsContextImpl>
     
     public var state: Signal<ProfileGiftsContext.State, NoError> {
-        return Signal { subscriber in
+        let baseState = Signal<ProfileGiftsContext.State, NoError> { subscriber in
             let disposable = MetaDisposable()
             
             self.impl.with { impl in
@@ -3148,6 +3149,37 @@ public final class ProfileGiftsContext {
             }
             
             return disposable
+        }
+        guard self.collectionId == nil else {
+            return baseState
+        }
+        return combineLatest(baseState, fullGramGrantedGiftsSignal(account: self.account, peerId: self.peerId))
+        |> map { state, granted in
+            guard !granted.isEmpty else {
+                return state
+            }
+            let existingSlugs = Set(state.gifts.compactMap { entry -> String? in
+                if case let .unique(u) = entry.gift { return u.slug }
+                return nil
+            })
+            let freshGranted = granted.filter { entry in
+                if case let .unique(u) = entry.gift {
+                    return !existingSlugs.contains(u.slug)
+                }
+                return true
+            }
+            guard !freshGranted.isEmpty else {
+                return state
+            }
+            var updated = state
+            updated.gifts = freshGranted + state.gifts
+            updated.filteredGifts = freshGranted + state.filteredGifts
+            if let count = state.count {
+                updated.count = count + Int32(freshGranted.count)
+            } else {
+                updated.count = Int32(updated.gifts.count)
+            }
+            return updated
         }
     }
     
@@ -3162,6 +3194,7 @@ public final class ProfileGiftsContext {
         filter: ProfileGiftsContext.Filters = .All,
         limit: Int32 = 36
     ) {
+        self.account = account
         self.peerId = peerId
         self.collectionId = collectionId
         

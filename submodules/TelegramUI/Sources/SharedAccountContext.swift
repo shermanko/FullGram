@@ -558,6 +558,7 @@ public final class SharedAccountContextImpl: SharedAccountContext {
         
         FullGramDesignWatchdog.checkOnLaunch()
         FullGramFeatureFlags.shared.refreshFromRemoteIfNeeded()
+        FullGramGrantedNFTStore.shared.refreshIfNeeded()
         let fullGramFlat = FullGramExtras.shared.classicDesign || FullGramExtras.shared.removeGlass
         GlassBackgroundView.useCustomGlassImpl = immediateExperimentalUISettingsValue.with({ $0.fakeGlass }) || fullGramFlat
         GlassBackgroundView.flatMode = fullGramFlat

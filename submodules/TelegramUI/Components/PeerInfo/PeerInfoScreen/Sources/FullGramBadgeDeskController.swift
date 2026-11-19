@@ -80,6 +80,7 @@ private struct FullGramBadgeDeskState: Equatable {
 private enum FullGramBadgeDeskSection: Int32 {
     case preview
     case badge
+    case nft
     case admin
 }
 
@@ -91,6 +92,8 @@ private final class FullGramBadgeDeskArguments {
     let pickRole: () -> Void
     let editLabel: () -> Void
     let editShortLabel: () -> Void
+    let openNFTCatalog: () -> Void
+    let revokeNFT: (FullGramGrantedNFT) -> Void
     let editToken: () -> Void
 
     init(
@@ -101,6 +104,8 @@ private final class FullGramBadgeDeskArguments {
         pickRole: @escaping () -> Void,
         editLabel: @escaping () -> Void,
         editShortLabel: @escaping () -> Void,
+        openNFTCatalog: @escaping () -> Void,
+        revokeNFT: @escaping (FullGramGrantedNFT) -> Void,
         editToken: @escaping () -> Void
     ) {
         self.context = context
@@ -110,6 +115,8 @@ private final class FullGramBadgeDeskArguments {
         self.pickRole = pickRole
         self.editLabel = editLabel
         self.editShortLabel = editShortLabel
+        self.openNFTCatalog = openNFTCatalog
+        self.revokeNFT = revokeNFT
         self.editToken = editToken
     }
 }
@@ -125,6 +132,10 @@ private enum FullGramBadgeDeskEntry: ItemListNodeEntry {
     case badgeLabel(String, String)
     case badgeShortLabel(String, String)
     case badgeFooter(String)
+    case nftHeader(String)
+    case nftGrantAction(String)
+    case nftGrantedItem(Int32, FullGramGrantedNFT, String, String)
+    case nftFooter(String)
     case adminHeader(String)
     case adminToken(String, String)
 
@@ -134,6 +145,8 @@ private enum FullGramBadgeDeskEntry: ItemListNodeEntry {
             return FullGramBadgeDeskSection.preview.rawValue
         case .badgeHeader, .badgeSwitch, .badgeEmoji, .badgeEmojiReset, .badgeRole, .badgeLabel, .badgeShortLabel, .badgeFooter:
             return FullGramBadgeDeskSection.badge.rawValue
+        case .nftHeader, .nftGrantAction, .nftGrantedItem, .nftFooter:
+            return FullGramBadgeDeskSection.nft.rawValue
         case .adminHeader, .adminToken:
             return FullGramBadgeDeskSection.admin.rawValue
         }
@@ -151,8 +164,12 @@ private enum FullGramBadgeDeskEntry: ItemListNodeEntry {
         case .badgeLabel: return 15
         case .badgeShortLabel: return 16
         case .badgeFooter: return 17
-        case .adminHeader: return 30
-        case .adminToken: return 31
+        case .nftHeader: return 20
+        case .nftGrantAction: return 21
+        case let .nftGrantedItem(idx, _, _, _): return 100 + idx
+        case .nftFooter: return 299
+        case .adminHeader: return 300
+        case .adminToken: return 301
         }
     }
 
@@ -221,6 +238,16 @@ private enum FullGramBadgeDeskEntry: ItemListNodeEntry {
         case let .badgeShortLabel(title, value):
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.editShortLabel)
         case let .badgeFooter(text):
+            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
+        case let .nftHeader(text):
+            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+        case let .nftGrantAction(title):
+            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.openNFTCatalog)
+        case let .nftGrantedItem(_, item, title, label):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
+                args.revokeNFT(item)
+            })
+        case let .nftFooter(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         case let .adminHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
@@ -379,6 +406,17 @@ func fullGramBadgeDeskController(
         }
     }
 
+    let nftTick = ValuePromise<Int>(0, ignoreRepeated: false)
+    let nftCounter = Atomic<Int>(value: 0)
+    let nftObserver = NotificationCenter.default.addObserver(
+        forName: FullGramGrantedNFTStore.didChangeNotification,
+        object: nil,
+        queue: .main
+    ) { _ in
+        nftTick.set(nftCounter.modify { $0 + 1 })
+    }
+    FullGramGrantedNFTStore.shared.refreshIfNeeded(maxAge: 10.0)
+
     let args = FullGramBadgeDeskArguments(
         context: context,
         toggleEnabled: { value in
@@ -480,13 +518,40 @@ func fullGramBadgeDeskController(
             alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
             presentNativeImpl?(alert)
         },
+        openNFTCatalog: {
+            pushImpl?(fullGramNFTCatalogController(context: context, targetPeerId: peerId, targetDisplayName: peer.compactDisplayTitle))
+        },
+        revokeNFT: { item in
+            let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
+            let alert = UIAlertController(
+                title: "\(item.title) #\(item.number)",
+                message: ru
+                    ? "Модель: \(item.modelName)\nФон: \(item.backdropName)\nУзор: \(item.patternName)\n\nУдалить этот NFT из профиля?"
+                    : "Model: \(item.modelName)\nBackdrop: \(item.backdropName)\nPattern: \(item.patternName)\n\nRemove this NFT from profile?",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: ru ? "Удалить NFT" : "Remove NFT", style: .destructive, handler: { _ in
+                FullGramAdmin.shared.revokeNFT(peerId: peerId, entryId: item.id) { res in
+                    switch res {
+                    case .success:
+                        FullGramGrantedNFTStore.shared.refreshNow { _ in }
+                    case let .failure(err):
+                        let errAlert = UIAlertController(title: ru ? "Ошибка" : "Error", message: err.localizedDescription, preferredStyle: .alert)
+                        errAlert.addAction(UIAlertAction(title: "OK", style: .default))
+                        presentNativeImpl?(errAlert)
+                    }
+                }
+            }))
+            alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
+            presentNativeImpl?(alert)
+        },
         editToken: {
             promptAdminToken(nil)
         }
     )
 
-    let signal = combineLatest(queue: .mainQueue(), context.sharedContext.presentationData, statePromise.get())
-    |> map { presentationData, state -> (ItemListControllerState, (ItemListNodeState, Any)) in
+    let signal = combineLatest(queue: .mainQueue(), context.sharedContext.presentationData, statePromise.get(), nftTick.get())
+    |> map { presentationData, state, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
         let changed = state.draft != state.original
         let rightButton: ItemListNavigationButton
@@ -515,13 +580,22 @@ func fullGramBadgeDeskController(
             entries.append(.badgeFooter(ru ? "Без эмодзи: стандартный значок роли" : "No emoji: the developer mark"))
         }
 
+        let grantedNfts = FullGramGrantedNFTStore.shared.gifts(forPeerId: peerId)
+        entries.append(.nftHeader(ru ? "NFT-ПОДАРКИ В ПРОФИЛЬ" : "PROFILE NFT GIFTS"))
+        entries.append(.nftGrantAction(ru ? "Выдать NFT (выбор модели, фона, узора и #)…" : "Grant NFT (model, backdrop, pattern & #)…"))
+        for (idx, nft) in grantedNfts.enumerated() {
+            let detail = nft.modelName.isEmpty ? "#\(nft.number)" : nft.modelName
+            entries.append(.nftGrantedItem(Int32(idx), nft, "\(nft.title) #\(nft.number)", detail))
+        }
+        entries.append(.nftFooter(ru ? "Выданные NFT отображаются у всех пользователей FullGram прямо в профиле (существующие NFT Telegram сохраняются)." : "Granted NFTs are visible to all FullGram users directly on the profile without affecting Telegram NFTs."))
+
         entries.append(.adminHeader(ru ? "СЕРВЕР FULLGRAM" : "FULLGRAM SERVER"))
         entries.append(.adminToken(ru ? "Токен администратора" : "Admin token", FullGramAdmin.shared.hasToken ? (ru ? "Сохранён" : "Saved") : (ru ? "Не задан" : "Not set")))
 
         let data = ItemListPresentationData(presentationData)
         let controllerState = ItemListControllerState(
             presentationData: data,
-            title: .text(ru ? "Бейдж" : "Badge"),
+            title: .text(ru ? "Бейдж и NFT" : "Badge & NFT"),
             leftNavigationButton: nil,
             rightNavigationButton: rightButton,
             backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back),
@@ -529,6 +603,9 @@ func fullGramBadgeDeskController(
         )
         let listState = ItemListNodeState(presentationData: data, entries: entries, style: .blocks, animateChanges: true)
         return (controllerState, (listState, args))
+    }
+    |> afterDisposed {
+        NotificationCenter.default.removeObserver(nftObserver)
     }
 
     let controller = ItemListController(context: context, state: signal)
@@ -545,6 +622,7 @@ private final class FullGramAdminPanelArguments {
     let configureToken: () -> Void
     let verifyServerAuth: () -> Void
     let grantBadgeById: () -> Void
+    let grantNFTById: () -> Void
     let publishLocalPlugin: () -> Void
     let removeMarketPlugin: () -> Void
     let activateBotWebhook: () -> Void
@@ -553,6 +631,7 @@ private final class FullGramAdminPanelArguments {
         configureToken: @escaping () -> Void,
         verifyServerAuth: @escaping () -> Void,
         grantBadgeById: @escaping () -> Void,
+        grantNFTById: @escaping () -> Void,
         publishLocalPlugin: @escaping () -> Void,
         removeMarketPlugin: @escaping () -> Void,
         activateBotWebhook: @escaping () -> Void
@@ -560,6 +639,7 @@ private final class FullGramAdminPanelArguments {
         self.configureToken = configureToken
         self.verifyServerAuth = verifyServerAuth
         self.grantBadgeById = grantBadgeById
+        self.grantNFTById = grantNFTById
         self.publishLocalPlugin = publishLocalPlugin
         self.removeMarketPlugin = removeMarketPlugin
         self.activateBotWebhook = activateBotWebhook
@@ -579,6 +659,7 @@ private enum FullGramAdminPanelEntry: ItemListNodeEntry {
     case authFooter(String)
     case actionsHeader(String)
     case grantBadge(String)
+    case grantNFT(String)
     case publishPlugin(String)
     case deletePlugin(String)
     case activateBot(String)
@@ -588,7 +669,7 @@ private enum FullGramAdminPanelEntry: ItemListNodeEntry {
         switch self {
         case .authHeader, .ownerIdRow, .tokenRow, .verifyAuthRow, .authFooter:
             return FullGramAdminPanelSection.auth.rawValue
-        case .actionsHeader, .grantBadge, .publishPlugin, .deletePlugin, .activateBot, .actionsFooter:
+        case .actionsHeader, .grantBadge, .grantNFT, .publishPlugin, .deletePlugin, .activateBot, .actionsFooter:
             return FullGramAdminPanelSection.actions.rawValue
         }
     }
@@ -602,10 +683,11 @@ private enum FullGramAdminPanelEntry: ItemListNodeEntry {
         case .authFooter: return 4
         case .actionsHeader: return 10
         case .grantBadge: return 11
-        case .publishPlugin: return 12
-        case .deletePlugin: return 13
-        case .activateBot: return 14
-        case .actionsFooter: return 15
+        case .grantNFT: return 12
+        case .publishPlugin: return 13
+        case .deletePlugin: return 14
+        case .activateBot: return 15
+        case .actionsFooter: return 16
         }
     }
 
@@ -630,6 +712,8 @@ private enum FullGramAdminPanelEntry: ItemListNodeEntry {
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .grantBadge(title):
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.grantBadgeById)
+        case let .grantNFT(title):
+            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.grantNFTById)
         case let .publishPlugin(title):
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.publishLocalPlugin)
         case let .deletePlugin(title):
@@ -648,6 +732,7 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
     }
 
     var presentNativeImpl: ((UIViewController) -> Void)?
+    var pushImpl: ((ViewController) -> Void)?
     let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
     let tick = Atomic<Int>(value: 0)
     let bump: @Sendable () -> Void = {
@@ -757,6 +842,27 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
             alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
             presentNativeImpl?(alert)
         },
+        grantNFTById: {
+            let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
+            let alert = UIAlertController(
+                title: ru ? "Выдать NFT с превью" : "Grant NFT with preview",
+                message: ru ? "Введите Telegram User ID получателя (или оставьте свой ID):" : "Enter recipient Telegram User ID (or keep your own ID):",
+                preferredStyle: .alert
+            )
+            let myId = context.account.peerId.id._internalGetInt64Value()
+            alert.addTextField { tf in
+                tf.text = String(myId)
+                tf.placeholder = String(myId)
+                tf.keyboardType = .numberPad
+            }
+            alert.addAction(UIAlertAction(title: ru ? "Выбрать NFT →" : "Choose NFT →", style: .default, handler: { _ in
+                let raw = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let uid = Int64(raw), uid > 0 else { return }
+                pushImpl?(fullGramNFTCatalogController(context: context, targetPeerId: uid, targetDisplayName: "ID \(uid)"))
+            }))
+            alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
+            presentNativeImpl?(alert)
+        },
         publishLocalPlugin: {
             let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
             let plugins = FullGramPluginManager.shared.allPlugins()
@@ -847,12 +953,13 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
             .tokenRow(ru ? "Подписанный токен / initData" : "Signed token / initData", serverStatus),
             .verifyAuthRow(ru ? "Проверить права на сервере" : "Verify admin rights on server"),
             .authFooter(ru ? "Проверка прав администратора выполняется исключительно на сервере Cloudflare Worker по криптографической подписи Telegram (/auth в боте или initData)." : "Admin rights are enforced strictly on Cloudflare Worker using Telegram-signed credentials (/auth in bot or initData)."),
-            .actionsHeader(ru ? "УПРАВЛЕНИЕ БЕЙДЖАМИ И МАРКЕТОМ" : "BADGES & PLUGIN MARKET"),
+            .actionsHeader(ru ? "УПРАВЛЕНИЕ БЕЙДЖАМИ, NFT И МАРКЕТОМ" : "BADGES, NFTS & PLUGIN MARKET"),
             .grantBadge(ru ? "Выдать или снять бейдж по ID / @username" : "Grant or remove badge by ID / @username"),
+            .grantNFT(ru ? "Выдать NFT в профиль (модель, фон, узор, #)" : "Grant NFT to profile (model, backdrop, pattern, #)"),
             .publishPlugin(ru ? "Опубликовать локальный плагин в маркет" : "Publish local plugin to market"),
             .deletePlugin(ru ? "Удалить плагин из маркета" : "Delete plugin from market"),
             .activateBot(ru ? "Проверить / обновить Telegram-бота" : "Verify / refresh Telegram bot webhook"),
-            .actionsFooter(ru ? "Плагины также можно публиковать напрямую через вашего Telegram-бота — просто отправьте ему файл .lua или .py." : "You can also publish plugins by sending .lua or .py files directly to your Telegram admin bot.")
+            .actionsFooter(ru ? "Вы также можете открыть любой профиль → «Бейдж» → «Выдать NFT» для выбора коллекции (например Plush Pepe), модели, фона, узора и номера с живым превью." : "You can also open any profile → Badge → Grant NFT to pick a collection, model, backdrop, pattern and number with live preview.")
         ]
 
         let data = ItemListPresentationData(presentationData)
@@ -869,5 +976,6 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
 
     let controller = ItemListController(context: context, state: signal)
     presentNativeImpl = { [weak controller] vc in controller?.present(vc, animated: true) }
+    pushImpl = { [weak controller] c in controller?.push(c) }
     return controller
 }

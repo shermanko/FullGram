@@ -448,4 +448,77 @@ public final class FullGramAdmin: @unchecked Sendable {
             }
         }
     }
+
+    public func grantNFT(
+        peerId: Int64,
+        giftId: Int64,
+        title: String,
+        modelName: String,
+        backdropName: String,
+        backdropId: Int32?,
+        patternName: String,
+        number: Int32,
+        note: String = "",
+        pinned: Bool = true,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        var payload: [String: Any] = [
+            "enabled": true,
+            "peerId": String(peerId),
+            "giftId": String(giftId),
+            "title": title,
+            "modelName": modelName,
+            "backdropName": backdropName,
+            "patternName": patternName,
+            "number": Int(max(1, number)),
+            "note": note,
+            "pinned": pinned
+        ]
+        if let backdropId {
+            payload["backdropId"] = Int(backdropId)
+        }
+        let request: URLRequest
+        do {
+            request = try self.makeAdminRequest(path: "/admin/nft", method: "POST", body: payload)
+        } catch {
+            DispatchQueue.main.async { completion(.failure(error)) }
+            return
+        }
+        self.sendJSONRequest(request) { result in
+            switch result {
+            case let .success(json):
+                let id = (json["id"] as? String) ?? ""
+                completion(.success(id))
+            case let .failure(error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    public func revokeNFT(
+        peerId: Int64,
+        entryId: String,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        let payload: [String: Any] = [
+            "enabled": false,
+            "peerId": String(peerId),
+            "id": entryId
+        ]
+        let request: URLRequest
+        do {
+            request = try self.makeAdminRequest(path: "/admin/nft", method: "POST", body: payload)
+        } catch {
+            DispatchQueue.main.async { completion(.failure(error)) }
+            return
+        }
+        self.sendJSONRequest(request) { result in
+            switch result {
+            case .success:
+                completion(.success(()))
+            case let .failure(error):
+                completion(.failure(error))
+            }
+        }
+    }
 }
