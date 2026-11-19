@@ -1439,10 +1439,7 @@ final class FullGramAIOverlayCoordinator {
         }
 
         let vc: UIViewController
-        if kind.contains("betking") || kind.contains("casino") {
-            let game = spec["game"] as? String
-            vc = FullGramCasinoBetKingViewController(initialGame: game, onSendToChat: sendToChat)
-        } else if kind.contains("deadline") || kind.contains("dl") {
+        if kind.contains("deadline") || kind.contains("dl") {
             vc = FullGramDeadlinesGUIViewController(onSendToChat: sendToChat)
         } else {
             vc = FullGramCustomPluginGUIViewController(spec: spec, onSendToChat: sendToChat)
@@ -1462,9 +1459,6 @@ final class FullGramAIOverlayCoordinator {
                 explicitPeerId: peerId,
                 autoSend: true
             )
-        })
-        sheet.addAction(UIAlertAction(title: "👑 BetKing Казино (Анимированный UI)", style: .default) { [weak self] _ in
-            self?.presentPluginGUI(spec: ["kind": "betking_casino", "pluginId": "fg_casino", "game": "zeus"])
         })
         sheet.addAction(UIAlertAction(title: "⏰ Открыть Дедлайны (Графический UI)", style: .default) { [weak self] _ in
             self?.presentPluginGUI(spec: ["kind": "deadlines", "pluginId": "fg_deadlines"])

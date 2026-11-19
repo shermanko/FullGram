@@ -61,7 +61,6 @@ REQUIRED_FILES = [
     "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramSettingsSearchScreen.swift",
     "tools/cloudflare-worker/src/index.js",
     "submodules/TelegramUI/Sources/FullGramAIOverlay.swift",
-    "submodules/TelegramUI/Sources/FullGramCasinoBetKingController.swift",
     "submodules/TelegramUI/Sources/FullGramChatLock.swift",
     "assets/discord_cosmetics.json",
     "submodules/TelegramUI/Sources/FullGramLyrics.swift",
