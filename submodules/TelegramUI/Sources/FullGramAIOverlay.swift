@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import WebKit
 import Display
 import Postbox
 import TelegramCore
@@ -1439,7 +1440,12 @@ final class FullGramAIOverlayCoordinator {
         }
 
         let vc: UIViewController
-        if kind.contains("deadline") || kind.contains("dl") {
+        if kind == "webview", let rawUrl = spec["url"] as? String, let url = URL(string: rawUrl), url.scheme?.lowercased() == "https" {
+            let webVC = FullGramPluginWebViewController(url: url, onSendToChat: sendToChat)
+            webVC.modalPresentationStyle = .fullScreen
+            self.presentNativeUIKitController(webVC, retryCount: retryCount)
+            return
+        } else if kind.contains("deadline") || kind.contains("dl") {
             vc = FullGramDeadlinesGUIViewController(onSendToChat: sendToChat)
         } else {
             vc = FullGramCustomPluginGUIViewController(spec: spec, onSendToChat: sendToChat)
@@ -2205,6 +2211,103 @@ private final class FullGramCustomPluginGUIViewController: UIViewController {
                 self.outputLabel.text = str
                 self.lastChatText = str
             }
+        }
+    }
+}
+
+@MainActor
+private final class FullGramPluginWebMessageHandler: NSObject, WKScriptMessageHandler {
+    weak var owner: FullGramPluginWebViewController?
+    init(owner: FullGramPluginWebViewController) {
+        self.owner = owner
+    }
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        self.owner?.handleScriptMessage(message.body)
+    }
+}
+
+@MainActor
+private final class FullGramPluginWebViewController: UIViewController {
+    private let url: URL
+    private let titleText: String
+    private let onSendToChat: (String) -> Void
+    private var webView: WKWebView?
+    private let impactLight = UIImpactFeedbackGenerator(style: .light)
+    private let impactMedium = UIImpactFeedbackGenerator(style: .medium)
+    private let impactHeavy = UIImpactFeedbackGenerator(style: .heavy)
+    private let notifFeedback = UINotificationFeedbackGenerator()
+
+    init(url: URL, title: String, onSendToChat: @escaping (String) -> Void) {
+        self.url = url
+        self.titleText = title
+        self.onSendToChat = onSendToChat
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        self.view.backgroundColor = UIColor(red: 0.03, green: 0.04, blue: 0.06, alpha: 1.0)
+
+        let contentController = WKUserContentController()
+        let proxy = FullGramPluginWebMessageHandler(owner: self)
+        contentController.add(proxy, name: "fullgramPlugin")
+
+        let config = WKWebViewConfiguration()
+        config.userContentController = contentController
+        config.allowsInlineMediaPlayback = true
+
+        let wv = WKWebView(frame: .zero, configuration: config)
+        wv.translatesAutoresizingMaskIntoConstraints = false
+        wv.isOpaque = false
+        wv.backgroundColor = UIColor(red: 0.03, green: 0.04, blue: 0.06, alpha: 1.0)
+        wv.scrollView.backgroundColor = UIColor(red: 0.03, green: 0.04, blue: 0.06, alpha: 1.0)
+        wv.scrollView.bounces = false
+        self.view.addSubview(wv)
+        self.webView = wv
+
+        NSLayoutConstraint.activate([
+            wv.topAnchor.constraint(equalTo: self.view.topAnchor),
+            wv.leadingAnchor.constraint(equalTo: self.view.leadingAnchor),
+            wv.trailingAnchor.constraint(equalTo: self.view.trailingAnchor),
+            wv.bottomAnchor.constraint(equalTo: self.view.bottomAnchor)
+        ])
+
+        var req = URLRequest(url: self.url)
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        wv.load(req)
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if self.isBeingDismissed {
+            self.webView?.configuration.userContentController.removeScriptMessageHandler(forName: "fullgramPlugin")
+        }
+    }
+
+    func handleScriptMessage(_ body: Any) {
+        guard let dict = body as? [String: Any], let action = dict["action"] as? String else { return }
+        switch action {
+        case "close":
+            self.dismiss(animated: true)
+        case "shareChat":
+            if let text = dict["text"] as? String, !text.isEmpty {
+                self.onSendToChat(text)
+            }
+        case "haptic":
+            let kind = (dict["kind"] as? String) ?? "light"
+            switch kind {
+            case "heavy": self.impactHeavy.impactOccurred()
+            case "medium": self.impactMedium.impactOccurred()
+            case "success": self.notifFeedback.notificationOccurred(.success)
+            case "error": self.notifFeedback.notificationOccurred(.error)
+            default: self.impactLight.impactOccurred()
+            }
+        default:
+            break
         }
     }
 }

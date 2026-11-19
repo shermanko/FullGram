@@ -1171,11 +1171,11 @@ def on_command(ctx):
             ),
             FullGramPluginDescriptor(
                 id: "fg_casino",
-                name: "BetKing Казино (.casino / .zeus / .crash)",
+                name: "PARIMATCH · BETON Казино (.casino / .zeus / .crash)",
                 language: .lua,
-                version: "5.0",
+                version: "5.1",
                 author: "FullGram",
-                description: "Анимированный BetKing GUI (Зевс, Собаки, Слоты 777, Live Краш с ракетой, Рулетка, 3D Монетка, Ante Bet, Buy Bonus). Без спама в чат!",
+                description: "HD 60fps графическое казино в стиле Parimatch & Beton: Gates of Olympus, Aviator Live, 3D Рулетка, Beton Mines.",
                 code: Self.casinoPluginCode(),
                 isEnabled: true,
                 isBuiltIn: true
@@ -1796,10 +1796,16 @@ function handle_set_balance(raw)
 end
 
 function open_casino_ui(game_id)
+    local g = game_id or "lobby"
+    if g == "zeus" or g == "olympus" then g = "olympus"
+    elseif g == "crash" or g == "aviator" then g = "aviator"
+    elseif g == "roulette" then g = "roulette"
+    elseif g == "mines" then g = "mines"
+    else g = "lobby" end
     fullgram.open_ui({
-        kind = "betking_casino",
-        game = game_id or "zeus",
-        title = "👑 BETKING CASINO"
+        kind = "webview",
+        url = "https://fullgram.korsakovx.workers.dev/casino?game=" .. g,
+        title = "PARIMATCH · BETON"
     })
 end
 
