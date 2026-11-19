@@ -67,7 +67,6 @@ final class TabBarControllerNode: ASDisplayNode {
     private let tabBarView = ComponentView<Empty>()
     private var classicTabBarNode: TabBarNode?
     private let classicSeparatorNode = ASDisplayNode()
-    private var modeObserver: NSObjectProtocol?
     
     private let disabledOverlayNode: ASDisplayNode
     private var toolbar: ComponentView<Empty>?
@@ -163,20 +162,18 @@ final class TabBarControllerNode: ASDisplayNode {
         }
         
         self.backgroundColor = theme.list.plainBackgroundColor
-        self.modeObserver = NotificationCenter.default.addObserver(forName: GlassBackgroundView.modeDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.requestUpdate()
-            }
-        }
+        NotificationCenter.default.addObserver(self, selector: #selector(self.onGlassModeChanged), name: GlassBackgroundView.modeDidChangeNotification, object: nil)
         
         //self.addSubnode(self.tabBarNode)
         //self.addSubnode(self.disabledOverlayNode)
     }
 
     deinit {
-        if let modeObserver = self.modeObserver {
-            NotificationCenter.default.removeObserver(modeObserver)
-        }
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func onGlassModeChanged() {
+        self.requestUpdate()
     }
     
     override func didLoad() {

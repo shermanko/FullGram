@@ -402,7 +402,6 @@ public class ChatMessageBackground: ASDisplayNode {
         }
         
         self.outlineImageNode.image = outlineImage
-        self.applyFullGramBubbleStyle()
     }
 
     public func animateFrom(sourceView: UIView, transition: CombinedTransition) {
