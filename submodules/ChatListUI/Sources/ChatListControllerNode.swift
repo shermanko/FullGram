@@ -1198,6 +1198,8 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
     private var tapRecognizer: UITapGestureRecognizer?
     var navigationBar: NavigationBar?
     let navigationBarView = ComponentView<Empty>()
+    private var fullGramClassicTabs: ChatListFilterTabContainerNode?
+    private var fullGramClassicTabsLayout: (width: CGFloat, sideInset: CGFloat)?
     weak var controller: ChatListControllerImpl?
     
     private var toolbar: ComponentView<Empty>?
@@ -1566,6 +1568,7 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
             )
         }
         
+        var fullGramTabsNode: ASDisplayNode?
         var navigationHeaderPanels: AnyComponent<Empty>?
         if self.controller?.tabContainerData != nil || !panels.isEmpty {
             var tabs: AnyComponent<Empty>?
@@ -1710,6 +1713,27 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
                     liftWhileSwitching: layout.deviceMetrics.type != .tablet
                 ))
             }
+
+            if FullGramExtras.shared.classicDesign, tabs != nil, let tabContainerData = self.controller?.tabContainerData {
+                let classicTabs = self.fullGramClassicTabsNode()
+                self.fullGramClassicTabsLayout = (layout.size.width, layout.safeInsets.left)
+                let isEditing = self.isReorderingFilters || (self.mainContainerNode.currentItemNode.currentState.editing && !self.didBeginSelectingChatsWhileEditing)
+                classicTabs.update(
+                    size: CGSize(width: layout.size.width, height: 46.0),
+                    sideInset: layout.safeInsets.left,
+                    filters: tabContainerData.0,
+                    selectedFilter: self.mainContainerNode.currentItemFilter,
+                    isReordering: self.isReorderingFilters,
+                    isEditing: isEditing,
+                    canReorderAllChats: self.context.isPremium,
+                    filtersLimit: tabContainerData.2,
+                    transitionFraction: self.mainContainerNode.transitionFraction,
+                    presentationData: self.presentationData,
+                    transition: transition.animation.isImmediate ? .immediate : .animated(duration: 0.4, curve: .spring)
+                )
+                fullGramTabsNode = classicTabs
+                tabs = nil
+            }
                 
             navigationHeaderPanels = AnyComponent(HeaderPanelContainerComponent(
                 theme: self.presentationData.theme,
@@ -1760,7 +1784,7 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
                 storiesIncludeHidden: self.location == .chatList(groupId: .archive),
                 uploadProgress: self.controller?.storyUploadProgress ?? [:],
                 headerPanels: navigationHeaderPanels,
-                tabsNode: nil,
+                tabsNode: fullGramTabsNode,
                 tabsNodeIsSearch: false,
                 accessoryPanelContainer: self.controller?.accessoryPanelContainer,
                 accessoryPanelContainerHeight: self.controller?.accessoryPanelContainerHeight ?? 0.0,
@@ -1890,6 +1914,66 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
             mainDelta = 0.0
         }
         transition.updateSublayerTransformOffset(layer: self.mainContainerNode.layer, offset: CGPoint(x: 0.0, y: -mainDelta))
+    }
+
+    private func fullGramClassicTabsNode() -> ChatListFilterTabContainerNode {
+        if let current = self.fullGramClassicTabs {
+            return current
+        }
+        let node = ChatListFilterTabContainerNode(context: self.context)
+        node.tabSelected = { [weak self] id, isDisabled in
+            guard let self else {
+                return
+            }
+            if isDisabled {
+                let context = self.context
+                var replaceImpl: ((ViewController) -> Void)?
+                let controller = PremiumLimitScreen(context: context, subject: .folders, count: self.fullGramClassicTabs?.filtersCount ?? 0, action: {
+                    let controller = PremiumIntroScreen(context: context, source: .folders)
+                    replaceImpl?(controller)
+                    return true
+                })
+                replaceImpl = { [weak controller] c in
+                    controller?.replace(with: c)
+                }
+                self.controller?.push(controller)
+            } else {
+                self.controller?.selectTab(id: id)
+            }
+        }
+        node.tabRequestedDeletion = { [weak self] id in
+            if case let .filter(id) = id {
+                self?.controller?.askForFilterRemoval(id: id)
+            }
+        }
+        node.contextGesture = { [weak self] id, sourceNode, gesture, isDisabled in
+            self?.controller?.tabContextGesture(id: id, sourceNode: sourceNode, sourceView: nil, gesture: gesture, keepInPlace: false, isDisabled: isDisabled)
+        }
+        self.fullGramClassicTabs = node
+        return node
+    }
+
+    func fullGramUpdateClassicTabs(fraction: CGFloat, transition: ContainedViewLayoutTransition) {
+        guard FullGramExtras.shared.classicDesign,
+              let node = self.fullGramClassicTabs,
+              let layout = self.fullGramClassicTabsLayout,
+              let tabContainerData = self.controller?.tabContainerData else {
+            return
+        }
+        let isEditing = self.isReorderingFilters || (self.mainContainerNode.currentItemNode.currentState.editing && !self.didBeginSelectingChatsWhileEditing)
+        node.update(
+            size: CGSize(width: layout.width, height: 46.0),
+            sideInset: layout.sideInset,
+            filters: tabContainerData.0,
+            selectedFilter: self.mainContainerNode.currentItemFilter,
+            isReordering: self.isReorderingFilters,
+            isEditing: isEditing,
+            canReorderAllChats: self.context.isPremium,
+            filtersLimit: tabContainerData.2,
+            transitionFraction: fraction,
+            presentationData: self.presentationData,
+            transition: transition
+        )
     }
     
     func requestNavigationBarLayout(transition: ComponentTransition) {

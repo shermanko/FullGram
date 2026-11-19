@@ -556,6 +556,8 @@ public final class SharedAccountContextImpl: SharedAccountContext {
         let immediateExperimentalUISettingsValue = self.immediateExperimentalUISettingsValue
         let _ = immediateExperimentalUISettingsValue.swap(initialPresentationDataAndSettings.experimentalUISettings)
         
+        FullGramDesignWatchdog.checkOnLaunch()
+        FullGramFeatureFlags.shared.refreshFromRemoteIfNeeded()
         let fullGramFlat = FullGramExtras.shared.classicDesign || FullGramExtras.shared.removeGlass
         GlassBackgroundView.useCustomGlassImpl = immediateExperimentalUISettingsValue.with({ $0.fakeGlass }) || fullGramFlat
         GlassBackgroundView.flatMode = fullGramFlat

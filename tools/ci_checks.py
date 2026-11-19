@@ -29,16 +29,20 @@ REQUIRED_FILES = [
     "build-system/Make/BuildConfiguration.py",
     "build-system/Make/ImportCertificates.py",
     "submodules/Camera/CameraNeo/Sources/FullGramRoundVideoMask.swift",
+    "submodules/Display/Source/FullGramAdmin.swift",
     "submodules/Display/Source/FullGramAIAssistant.swift",
     "submodules/Display/Source/FullGramAntiScam.swift",
     "submodules/Display/Source/FullGramAppearance.swift",
+    "submodules/Display/Source/FullGramAvatarFrames.swift",
     "submodules/Display/Source/FullGramBackup.swift",
     "submodules/Display/Source/FullGramBadges.swift",
+    "submodules/Display/Source/FullGramCosmetics.swift",
     "submodules/Display/Source/FullGramLuaEngine.swift",
     "submodules/Display/Source/FullGramMediaAudio.swift",
     "submodules/Display/Source/FullGramPluginManager.swift",
     "submodules/Display/Source/FullGramPluginValue.swift",
     "submodules/Display/Source/FullGramPythonEngine.swift",
+    "submodules/Display/Source/FullGramRustEngine.swift",
     "submodules/Display/Source/FullGramSpeechBleep.swift",
     "submodules/Display/Source/FullGramVoiceDSP.swift",
     "submodules/TelegramCore/Sources/FullGram/FullGramGhostMode.swift",
@@ -47,10 +51,13 @@ REQUIRED_FILES = [
     "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramAIAssistantScreen.swift",
     "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramAntiScamScreen.swift",
     "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramAppearanceScreens.swift",
+    "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramBadgeDeskController.swift",
+    "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramCosmeticScreens.swift",
     "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramMediaAudioScreens.swift",
     "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramPluginsScreen.swift",
     "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramSettingsController.swift",
     "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramSettingsSearchScreen.swift",
+    "tools/cloudflare-worker/src/index.js",
     "submodules/TelegramUI/Sources/FullGramAIOverlay.swift",
     "submodules/TelegramUI/Sources/FullGramChatLock.swift",
     "submodules/TelegramUI/Sources/FullGramLyrics.swift",
@@ -559,6 +566,93 @@ def check_python_scripts() -> int:
     return len(py_files)
 
 
+def check_no_hardcoded_secrets() -> None:
+    patterns = [
+        ("API key (sk-)", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b")),
+        ("GitHub token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b")),
+        ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+        ("Telegram Bot token", re.compile(r"\b\d{8,11}:[A-Za-z0-9_-]{30,}\b")),
+        ("Hardcoded Bearer token", re.compile(r"Bearer\s+[A-Za-z0-9._-]{20,}")),
+        ("Hardcoded admin secret", re.compile(r"(?:ADMIN_TOKEN|TG_BOT_TOKEN|SESSION_SECRET)\s*[:=]\s*[\"'][^\"']{8,}[\"']")),
+    ]
+    scan_paths = list(iter_fullgram_swift_files()) + [
+        ROOT / "tools/cloudflare-worker/src/index.js",
+        ROOT / "tools/cloudflare-worker/wrangler.jsonc",
+    ]
+    for path in scan_paths:
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        for label, rx in patterns:
+            m = rx.search(text)
+            if m:
+                line_no = text[: m.start()].count("\n") + 1
+                raise AssertionError(f"Potential hardcoded secret ({label}) in {path.relative_to(ROOT)}:{line_no}")
+
+
+def check_fullgram_tabs_and_ui_safety() -> int:
+    peer_info_dir = ROOT / "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources"
+    checked_controllers = 0
+    for path in sorted(peer_info_dir.glob("FullGram*.swift")):
+        text = path.read_text(encoding="utf-8")
+        rel = path.relative_to(ROOT)
+
+        # 1. Every ItemListController factory must deliver state on main queue.
+        funcs = list(re.finditer(r"(?:public |private |internal )?func (fullGram\w+)\(", text))
+        for i, match in enumerate(funcs):
+            start = match.start()
+            end = funcs[i + 1].start() if i + 1 < len(funcs) else len(text)
+            body = text[start:end]
+            if "ItemListController(" in body:
+                checked_controllers += 1
+                if "deliverOnMainQueue" not in body and "queue: .mainQueue()" not in body:
+                    raise AssertionError(f"{rel} -> {match.group(1)}() creates ItemListController without main-queue delivery")
+
+        # 2. Custom ListViewItemNode subclasses must not touch self.view inside init() (UIKit thread-safety / black screen).
+        for node_match in re.finditer(r"class\s+(FullGram\w+Node)\s*:\s*ListViewItemNode\b", text):
+            chunk = text[node_match.start() : node_match.start() + 3000]
+            init_match = re.search(r"\binit\([^)]*\)\s*\{(.*?)\n    \}", chunk, re.S)
+            if init_match and "self.view." in init_match.group(1):
+                raise AssertionError(f"{rel} -> {node_match.group(1)}.init() touches self.view (move to didLoad())")
+
+    # 3. Verify every FullGramCategory case is handled in fullGramSettingsController.
+    settings_path = peer_info_dir / "FullGramSettingsController.swift"
+    settings_text = settings_path.read_text(encoding="utf-8")
+    cat_enum = re.search(r"public enum FullGramCategory:.*?\n\}", settings_text, re.S)
+    if not cat_enum:
+        raise AssertionError("FullGramCategory enum not found in FullGramSettingsController.swift")
+    cases = re.findall(r"case\s+(\w+)\s*=", cat_enum.group(0))
+    if not cases:
+        raise AssertionError("No cases parsed from FullGramCategory")
+    open_cat = re.search(r"openCategory:\s*\{(.*?)\n        \},", settings_text, re.S)
+    if not open_cat:
+        raise AssertionError("openCategory handler not found in FullGramSettingsController.swift")
+    for case_name in cases:
+        if f"case .{case_name}:" not in open_cat.group(1):
+            raise AssertionError(f"FullGramCategory.{case_name} missing in openCategory router")
+
+    return checked_controllers
+
+
+def check_cloudflare_worker() -> None:
+    worker = ROOT / "tools/cloudflare-worker/src/index.js"
+    text = worker.read_text(encoding="utf-8")
+    if "verifyTelegramInitData" not in text:
+        raise AssertionError("Cloudflare worker missing Telegram initData cryptographic verification")
+    cosmetics_post = re.search(r'path === "/cosmetics"\)\s*\{(.*?)\n    \}', text, re.S)
+    if not cosmetics_post or "authenticateRequest" not in cosmetics_post.group(1):
+        raise AssertionError("Cloudflare worker POST /cosmetics must enforce authenticateRequest()")
+    admin_block = re.search(r'path\.startsWith\("/admin/"\)\)\s*\{(.*?)path === "/admin/badge"', text, re.S)
+    if not admin_block or "authenticateRequest" not in admin_block.group(1) or "auth.isAdmin" not in admin_block.group(1):
+        raise AssertionError("Cloudflare worker /admin/* must enforce authenticateRequest() and auth.isAdmin")
+
+    import shutil
+    if shutil.which("node"):
+        res = subprocess.run(["node", "--check", str(worker)], capture_output=True, text=True)
+        if res.returncode != 0:
+            raise AssertionError(f"Cloudflare worker JS syntax error:\n{res.stderr.strip()}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run FullGram pre-build CI checks.")
     parser.add_argument(
@@ -587,6 +681,15 @@ def main() -> int:
     check_conflict_markers_in_core_files()
     swift_count = check_swift_sources()
     print(f"[OK] FullGram Swift source sanity checks ({swift_count} files)")
+
+    check_no_hardcoded_secrets()
+    print("[OK] Hardcoded secrets scan (0 leaks)")
+
+    tab_count = check_fullgram_tabs_and_ui_safety()
+    print(f"[OK] FullGram tab & UI thread-safety checks ({tab_count} ItemListController routes)")
+
+    check_cloudflare_worker()
+    print("[OK] Cloudflare Worker security & JS syntax checks")
 
     py_count = check_python_scripts()
     print(f"[OK] Python build scripts syntax check ({py_count} files)")

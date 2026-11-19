@@ -156,7 +156,16 @@ final class TabBarControllerNode: ASDisplayNode {
             if self.isUpdateRequested {
                 self.isUpdateRequested = false
                 if let layoutResult = self.layoutResult {
-                    let _ = self.updateImpl(params: layoutResult.params, transition: .immediate)
+                    let refreshed = Params(
+                        layout: layoutResult.params.layout,
+                        toolbar: layoutResult.params.toolbar,
+                        isTabBarHidden: self.tabBarHidden,
+                        currentControllerSearchState: self.currentController?.tabBarSearchState,
+                        itemCount: self.tabBarItems.count,
+                        isClassicDesign: GlassBackgroundView.classicDesignMode
+                    )
+                    let bottomInset = self.updateImpl(params: refreshed, transition: .immediate)
+                    self.layoutResult = LayoutResult(params: refreshed, bottomInset: bottomInset)
                 }
             }
         }
@@ -383,7 +392,7 @@ final class TabBarControllerNode: ASDisplayNode {
             tabBarFrame = CGRect(origin: CGPoint(x: centeredX, y: params.layout.size.height - (self.tabBarHidden ? 0.0 : (tabBarSize.height + tabBarBottomInset))), size: tabBarSize)
         }
         
-        let useClassicTabBar = params.isClassicDesign && (params.currentControllerSearchState?.isActive != true)
+        let useClassicTabBar = params.isClassicDesign && sidePlacement == nil && (params.currentControllerSearchState?.isActive != true)
         var classicBottomInsetResult: CGFloat?
 
         if useClassicTabBar {
@@ -406,11 +415,16 @@ final class TabBarControllerNode: ASDisplayNode {
                 self.addSubnode(self.classicSeparatorNode)
                 classicNode = created
             }
+            if classicNode.tabBarItems.count != self.tabBarItems.count {
+                classicNode.tabBarItems = self.tabBarItems
+            }
             if classicNode.selectedIndex != self.selectedIndex {
                 classicNode.selectedIndex = self.selectedIndex
             }
             classicNode.isHidden = false
             self.classicSeparatorNode.isHidden = false
+            self.view.bringSubviewToFront(classicNode.view)
+            self.view.bringSubviewToFront(self.classicSeparatorNode.view)
 
             let rawBottomInset = params.layout.insets(options: []).bottom
             let leftInset = params.layout.safeInsets.left
@@ -465,6 +479,7 @@ final class TabBarControllerNode: ASDisplayNode {
             }
             tabBarFrameTransition.updateFrame(view: tabBarComponentView, frame: tabBarFrame)
             transition.updateAlpha(layer: tabBarComponentView.layer, alpha: tabBarAlpha)
+            tabBarComponentView.isUserInteractionEnabled = !self.tabBarHidden && !useClassicTabBar && params.toolbar == nil
             // A hidden bar is moved below the screen, not removed: VoiceOver must not reach it there.
             tabBarComponentView.accessibilityElementsHidden = self.tabBarHidden || useClassicTabBar
         }
@@ -626,6 +641,7 @@ final class TabBarControllerNode: ASDisplayNode {
     
     func updateSelectedIndex(index: Int) {
         self.selectedIndex = index
+        self.classicTabBarNode?.selectedIndex = index
         self.isChangingSelectedIndex = true
         self.requestUpdate()
     }

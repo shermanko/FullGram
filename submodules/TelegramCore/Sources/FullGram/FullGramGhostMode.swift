@@ -1499,8 +1499,18 @@ public final class FullGramExtras: @unchecked Sendable {
     }
 
     public var classicDesign: Bool {
-        get { bool("classicDesign", default: false) }
-        set { setBool("classicDesign", newValue) }
+        get {
+            guard FullGramFeatureFlags.isEnabled(.classicDesign) else { return false }
+            return bool("classicDesign", default: false)
+        }
+        set {
+            if newValue {
+                FullGramDesignWatchdog.armPendingClassicDesign()
+            } else {
+                FullGramDesignWatchdog.clearPendingClassicDesign()
+            }
+            setBool("classicDesign", newValue)
+        }
     }
 
     public var removeGlass: Bool {
@@ -1566,6 +1576,11 @@ public final class FullGramExtras: @unchecked Sendable {
         private var observers: [NSObjectProtocol] = []
 
         private init() {
+            if Thread.isMainThread {
+                self.captured = MainActor.assumeIsolated {
+                    UIScreen.screens.contains { $0.isCaptured }
+                }
+            }
             let nc = NotificationCenter.default
             let c1 = nc.addObserver(forName: UIScreen.capturedDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor [weak self] in
@@ -1632,6 +1647,7 @@ public final class FullGramExtras: @unchecked Sendable {
     }
 
     public var isScreenCaptureActive: Bool {
+        guard FullGramFeatureFlags.isEnabled(.screenCapturePrivacy) else { return false }
         return ScreenCaptureMonitor.shared.isActive
     }
 
@@ -1874,4 +1890,248 @@ public enum FullGramLinkCleaner {
         }
     }
 }
+
+// MARK: - Feature Flags (Phase 0 kill-switches, remote + local overrides)
+
+public enum FullGramFeatureFlag: String, CaseIterable, Sendable {
+    case classicDesign
+    case cloudCosmetics
+    case avatarFrames
+    case nicknameStyles
+    case adminPanel
+    case screenCapturePrivacy
+    case chatFaceIdLock
+    case pluginsEngine
+    case aiAssistant
+    case paperDeleteAnimation
+
+    public var defaultValue: Bool {
+        switch self {
+        case .classicDesign,
+             .cloudCosmetics,
+             .avatarFrames,
+             .nicknameStyles,
+             .adminPanel,
+             .screenCapturePrivacy,
+             .chatFaceIdLock,
+             .pluginsEngine,
+             .aiAssistant,
+             .paperDeleteAnimation:
+            return true
+        }
+    }
+}
+
+private struct FullGramRemoteFlagsPayload: Codable {
+    var version: Int?
+    var flags: [String: Bool]
+}
+
+public final class FullGramFeatureFlags: @unchecked Sendable {
+    public static let shared = FullGramFeatureFlags()
+    public static let didChangeNotification = Notification.Name("FullGram.FeatureFlagsDidChange")
+
+    private static let remoteURL = "https://fullgram.korsakovx.workers.dev/config.json"
+    private static let remoteCacheKey = "fullgram.flags.remoteCache"
+    private static let localOverridePrefix = "fullgram.flags.override."
+    private static let lastSyncKey = "fullgram.flags.lastSync"
+
+    private let lock = NSRecursiveLock()
+    private var remoteFlags: [String: Bool] = [:]
+    private var localOverrides: [String: Bool] = [:]
+    private var isRefreshing = false
+
+    private static let session: URLSession = {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = 8.0
+        cfg.timeoutIntervalForResource = 12.0
+        cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: cfg)
+    }()
+
+    private init() {
+        self.loadFromDefaults()
+    }
+
+    private func loadFromDefaults() {
+        let defaults = UserDefaults.standard
+        var remote: [String: Bool] = [:]
+        if let data = defaults.data(forKey: Self.remoteCacheKey),
+           let decoded = try? JSONDecoder().decode([String: Bool].self, from: data) {
+            remote = decoded
+        }
+        var overrides: [String: Bool] = [:]
+        for flag in FullGramFeatureFlag.allCases {
+            let key = Self.localOverridePrefix + flag.rawValue
+            if defaults.object(forKey: key) != nil {
+                overrides[flag.rawValue] = defaults.bool(forKey: key)
+            }
+        }
+        self.lock.lock()
+        self.remoteFlags = remote
+        self.localOverrides = overrides
+        self.lock.unlock()
+    }
+
+    public static func isEnabled(_ flag: FullGramFeatureFlag) -> Bool {
+        return self.shared.value(for: flag)
+    }
+
+    public func value(for flag: FullGramFeatureFlag) -> Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        if let local = self.localOverrides[flag.rawValue] {
+            return local
+        }
+        if let remote = self.remoteFlags[flag.rawValue] {
+            return remote
+        }
+        return flag.defaultValue
+    }
+
+    public func setLocalOverride(_ flag: FullGramFeatureFlag, value: Bool?) {
+        let key = Self.localOverridePrefix + flag.rawValue
+        self.lock.lock()
+        if let value {
+            self.localOverrides[flag.rawValue] = value
+            UserDefaults.standard.set(value, forKey: key)
+        } else {
+            self.localOverrides.removeValue(forKey: flag.rawValue)
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+        self.lock.unlock()
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: flag.rawValue)
+        NotificationCenter.default.post(name: FullGramExtras.didChangeNotification, object: flag.rawValue)
+    }
+
+    public func refreshFromRemoteIfNeeded(maxAge: TimeInterval = 300.0) {
+        let last = UserDefaults.standard.double(forKey: Self.lastSyncKey)
+        if Date().timeIntervalSince1970 - last < maxAge {
+            return
+        }
+        self.refreshFromRemote(completion: nil)
+    }
+
+    public func refreshFromRemote(completion: ((Bool) -> Void)? = nil) {
+        guard let url = URL(string: Self.remoteURL) else {
+            completion?(false)
+            return
+        }
+        self.lock.lock()
+        if self.isRefreshing {
+            self.lock.unlock()
+            return
+        }
+        self.isRefreshing = true
+        self.lock.unlock()
+
+        var req = URLRequest(url: url)
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        Self.session.dataTask(with: req) { [weak self] data, response, _ in
+            guard let self else { return }
+            defer {
+                self.lock.lock()
+                self.isRefreshing = false
+                self.lock.unlock()
+            }
+            guard let http = response as? HTTPURLResponse,
+                  (200 ..< 300).contains(http.statusCode),
+                  let data,
+                  data.count <= 65_536,
+                  let payload = try? JSONDecoder().decode(FullGramRemoteFlagsPayload.self, from: data) else {
+                DispatchQueue.main.async { completion?(false) }
+                return
+            }
+
+            if let encoded = try? JSONEncoder().encode(payload.flags) {
+                UserDefaults.standard.set(encoded, forKey: Self.remoteCacheKey)
+            }
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastSyncKey)
+
+            self.lock.lock()
+            self.remoteFlags = payload.flags
+            self.lock.unlock()
+
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+                NotificationCenter.default.post(name: FullGramExtras.didChangeNotification, object: "featureFlags")
+                completion?(true)
+            }
+        }.resume()
+    }
+}
+
+// MARK: - Classic Design Auto-Rollback Watchdog (Phase 1.2)
+
+public enum FullGramDesignWatchdog {
+    private static let pendingKey = "fullgram.watchdog.classicDesignPending"
+    private static let launchStreakKey = "fullgram.watchdog.classicDesignLaunchStreak"
+    private static let rolledBackKey = "fullgram.watchdog.classicDesignRolledBack"
+    private static let lock = NSLock()
+
+    public static func armPendingClassicDesign() {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        let defaults = UserDefaults.standard
+        defaults.set(true, forKey: self.pendingKey)
+        defaults.set(0, forKey: self.launchStreakKey)
+        defaults.set(false, forKey: self.rolledBackKey)
+    }
+
+    public static func clearPendingClassicDesign() {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        let defaults = UserDefaults.standard
+        defaults.set(false, forKey: self.pendingKey)
+        defaults.set(0, forKey: self.launchStreakKey)
+    }
+
+    /// Call on app launch before applying `classicDesign` to Glass/TabBar.
+    /// If classic design failed to reach a verified settings/UI open on the previous session,
+    /// automatically rolls back `classicDesign` to `false` so the user is never locked out of settings.
+    @discardableResult
+    public static func checkOnLaunch() -> Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        let defaults = UserDefaults.standard
+        let classicRawKey = "fullgram.extra.classicDesign"
+        guard defaults.bool(forKey: classicRawKey) else {
+            defaults.set(false, forKey: self.pendingKey)
+            defaults.set(0, forKey: self.launchStreakKey)
+            return false
+        }
+        let pending = defaults.bool(forKey: self.pendingKey)
+        let streak = defaults.integer(forKey: self.launchStreakKey) + 1
+        defaults.set(streak, forKey: self.launchStreakKey)
+
+        if pending && streak >= 2 {
+            defaults.set(false, forKey: classicRawKey)
+            defaults.set(false, forKey: self.pendingKey)
+            defaults.set(0, forKey: self.launchStreakKey)
+            defaults.set(true, forKey: self.rolledBackKey)
+            return true
+        }
+        return false
+    }
+
+    /// Call when Settings / FullGram Settings successfully renders.
+    public static func markUIVerified() {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        let defaults = UserDefaults.standard
+        if defaults.bool(forKey: self.pendingKey) || defaults.integer(forKey: self.launchStreakKey) > 0 {
+            defaults.set(false, forKey: self.pendingKey)
+            defaults.set(0, forKey: self.launchStreakKey)
+        }
+    }
+
+    public static var didAutoRollback: Bool {
+        return UserDefaults.standard.bool(forKey: self.rolledBackKey)
+    }
+
+    public static func clearRollbackNotice() {
+        UserDefaults.standard.set(false, forKey: self.rolledBackKey)
+    }
+}
+
 

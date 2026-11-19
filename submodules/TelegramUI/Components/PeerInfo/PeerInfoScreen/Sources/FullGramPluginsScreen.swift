@@ -673,6 +673,7 @@ private enum FullGramPluginDocsEntry: ItemListNodeEntry {
 
 private func fullGramPluginApiDocsController(context: AccountContext) -> ViewController {
     let signal = context.sharedContext.presentationData
+    |> deliverOnMainQueue
     |> map { presentationData -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let entries: [FullGramPluginDocsEntry] = [
             .header(0, "ХУКИ ПЛАГИНОВ (LUA И PYTHON)"),

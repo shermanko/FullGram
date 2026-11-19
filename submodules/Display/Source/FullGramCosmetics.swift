@@ -174,6 +174,7 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        _ = FullGramAdmin.shared.applyAuthHeaders(to: &req)
         req.httpBody = data
         Self.session.dataTask(with: req) { [weak self] _, response, _ in
             if let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) {

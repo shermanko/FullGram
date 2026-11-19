@@ -1021,13 +1021,30 @@ def on_command(ctx):
   ]
 };
 
-function jsonResponse(data, status = 200) {
+const DEFAULT_FEATURE_FLAGS = {
+  classicDesign: true,
+  cloudCosmetics: true,
+  avatarFrames: true,
+  nicknameStyles: true,
+  adminPanel: true,
+  screenCapturePrivacy: true,
+  chatFaceIdLock: true,
+  pluginsEngine: true,
+  aiAssistant: true,
+  paperDeleteAnimation: true
+};
+
+const MAX_INIT_DATA_AGE_SECONDS = 24 * 60 * 60;
+const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+function jsonResponse(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data, null, 2), {
     status,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
-      "Access-Control-Allow-Origin": "*"
+      "Access-Control-Allow-Origin": "*",
+      ...extraHeaders
     }
   });
 }
@@ -1045,26 +1062,247 @@ function timingSafeEqual(a, b) {
   return diff === 0;
 }
 
-async function sha256Hex(text) {
-  const data = new TextEncoder().encode(text);
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(digest))
+function bytesToHex(bytes) {
+  return Array.from(new Uint8Array(bytes))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
 }
 
+function base64UrlEncodeBytes(bytes) {
+  let binary = "";
+  const arr = new Uint8Array(bytes);
+  for (let i = 0; i < arr.length; i++) {
+    binary += String.fromCharCode(arr[i]);
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function base64UrlEncodeString(text) {
+  return base64UrlEncodeBytes(new TextEncoder().encode(text));
+}
+
+function base64UrlDecodeToString(str) {
+  const padded = str.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((str.length + 3) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+async function hmacSha256Raw(keyBytes, message) {
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const msgBytes = typeof message === "string" ? new TextEncoder().encode(message) : message;
+  return new Uint8Array(await crypto.subtle.sign("HMAC", cryptoKey, msgBytes));
+}
+
+async function sha256Hex(text) {
+  const data = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return bytesToHex(digest);
+}
+
+function getAdminIds(env) {
+  const raw = [env.ADMIN_TG_IDS, env.ADMIN_TG_ID]
+    .filter((v) => typeof v === "string" && v.trim())
+    .join(",");
+  const ids = raw
+    .split(/[\s,;]+/)
+    .map((s) => s.trim())
+    .filter((s) => /^\d{1,20}$/.test(s));
+  if (!ids.length) {
+    ids.push(DEFAULT_OWNER_ID);
+  }
+  return new Set(ids);
+}
+
+function isAdminUserId(userId, env) {
+  const clean = String(userId || "").trim();
+  if (!/^\d{1,20}$/.test(clean)) return false;
+  return getAdminIds(env).has(clean);
+}
+
+function getSessionSecret(env) {
+  return (env.SESSION_SECRET || env.ADMIN_TOKEN || env.TG_BOT_TOKEN || "").trim();
+}
+
+async function issueSessionToken(userId, role, env, ttlSeconds = SESSION_TTL_SECONDS) {
+  const secret = getSessionSecret(env);
+  if (!secret) {
+    throw new Error("Server signing secret is not configured");
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const payload = {
+    uid: String(userId),
+    role: role === "admin" ? "admin" : "user",
+    iat: now,
+    exp: now + ttlSeconds
+  };
+  const payloadB64 = base64UrlEncodeString(JSON.stringify(payload));
+  const sigBytes = await hmacSha256Raw(new TextEncoder().encode(secret), `fg1.${payloadB64}`);
+  const sigB64 = base64UrlEncodeBytes(sigBytes);
+  return {
+    token: `fg1.${payloadB64}.${sigB64}`,
+    expiresAt: payload.exp
+  };
+}
+
+async function verifySessionToken(token, env) {
+  if (typeof token !== "string" || !token.startsWith("fg1.")) return null;
+  const secret = getSessionSecret(env);
+  if (!secret) return null;
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  const [, payloadB64, providedSig] = parts;
+  const expectedSigBytes = await hmacSha256Raw(new TextEncoder().encode(secret), `fg1.${payloadB64}`);
+  const expectedSig = base64UrlEncodeBytes(expectedSigBytes);
+  if (!timingSafeEqual(providedSig, expectedSig)) return null;
+  try {
+    const payload = JSON.parse(base64UrlDecodeToString(payloadB64));
+    const uid = String(payload.uid || "").trim();
+    const exp = Number(payload.exp || 0);
+    const now = Math.floor(Date.now() / 1000);
+    if (!/^\d{1,20}$/.test(uid) || !Number.isFinite(exp) || exp <= now) {
+      return null;
+    }
+    const isAdmin = payload.role === "admin" && isAdminUserId(uid, env);
+    return { uid, isAdmin, method: "session_token", exp };
+  } catch {
+    return null;
+  }
+}
+
+async function verifyTelegramInitData(initDataRaw, env) {
+  if (typeof initDataRaw !== "string" || !initDataRaw.trim()) return null;
+  const botToken = String(env.TG_BOT_TOKEN || "").trim();
+  if (!botToken) return null;
+
+  const params = new URLSearchParams(initDataRaw.trim());
+  const providedHash = (params.get("hash") || "").trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(providedHash)) return null;
+
+  const pairs = [];
+  for (const [k, v] of params.entries()) {
+    if (k === "hash") continue;
+    pairs.push([k, v]);
+  }
+  pairs.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  const dataCheckString = pairs.map(([k, v]) => `${k}=${v}`).join("\n");
+
+  const secretKey = await hmacSha256Raw(new TextEncoder().encode("WebAppData"), botToken);
+  const expectedHash = bytesToHex(await hmacSha256Raw(secretKey, dataCheckString));
+  if (!timingSafeEqual(providedHash, expectedHash)) return null;
+
+  const authDate = Number(params.get("auth_date") || 0);
+  const now = Math.floor(Date.now() / 1000);
+  if (!Number.isFinite(authDate) || authDate <= 0 || now - authDate > MAX_INIT_DATA_AGE_SECONDS || authDate - now > 300) {
+    return null;
+  }
+
+  let userObj = null;
+  try {
+    userObj = JSON.parse(params.get("user") || "null");
+  } catch {
+    return null;
+  }
+  const uid = userObj && userObj.id != null ? String(userObj.id).trim() : "";
+  if (!/^\d{1,20}$/.test(uid)) return null;
+
+  return {
+    uid,
+    username: typeof userObj.username === "string" ? userObj.username : null,
+    isAdmin: isAdminUserId(uid, env),
+    method: "telegram_init_data"
+  };
+}
+
+async function authenticateRequest(request, env) {
+  const initDataHeader = (request.headers.get("X-Telegram-Init-Data") || "").trim();
+  if (initDataHeader) {
+    const tgAuth = await verifyTelegramInitData(initDataHeader, env);
+    if (tgAuth) return tgAuth;
+  }
+
+  const authHeader = (request.headers.get("Authorization") || "").trim();
+  if (authHeader.startsWith("tma ")) {
+    const tgAuth = await verifyTelegramInitData(authHeader.slice(4).trim(), env);
+    if (tgAuth) return tgAuth;
+  }
+
+  if (authHeader.startsWith("Bearer ")) {
+    const token = authHeader.slice(7).trim();
+    if (token.startsWith("fg1.")) {
+      const session = await verifySessionToken(token, env);
+      if (session) return session;
+    }
+    if (env.ADMIN_TOKEN && env.ALLOW_LEGACY_ADMIN_TOKEN !== "0" && timingSafeEqual(token, env.ADMIN_TOKEN)) {
+      const ownerId = Array.from(getAdminIds(env))[0] || DEFAULT_OWNER_ID;
+      return { uid: ownerId, isAdmin: true, method: "legacy_admin_token" };
+    }
+  }
+
+  return null;
+}
+
 async function expectedWebhookSecret(env) {
-  if (!env.ADMIN_TOKEN) return null;
-  const hex = await sha256Hex(`${env.ADMIN_TOKEN}:tg-webhook`);
+  const base = (env.ADMIN_TOKEN || env.SESSION_SECRET || env.TG_BOT_TOKEN || "").trim();
+  if (!base) return null;
+  const hex = await sha256Hex(`${base}:tg-webhook`);
   return hex.slice(0, 48);
 }
 
-function isAuthorizedAdmin(request, env) {
-  if (!env.ADMIN_TOKEN) return false;
-  const auth = request.headers.get("Authorization") || "";
-  if (!auth.startsWith("Bearer ")) return false;
-  const token = auth.slice(7).trim();
-  return timingSafeEqual(token, env.ADMIN_TOKEN);
+async function loadFeatureFlags(env) {
+  const base = { ...DEFAULT_FEATURE_FLAGS };
+  if (!env.FULLGRAM_KV) return { version: 1, flags: base };
+  const raw = await env.FULLGRAM_KV.get("feature_flags.json");
+  if (!raw) return { version: 1, flags: base };
+  try {
+    const parsed = JSON.parse(raw);
+    const merged = { ...base };
+    if (parsed && typeof parsed.flags === "object" && parsed.flags) {
+      for (const [k, v] of Object.entries(parsed.flags)) {
+        if (typeof v === "boolean" && /^[a-zA-Z0-9_]{1,48}$/.test(k)) {
+          merged[k] = v;
+        }
+      }
+    }
+    return { version: parsed.version || 1, flags: merged };
+  } catch {
+    return { version: 1, flags: base };
+  }
+}
+
+async function saveFeatureFlags(env, flagsObj) {
+  if (!env.FULLGRAM_KV) return;
+  await env.FULLGRAM_KV.put("feature_flags.json", JSON.stringify(flagsObj, null, 2));
+}
+
+async function loadNfts(env) {
+  const empty = { version: 1, users: {} };
+  if (!env.FULLGRAM_KV) return empty;
+  const raw = await env.FULLGRAM_KV.get("nfts.json");
+  if (!raw) return empty;
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      version: parsed.version || 1,
+      users: parsed.users && typeof parsed.users === "object" ? parsed.users : {}
+    };
+  } catch {
+    return empty;
+  }
+}
+
+async function saveNfts(env, nfts) {
+  if (!env.FULLGRAM_KV) return;
+  await env.FULLGRAM_KV.put("nfts.json", JSON.stringify(nfts, null, 2));
 }
 
 async function loadBadges(env) {
@@ -1366,12 +1604,29 @@ async function handleTelegramWebhook(request, env, origin) {
     return jsonResponse({ ok: true });
   }
 
-  const ownerId = String(env.ADMIN_TG_ID || DEFAULT_OWNER_ID).trim();
   const senderId = String(msg.from.id);
   const chatId = msg.chat?.id ?? msg.from.id;
+  const senderIsAdmin = isAdminUserId(senderId, env);
 
-  if (senderId !== ownerId) {
-    await sendTelegramMessage(env, chatId, "⛔ Доступ запрещён. Этот бот работает только для владельца FullGram.");
+  const rawText = (msg.text || "").trim();
+  if (rawText === "/auth" || rawText === "/token" || rawText.startsWith("/auth ")) {
+    try {
+      const role = senderIsAdmin ? "admin" : "user";
+      const issued = await issueSessionToken(senderId, role, env);
+      const roleLabel = senderIsAdmin ? "администратора" : "пользователя";
+      await sendTelegramMessage(
+        env,
+        chatId,
+        `🔐 Подписанный токен ${roleLabel} FullGram (ID ${senderId}, действует 7 дней):\n\n${issued.token}\n\nСкопируйте и вставьте его в настройках FullGram.`
+      );
+    } catch (err) {
+      await sendTelegramMessage(env, chatId, `❌ Не удалось выдать токен: ${err.message}`);
+    }
+    return jsonResponse({ ok: true });
+  }
+
+  if (!senderIsAdmin) {
+    await sendTelegramMessage(env, chatId, "⛔ Доступ к админ-командам запрещён. Для синхронизации своих украшений используйте /auth.");
     return jsonResponse({ ok: true });
   }
 
@@ -1445,6 +1700,7 @@ async function handleTelegramWebhook(request, env, origin) {
       "• Подпись к файлу: описание или «Название | Описание».\n" +
       "• В начале скрипта можно указать @name, @id, @version, @author, @description.\n\n" +
       "Команды:\n" +
+      "/auth — получить подписанный токен входа в админ-панель (7 дней)\n" +
       "/list — список плагинов в маркете\n" +
       "/del <id> — удалить плагин из маркета\n" +
       "/badge <id_или_@username> <creator|official|premium|dev|off> — выдать или снять бейдж"
@@ -1518,13 +1774,59 @@ export default {
         headers: {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization"
+          "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Telegram-Init-Data"
         }
       });
     }
 
     if (request.method === "GET" && path === "/health") {
       return jsonResponse({ ok: true, service: "fullgram-worker" });
+    }
+
+    if (request.method === "GET" && path === "/config.json") {
+      return jsonResponse(await loadFeatureFlags(env));
+    }
+
+    if (request.method === "GET" && path === "/auth/me") {
+      const auth = await authenticateRequest(request, env);
+      if (!auth) {
+        return jsonResponse({ ok: true, authenticated: false, userId: null, isAdmin: false });
+      }
+      return jsonResponse({
+        ok: true,
+        authenticated: true,
+        userId: auth.uid,
+        isAdmin: Boolean(auth.isAdmin),
+        method: auth.method
+      });
+    }
+
+    if (request.method === "POST" && path === "/auth/telegram") {
+      let body = {};
+      try {
+        body = await request.json();
+      } catch {
+        body = {};
+      }
+      const initData = (typeof body.initData === "string" && body.initData.trim())
+        ? body.initData.trim()
+        : (request.headers.get("X-Telegram-Init-Data") || "").trim();
+      const verified = await verifyTelegramInitData(initData, env);
+      if (!verified) {
+        return jsonResponse({ ok: false, error: "Invalid or expired Telegram auth signature" }, 401);
+      }
+      try {
+        const issued = await issueSessionToken(verified.uid, verified.isAdmin ? "admin" : "user", env);
+        return jsonResponse({
+          ok: true,
+          userId: verified.uid,
+          isAdmin: verified.isAdmin,
+          token: issued.token,
+          expiresAt: issued.expiresAt
+        });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err.message }, 500);
+      }
     }
 
     if (request.method === "GET" && path === "/badges.json") {
@@ -1535,9 +1837,21 @@ export default {
       return jsonResponse(await loadCosmetics(env));
     }
 
+    if (request.method === "GET" && path === "/nfts.json") {
+      return jsonResponse(await loadNfts(env));
+    }
+
     if (request.method === "POST" && path === "/cosmetics") {
+      const auth = await authenticateRequest(request, env);
+      if (!auth) {
+        return jsonResponse({ ok: false, error: "Unauthorized: valid Telegram auth or session token required" }, 401);
+      }
       try {
         const body = await request.json();
+        const requestedPeerId = body.peerId != null ? String(body.peerId).trim() : "";
+        if (!auth.isAdmin && requestedPeerId !== auth.uid) {
+          return jsonResponse({ ok: false, error: "Forbidden: can only modify your own cosmetics" }, 403);
+        }
         const user = await applyCosmeticChange(env, body);
         return jsonResponse({ ok: true, user });
       } catch (err) {
@@ -1576,10 +1890,11 @@ export default {
       return handleTelegramWebhook(request, env, origin);
     }
 
-    // Protected Admin Endpoints (requires Authorization: Bearer <ADMIN_TOKEN>)
+    // Protected Admin Endpoints (strict server-side Telegram-signed or signed-session admin check)
     if (path.startsWith("/admin/")) {
-      if (!isAuthorizedAdmin(request, env)) {
-        return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
+      const auth = await authenticateRequest(request, env);
+      if (!auth || !auth.isAdmin) {
+        return jsonResponse({ ok: false, error: "Unauthorized: admin verification failed" }, 401);
       }
 
       if (request.method === "GET" && path === "/admin/badge") {
@@ -1600,6 +1915,71 @@ export default {
             ok: true,
             usersCount: Object.keys(badges.users).length + Object.keys(badges.usernames).length
           });
+        } catch (err) {
+          return jsonResponse({ ok: false, error: err.message }, 400);
+        }
+      }
+
+      if (request.method === "POST" && path === "/admin/cosmetics") {
+        try {
+          const body = await request.json();
+          const user = await applyCosmeticChange(env, body);
+          return jsonResponse({ ok: true, user });
+        } catch (err) {
+          return jsonResponse({ ok: false, error: err.message }, 400);
+        }
+      }
+
+      if (request.method === "POST" && path === "/admin/nft") {
+        try {
+          const body = await request.json();
+          const peerId = body.peerId != null ? String(body.peerId).trim() : "";
+          const nftId = body.nftId != null ? String(body.nftId).trim() : "";
+          if (!/^-?\d{1,20}$/.test(peerId) || !/^[a-zA-Z0-9_-]{1,64}$/.test(nftId)) {
+            throw new Error("Invalid peerId or nftId");
+          }
+          const nfts = await loadNfts(env);
+          const list = Array.isArray(nfts.users[peerId]) ? nfts.users[peerId] : [];
+          if (body.enabled === false) {
+            nfts.users[peerId] = list.filter((item) => item.id !== nftId);
+            if (!nfts.users[peerId].length) delete nfts.users[peerId];
+          } else {
+            const entry = {
+              id: nftId,
+              title: typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 64) : nftId,
+              assetUrl: typeof body.assetUrl === "string" ? body.assetUrl.trim().slice(0, 512) : "",
+              grantedBy: auth.uid,
+              grantedAt: Math.floor(Date.now() / 1000)
+            };
+            const idx = list.findIndex((item) => item.id === nftId);
+            if (idx >= 0) list[idx] = entry;
+            else list.push(entry);
+            nfts.users[peerId] = list;
+          }
+          await saveNfts(env, nfts);
+          return jsonResponse({ ok: true, items: nfts.users[peerId] || [] });
+        } catch (err) {
+          return jsonResponse({ ok: false, error: err.message }, 400);
+        }
+      }
+
+      if (request.method === "GET" && path === "/admin/flags") {
+        return jsonResponse({ ok: true, ...(await loadFeatureFlags(env)) });
+      }
+
+      if (request.method === "POST" && path === "/admin/flags") {
+        try {
+          const body = await request.json();
+          const current = await loadFeatureFlags(env);
+          const updates = (body && typeof body.flags === "object" && body.flags) ? body.flags : body;
+          for (const [k, v] of Object.entries(updates || {})) {
+            if (typeof v === "boolean" && /^[a-zA-Z0-9_]{1,48}$/.test(k)) {
+              current.flags[k] = v;
+            }
+          }
+          current.version = (current.version || 1) + 1;
+          await saveFeatureFlags(env, current);
+          return jsonResponse({ ok: true, ...current });
         } catch (err) {
           return jsonResponse({ ok: false, error: err.message }, 400);
         }

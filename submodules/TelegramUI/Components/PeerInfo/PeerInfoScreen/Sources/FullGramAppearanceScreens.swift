@@ -237,14 +237,12 @@ private final class FullGramThemePreviewItem: ListViewItem, ItemListItem {
     }
 
     func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
-        async {
+        Queue.mainQueue().async {
             let node = FullGramThemePreviewItemNode()
             let (layout, apply) = node.asyncLayout()(self, params, neighbors.previous == nil, neighbors.next == nil)
             node.contentSize = layout.contentSize
             node.insets = layout.insets
-            Queue.mainQueue().async {
-                completion(node, { (nil, { _ in apply() }) })
-            }
+            completion(node, { (nil, { _ in apply() }) })
         }
     }
 
@@ -270,6 +268,7 @@ private final class FullGramThemePreviewItemNode: ListViewItemNode {
     private let outgoingLabel = UILabel()
     private let accentPill = UIView()
     private let accentLabel = UILabel()
+    private var didAttachCard = false
 
     init() {
         super.init(layerBacked: false)
@@ -302,7 +301,14 @@ private final class FullGramThemePreviewItemNode: ListViewItemNode {
         self.cardView.addSubview(self.incomingBubble)
         self.cardView.addSubview(self.outgoingBubble)
         self.cardView.addSubview(self.accentPill)
-        self.view.addSubview(self.cardView)
+    }
+
+    override func didLoad() {
+        super.didLoad()
+        if !self.didAttachCard {
+            self.didAttachCard = true
+            self.view.addSubview(self.cardView)
+        }
     }
 
     func asyncLayout() -> (FullGramThemePreviewItem, ListViewItemLayoutParams, Bool, Bool) -> (ListViewItemNodeLayout, () -> Void) {
@@ -702,6 +708,7 @@ private enum FullGramDesignEntry: ItemListNodeEntry {
 }
 
 func fullGramDesignController(context: AccountContext) -> ViewController {
+    FullGramDesignWatchdog.markUIVerified()
     var presentControllerImpl: ((ViewController) -> Void)?
     var presentNativeImpl: ((UIViewController) -> Void)?
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
@@ -799,15 +806,23 @@ func fullGramDesignController(context: AccountContext) -> ViewController {
         let factor = FullGramAnimationSpeed.factor
         let slowLabel = factor <= 1.0 ? "Выкл." : "\(Int(factor))×"
         let glassColorLabel = FullGramExtras.shared.removeGlassColorHex ?? "Авто"
-        let entries: [FullGramDesignEntry] = [
+        var entries: [FullGramDesignEntry] = [
             .header("ДИЗАЙН"),
             .toggle(.removeGlass, "Удаление стекла", FullGramExtras.shared.removeGlass),
-            .flatColor("Цвет заливки вместо стекла", glassColorLabel),
-            .toggle(.classicDesign, "Старый дизайн Telegram", FullGramExtras.shared.classicDesign),
-            .toggle(.glowingReactions, "Светящиеся реакции", FullGramExtras.shared.glowingReactions),
-            .slowMotion("Замедление анимаций", slowLabel),
-            .info("«Удаление стекла» полностью убирает эффект жидкого стекла и заливает панели выбранным сплошным цветом. Изменения интерфейса вступают в силу после перезапуска.")
+            .flatColor("Цвет заливки вместо стекла", glassColorLabel)
         ]
+        if FullGramFeatureFlags.isEnabled(.classicDesign) {
+            entries.append(.toggle(.classicDesign, "Старый дизайн Telegram", FullGramExtras.shared.classicDesign))
+        }
+        entries.append(.toggle(.glowingReactions, "Светящиеся реакции", FullGramExtras.shared.glowingReactions))
+        entries.append(.slowMotion("Замедление анимаций", slowLabel))
+        var infoNote = "«Удаление стекла» полностью убирает эффект жидкого стекла и заливает панели выбранным сплошным цветом. Изменения интерфейса вступают в силу после перезапуска."
+        if FullGramDesignWatchdog.didAutoRollback {
+            infoNote += "\n\nЗащита интерфейса автоматически вернула стандартный дизайн после сбоя предыдущего запуска."
+        } else if !FullGramFeatureFlags.isEnabled(.classicDesign) {
+            infoNote += "\n\nПереключатель «Старый дизайн Telegram» временно скрыт для стабильности интерфейса."
+        }
+        entries.append(.info(infoNote))
 
         let data = ItemListPresentationData(presentationData)
         let state = ItemListControllerState(

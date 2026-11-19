@@ -153,6 +153,7 @@ private enum FullGramGuideEntry: ItemListNodeEntry {
 
 private func fullGramAntiScamGuideController(context: AccountContext) -> ViewController {
     let signal = context.sharedContext.presentationData
+    |> deliverOnMainQueue
     |> map { presentationData -> (ItemListControllerState, (ItemListNodeState, Any)) in
         var entries: [FullGramGuideEntry] = []
         var sectionIndex: Int32 = 0

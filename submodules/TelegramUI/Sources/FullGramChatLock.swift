@@ -54,6 +54,17 @@ private final class FullGramChatLockObserverToken {
         let handler: (Notification) -> Void = { [weak controller] _ in
             controller?.fullGramApplyChatLock()
         }
+        let backgroundHandler: (Notification) -> Void = { [weak controller] _ in
+            if let peerId = controller?.chatLocation.peerId {
+                FullGramChatPrivacy.relock(peerId: peerId.toInt64())
+            } else {
+                FullGramChatPrivacy.relock()
+            }
+            controller?.fullGramApplyChatLock(promptImmediately: false)
+        }
+        self.tokens.append(
+            NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main, using: backgroundHandler)
+        )
         self.tokens.append(
             NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main, using: handler)
         )
@@ -77,7 +88,9 @@ extension ChatControllerImpl {
         }
     }
 
-    func fullGramApplyChatLock() {
+    func fullGramApplyChatLock(promptImmediately: Bool = true) {
+        guard FullGramFeatureFlags.isEnabled(.chatFaceIdLock) else { return }
+        guard self.isNodeLoaded else { return }
         self.fullGramEnsureLockObserver()
         guard let peerId = self.chatLocation.peerId else { return }
         let value = peerId.toInt64()
@@ -86,6 +99,9 @@ extension ChatControllerImpl {
         if let existing = self.view.subviews.first(where: { $0 is FullGramChatLockView }) as? FullGramChatLockView {
             existing.frame = self.view.bounds
             self.view.bringSubviewToFront(existing)
+            if promptImmediately, !existing.isAuthenticating, self.view.window != nil, UIApplication.shared.applicationState == .active {
+                existing.unlock?()
+            }
             return
         }
 
@@ -95,7 +111,8 @@ extension ChatControllerImpl {
         self.view.bringSubviewToFront(lockView)
 
         let authenticate = { [weak self, weak lockView] in
-            guard let lockView, !lockView.isAuthenticating else { return }
+            guard let self, let lockView, !lockView.isAuthenticating else { return }
+            guard self.view.window != nil, UIApplication.shared.applicationState == .active else { return }
             lockView.isAuthenticating = true
             let context = LAContext()
             let ru = Locale.preferredLanguages.first?.hasPrefix("ru") == true
@@ -112,8 +129,9 @@ extension ChatControllerImpl {
                     if success {
                         FullGramChatPrivacy.markUnlocked(value)
                         UIView.animate(withDuration: 0.2, animations: { lockView.alpha = 0.0 }, completion: { _ in lockView.removeFromSuperview() })
-                    } else if let self {
-                        if let nav = self.navigationController as? NavigationController {
+                    } else {
+                        let nav = self.effectiveNavigationController ?? (self.navigationController as? NavigationController)
+                        if let nav {
                             nav.filterController(self, animated: true)
                         } else {
                             let _ = self.navigationController?.popViewController(animated: true)
@@ -123,8 +141,10 @@ extension ChatControllerImpl {
             })
         }
         lockView.unlock = authenticate
-        DispatchQueue.main.async {
-            authenticate()
+        if promptImmediately {
+            DispatchQueue.main.async {
+                authenticate()
+            }
         }
     }
 }

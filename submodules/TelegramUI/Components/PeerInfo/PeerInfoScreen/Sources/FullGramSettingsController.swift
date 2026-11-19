@@ -553,6 +553,7 @@ private final class FullGramHeaderItemNode: ListViewItemNode {
 }
 
 func fullGramSettingsController(context: AccountContext) -> ViewController {
+    FullGramDesignWatchdog.markUIVerified()
     var pushControllerImpl: ((ViewController) -> Void)?
     var navigationControllerImpl: (() -> NavigationController?)?
 
@@ -601,6 +602,7 @@ func fullGramSettingsController(context: AccountContext) -> ViewController {
     )
 
     let signal = context.sharedContext.presentationData
+    |> deliverOnMainQueue
     |> map { presentationData -> (ItemListControllerState, (ItemListNodeState, Any)) in
         var entries: [FullGramSettingsEntry] = [
             .header(presentationData.theme),
@@ -3968,29 +3970,6 @@ func fullGramOtherGeneralController(context: AccountContext) -> ViewController {
         controller?.present(vc, animated: true)
     }
     return controller
-}
-
-private func fullGramCategoryController(context: AccountContext, category: FullGramCategory) -> ViewController {
-    let signal = context.sharedContext.presentationData
-    |> map { presentationData -> (ItemListControllerState, (ItemListNodeState, Any)) in
-        let entries: [FullGramSettingsEntry] = []
-
-        let controllerState = ItemListControllerState(
-            presentationData: ItemListPresentationData(presentationData),
-            title: .text(category.title),
-            leftNavigationButton: nil,
-            rightNavigationButton: nil,
-            backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back)
-        )
-        let listState = ItemListNodeState(
-            presentationData: ItemListPresentationData(presentationData),
-            entries: entries,
-            style: .blocks
-        )
-        return (controllerState, (listState, ()))
-    }
-
-    return ItemListController(context: context, state: signal)
 }
 
 // MARK: - Бейджи FullGram (badges.json)

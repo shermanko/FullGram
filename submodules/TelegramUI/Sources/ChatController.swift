@@ -8478,8 +8478,11 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
     override public func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         self.forwardSideListAppearance(.didDisappear, animated: animated)
-        let isStillInStack = self.navigationController?.viewControllers.contains(where: { $0 === self }) ?? false
-        if self.isBeingDismissed || self.isMovingFromParent || !isStillInStack {
+        let activeNav = self.effectiveNavigationController ?? (self.navigationController as? NavigationController)
+        let isStillInStack = activeNav?.viewControllers.contains(where: { $0 === self }) ?? false
+        let isTopController = activeNav?.topViewController === self
+        let detachedFromWindow = !self.isNodeLoaded || self.view.window == nil
+        if self.isBeingDismissed || self.isMovingFromParent || !isStillInStack || !isTopController || detachedFromWindow {
             if let peerId = self.chatLocation.peerId {
                 FullGramChatPrivacy.relock(peerId: peerId.toInt64())
             }

@@ -84,27 +84,20 @@ private final class FullGramAIHeroItem: ListViewItem, ItemListItem {
     }
 
     func nodeConfiguredForParams(async: @escaping (@escaping () -> Void) -> Void, params: ListViewItemLayoutParams, synchronousLoads: Bool, neighbors: ListViewItemNeighbors, completion: @escaping (ListViewItemNode, @escaping () -> (Signal<Void, NoError>?, (ListViewItemApply) -> Void)) -> Void) {
-        async {
+        Queue.mainQueue().async {
             let node = FullGramAIHeroItemNode()
             let (layout, apply) = node.asyncLayout()(self, params)
             node.contentSize = layout.contentSize
             node.insets = layout.insets
-            Queue.mainQueue().async {
-                completion(node, { return (nil, { _ in apply() }) })
-            }
+            completion(node, { return (nil, { _ in apply() }) })
         }
     }
 
     func updateNode(async: @escaping (@escaping () -> Void) -> Void, node: @escaping () -> ListViewItemNode, params: ListViewItemLayoutParams, neighbors: ListViewItemNeighbors, animation: ListViewItemUpdateAnimation, completion: @escaping (ListViewItemNodeLayout, @escaping (ListViewItemApply) -> Void) -> Void) {
         Queue.mainQueue().async {
             if let nodeValue = node() as? FullGramAIHeroItemNode {
-                let makeLayout = nodeValue.asyncLayout()
-                async {
-                    let (layout, apply) = makeLayout(self, params)
-                    Queue.mainQueue().async {
-                        completion(layout, { _ in apply() })
-                    }
-                }
+                let (layout, apply) = nodeValue.asyncLayout()(self, params)
+                completion(layout, { _ in apply() })
             }
         }
     }
@@ -122,6 +115,7 @@ private final class FullGramAIHeroItemNode: ListViewItemNode {
     private let modelLabel = UILabel()
     private let openChatButton = UIButton(type: .system)
     private var openChatAction: (() -> Void)?
+    private var didAttachCard = false
 
     init() {
         super.init(layerBacked: false)
@@ -156,8 +150,14 @@ private final class FullGramAIHeroItemNode: ListViewItemNode {
 
         self.openChatButton.addTarget(self, action: #selector(self.openChatTapped), for: .touchUpInside)
         self.cardView.addSubview(self.openChatButton)
+    }
 
-        self.view.addSubview(self.cardView)
+    override func didLoad() {
+        super.didLoad()
+        if !self.didAttachCard {
+            self.didAttachCard = true
+            self.view.addSubview(self.cardView)
+        }
     }
 
     @objc private func openChatTapped() {
@@ -770,6 +770,8 @@ private final class FullGramAISecurityPromptController: ViewController {
     init(context: AccountContext) {
         self.theme = context.sharedContext.currentPresentationData.with { $0 }.theme
         super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: context.sharedContext.currentPresentationData.with { $0 }))
+        self.isOpaqueWhenInOverlay = true
+        self.blocksBackgroundWhenInOverlay = true
         self.title = "Промпт безопасности ИИ"
     }
 
@@ -777,10 +779,20 @@ private final class FullGramAISecurityPromptController: ViewController {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func loadDisplayNode() {
+        let node = ASDisplayNode()
+        node.backgroundColor = self.theme.list.blocksBackgroundColor
+        self.displayNode = node
+        self.displayNodeDidLoad()
+    }
+
     override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
         super.containerLayoutUpdated(layout, transition: transition)
         let topInset = self.navigationLayout(layout: layout).navigationFrame.maxY
         self.scrollTopConstraint?.constant = topInset
+        if let navView = self.navigationBar?.view, navView.superview === self.displayNode.view {
+            self.displayNode.view.bringSubviewToFront(navView)
+        }
     }
 
     override func displayNodeDidLoad() {
@@ -790,7 +802,11 @@ private final class FullGramAISecurityPromptController: ViewController {
 
         let scroll = UIScrollView()
         scroll.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(scroll)
+        if let navView = self.navigationBar?.view, navView.superview === root {
+            root.insertSubview(scroll, belowSubview: navView)
+        } else {
+            root.insertSubview(scroll, at: 0)
+        }
 
         let stack = UIStackView()
         stack.axis = .vertical

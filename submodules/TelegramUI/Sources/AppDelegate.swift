@@ -2125,7 +2125,6 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
 
     func handleWillResignActive() {
         self.fullGramUpdateSwitcherBlur(active: true)
-        FullGramChatPrivacy.relock()
         self.isActiveValue = false
         self.isActivePromise.set(false)
         self.clearNotificationsManager?.commitNow()
@@ -2153,6 +2152,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
     }
 
     func handleDidEnterBackground() {
+        FullGramChatPrivacy.relock()
         let _ = (self.sharedContextPromise.get()
         |> take(1)
         |> deliverOnMainQueue).start(next: { sharedApplicationContext in

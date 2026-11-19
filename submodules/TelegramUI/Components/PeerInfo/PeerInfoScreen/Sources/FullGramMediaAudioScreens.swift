@@ -89,6 +89,7 @@ func fullGramMediaAudioCategoryController(context: AccountContext) -> ViewContro
     )
 
     let signal = combineLatest(context.sharedContext.presentationData, refresh.get())
+    |> deliverOnMainQueue
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
         let voiceValue = FullGramVoiceMode.current.title(ru)
@@ -442,6 +443,7 @@ func fullGramVoiceController(context: AccountContext, onChanged: @escaping () ->
     )
 
     let signal = combineLatest(context.sharedContext.presentationData, refresh.get())
+    |> deliverOnMainQueue
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
         let currentNoise = FullGramNoiseReductionMode.current
@@ -653,6 +655,7 @@ func fullGramRoundVideoController(context: AccountContext, onChanged: @escaping 
     )
 
     let signal = combineLatest(context.sharedContext.presentationData, refresh.get())
+    |> deliverOnMainQueue
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
         let currentMask = FullGramRoundMask.current
@@ -772,6 +775,7 @@ func fullGramLyricsSourcesController(context: AccountContext, onChanged: @escapi
     )
 
     let signal = combineLatest(context.sharedContext.presentationData, refresh.get())
+    |> deliverOnMainQueue
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let entries: [FullGramLyricsSourcesEntry] = [
             .header("ИСТОЧНИКИ ТЕКСТОВ ПЕСЕН"),

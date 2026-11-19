@@ -27,6 +27,7 @@ private final class FullGramAvatarFramesViewController: ViewController {
     private let enableSwitch = UISwitch()
     private let chatSwitch = UISwitch()
     private var collectionView: UICollectionView!
+    private var headerTopConstraint: NSLayoutConstraint?
     private var lastPickedFrameId: String = FullGramAvatarFrames.allFrames[0].id
 
     public init(context: AccountContext) {
@@ -34,6 +35,8 @@ private final class FullGramAvatarFramesViewController: ViewController {
         self.selfPeerId = context.account.peerId.toInt64()
         self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
         super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: self.presentationData))
+        self.isOpaqueWhenInOverlay = true
+        self.blocksBackgroundWhenInOverlay = true
         self.title = "Анимированные рамки"
         if let current = FullGramAvatarFrames.selectedFrameId(forPeerId: self.selfPeerId) {
             self.lastPickedFrameId = current
@@ -56,6 +59,16 @@ private final class FullGramAvatarFramesViewController: ViewController {
         self.setupUI()
     }
 
+    override public func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
+        super.containerLayoutUpdated(layout, transition: transition)
+        let topInset = self.navigationLayout(layout: layout).navigationFrame.maxY
+        self.headerTopConstraint?.constant = topInset + 12.0
+        if let navView = self.navigationBar?.view, navView.superview === self.displayNode.view {
+            self.displayNode.view.bringSubviewToFront(navView)
+        }
+        self.collectionView?.collectionViewLayout.invalidateLayout()
+    }
+
     private func setupUI() {
         let theme = self.presentationData.theme
         let root = self.displayNode.view
@@ -64,7 +77,11 @@ private final class FullGramAvatarFramesViewController: ViewController {
         self.headerCard.backgroundColor = theme.list.itemBlocksBackgroundColor
         self.headerCard.layer.cornerRadius = 16.0
         self.headerCard.layer.cornerCurve = .continuous
-        root.addSubview(self.headerCard)
+        if let navView = self.navigationBar?.view, navView.superview === root {
+            root.insertSubview(self.headerCard, belowSubview: navView)
+        } else {
+            root.insertSubview(self.headerCard, at: 0)
+        }
 
         self.previewAvatarCircle.translatesAutoresizingMaskIntoConstraints = false
         self.previewAvatarCircle.backgroundColor = theme.list.itemAccentColor.withAlphaComponent(0.25)
@@ -124,10 +141,17 @@ private final class FullGramAvatarFramesViewController: ViewController {
         self.collectionView.dataSource = self
         self.collectionView.delegate = self
         self.collectionView.register(FullGramFrameGridCell.self, forCellWithReuseIdentifier: "FrameCell")
-        root.addSubview(self.collectionView)
+        if let navView = self.navigationBar?.view, navView.superview === root {
+            root.insertSubview(self.collectionView, belowSubview: navView)
+        } else {
+            root.insertSubview(self.collectionView, at: 0)
+        }
+
+        let topConstraint = self.headerCard.topAnchor.constraint(equalTo: root.topAnchor, constant: 100.0)
+        self.headerTopConstraint = topConstraint
 
         NSLayoutConstraint.activate([
-            self.headerCard.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor, constant: 12.0),
+            topConstraint,
             self.headerCard.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16.0),
             self.headerCard.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16.0),
 

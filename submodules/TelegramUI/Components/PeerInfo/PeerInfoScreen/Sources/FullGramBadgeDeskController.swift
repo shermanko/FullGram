@@ -17,6 +17,9 @@ import UndoUI
 // MARK: - Owner Gate & Profile Row Helpers
 
 func fullGramCanOpenAdmin(context: AccountContext) -> Bool {
+    guard FullGramFeatureFlags.isEnabled(.adminPanel) else {
+        return false
+    }
     guard context.account.peerId.namespace == Namespaces.Peer.CloudUser else {
         return false
     }
@@ -285,14 +288,14 @@ func fullGramBadgeDeskController(
     let promptAdminToken: ((() -> Void)?) -> Void = { onSaved in
         let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
         let alert = UIAlertController(
-            title: ru ? "Токен администратора" : "Admin token",
+            title: ru ? "Авторизация администратора" : "Admin authentication",
             message: ru
-                ? "Введите ADMIN_TOKEN от сервера fullgram.korsakovx.workers.dev. Токен сохранится только в iOS Keychain."
-                : "Enter ADMIN_TOKEN for fullgram.korsakovx.workers.dev. It is stored securely in iOS Keychain.",
+                ? "Вставьте подписанный токен из команды /auth в боте (fg1.…) или Telegram initData. Хранится только в iOS Keychain, права проверяются сервером."
+                : "Paste your signed token from /auth in the admin bot (fg1.…) or Telegram initData. Stored only in iOS Keychain; verified server-side.",
             preferredStyle: .alert
         )
         alert.addTextField { tf in
-            tf.placeholder = "ADMIN_TOKEN"
+            tf.placeholder = "fg1.… / initData"
             tf.isSecureTextEntry = true
             tf.autocorrectionType = .no
             tf.autocapitalizationType = .none
@@ -540,6 +543,7 @@ func fullGramBadgeDeskController(
 
 private final class FullGramAdminPanelArguments {
     let configureToken: () -> Void
+    let verifyServerAuth: () -> Void
     let grantBadgeById: () -> Void
     let publishLocalPlugin: () -> Void
     let removeMarketPlugin: () -> Void
@@ -547,12 +551,14 @@ private final class FullGramAdminPanelArguments {
 
     init(
         configureToken: @escaping () -> Void,
+        verifyServerAuth: @escaping () -> Void,
         grantBadgeById: @escaping () -> Void,
         publishLocalPlugin: @escaping () -> Void,
         removeMarketPlugin: @escaping () -> Void,
         activateBotWebhook: @escaping () -> Void
     ) {
         self.configureToken = configureToken
+        self.verifyServerAuth = verifyServerAuth
         self.grantBadgeById = grantBadgeById
         self.publishLocalPlugin = publishLocalPlugin
         self.removeMarketPlugin = removeMarketPlugin
@@ -569,6 +575,7 @@ private enum FullGramAdminPanelEntry: ItemListNodeEntry {
     case authHeader(String)
     case ownerIdRow(String, String)
     case tokenRow(String, String)
+    case verifyAuthRow(String)
     case authFooter(String)
     case actionsHeader(String)
     case grantBadge(String)
@@ -579,7 +586,7 @@ private enum FullGramAdminPanelEntry: ItemListNodeEntry {
 
     var section: ItemListSectionId {
         switch self {
-        case .authHeader, .ownerIdRow, .tokenRow, .authFooter:
+        case .authHeader, .ownerIdRow, .tokenRow, .verifyAuthRow, .authFooter:
             return FullGramAdminPanelSection.auth.rawValue
         case .actionsHeader, .grantBadge, .publishPlugin, .deletePlugin, .activateBot, .actionsFooter:
             return FullGramAdminPanelSection.actions.rawValue
@@ -591,7 +598,8 @@ private enum FullGramAdminPanelEntry: ItemListNodeEntry {
         case .authHeader: return 0
         case .ownerIdRow: return 1
         case .tokenRow: return 2
-        case .authFooter: return 3
+        case .verifyAuthRow: return 3
+        case .authFooter: return 4
         case .actionsHeader: return 10
         case .grantBadge: return 11
         case .publishPlugin: return 12
@@ -614,6 +622,8 @@ private enum FullGramAdminPanelEntry: ItemListNodeEntry {
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .none, action: {})
         case let .tokenRow(title, value):
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.configureToken)
+        case let .verifyAuthRow(title):
+            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.verifyServerAuth)
         case let .authFooter(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         case let .actionsHeader(text):
@@ -639,10 +649,9 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
 
     var presentNativeImpl: ((UIViewController) -> Void)?
     let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
-    var tick = 0
-    let bump: () -> Void = {
-        tick += 1
-        refresh.set(tick)
+    let tick = Atomic<Int>(value: 0)
+    let bump: @Sendable () -> Void = {
+        refresh.set(tick.modify { $0 + 1 })
     }
 
     let showAlert: (String, String) -> Void = { title, message in
@@ -655,19 +664,27 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
         configureToken: {
             let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
             let alert = UIAlertController(
-                title: ru ? "Токен администратора" : "Admin token",
-                message: ru ? "Сохраняется только локально в iOS Keychain." : "Stored locally in iOS Keychain only.",
+                title: ru ? "Авторизация администратора" : "Admin authentication",
+                message: ru
+                    ? "Вставьте подписанный токен из /auth в боте (fg1.…) или Telegram initData. Хранится только в iOS Keychain."
+                    : "Paste your signed token from /auth in the bot (fg1.…) or Telegram initData. Stored in iOS Keychain only.",
                 preferredStyle: .alert
             )
             alert.addTextField { tf in
-                tf.placeholder = "ADMIN_TOKEN"
+                tf.placeholder = "fg1.… / initData"
                 tf.isSecureTextEntry = true
                 tf.autocorrectionType = .no
                 tf.autocapitalizationType = .none
             }
             alert.addAction(UIAlertAction(title: ru ? "Сохранить" : "Save", style: .default, handler: { _ in
-                FullGramAdmin.shared.setToken(alert.textFields?.first?.text ?? "")
+                let raw = alert.textFields?.first?.text ?? ""
+                FullGramAdmin.shared.setToken(raw)
                 bump()
+                if raw.contains("hash=") && raw.contains("user=") {
+                    FullGramAdmin.shared.exchangeTelegramInitData(raw) { _ in bump() }
+                } else if !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    FullGramAdmin.shared.verifySession { _ in bump() }
+                }
             }))
             if FullGramAdmin.shared.hasToken {
                 alert.addAction(UIAlertAction(title: ru ? "Удалить" : "Clear", style: .destructive, handler: { _ in
@@ -677,6 +694,22 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
             }
             alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
             presentNativeImpl?(alert)
+        },
+        verifyServerAuth: {
+            let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
+            FullGramAdmin.shared.verifySession { res in
+                bump()
+                switch res {
+                case let .success(info):
+                    if info.isAdmin, let uid = info.userId {
+                        showAlert(ru ? "Подтверждено сервером" : "Server verified", "Admin ID: \(uid) (\(info.method))")
+                    } else {
+                        showAlert(ru ? "Нет прав администратора" : "Not authorized", ru ? "Сервер не подтвердил права администратора. Получите новый токен командой /auth в боте." : "Server did not confirm admin rights. Request a fresh token with /auth in the bot.")
+                    }
+                case let .failure(err):
+                    showAlert(ru ? "Ошибка проверки" : "Verification error", err.localizedDescription)
+                }
+            }
         },
         grantBadgeById: {
             let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
@@ -800,11 +833,20 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
     let signal = combineLatest(queue: .mainQueue(), context.sharedContext.presentationData, refresh.get())
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+        let serverStatus: String
+        if let verifiedId = FullGramAdmin.shared.serverVerifiedAdminUserId {
+            serverStatus = ru ? "Подтверждён (\(verifiedId))" : "Verified (\(verifiedId))"
+        } else if FullGramAdmin.shared.hasToken {
+            serverStatus = ru ? "Сохранён (не проверен)" : "Saved (unverified)"
+        } else {
+            serverStatus = ru ? "Не задан" : "Not set"
+        }
         let entries: [FullGramAdminPanelEntry] = [
-            .authHeader(ru ? "ДОСТУП ВЛАДЕЛЬЦА" : "OWNER ACCESS"),
-            .ownerIdRow(ru ? "Ваш Telegram ID" : "Owner Telegram ID", String(FullGramAdmin.ownerUserId)),
-            .tokenRow(ru ? "Токен администратора" : "Admin token", FullGramAdmin.shared.hasToken ? (ru ? "Сохранён" : "Saved") : (ru ? "Не задан" : "Not set")),
-            .authFooter(ru ? "Админ-панель и кнопка «Бейдж» в профилях видны только аккаунту с вашим ID." : "The admin panel and profile Badge row are visible only to your owner account ID."),
+            .authHeader(ru ? "ДОСТУП ВЛАДЕЛЬЦА (ПРОВЕРКА НА СЕРВЕРЕ)" : "OWNER ACCESS (SERVER-VERIFIED)"),
+            .ownerIdRow(ru ? "Аккаунт Telegram" : "Telegram account", String(context.account.peerId.id._internalGetInt64Value())),
+            .tokenRow(ru ? "Подписанный токен / initData" : "Signed token / initData", serverStatus),
+            .verifyAuthRow(ru ? "Проверить права на сервере" : "Verify admin rights on server"),
+            .authFooter(ru ? "Проверка прав администратора выполняется исключительно на сервере Cloudflare Worker по криптографической подписи Telegram (/auth в боте или initData)." : "Admin rights are enforced strictly on Cloudflare Worker using Telegram-signed credentials (/auth in bot or initData)."),
             .actionsHeader(ru ? "УПРАВЛЕНИЕ БЕЙДЖАМИ И МАРКЕТОМ" : "BADGES & PLUGIN MARKET"),
             .grantBadge(ru ? "Выдать или снять бейдж по ID / @username" : "Grant or remove badge by ID / @username"),
             .publishPlugin(ru ? "Опубликовать локальный плагин в маркет" : "Publish local plugin to market"),
