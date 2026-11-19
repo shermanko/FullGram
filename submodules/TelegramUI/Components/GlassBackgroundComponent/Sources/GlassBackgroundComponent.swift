@@ -528,6 +528,11 @@ public class GlassBackgroundView: UIView {
     private let contentContainer: ContentContainer
     
     private var innerBackgroundView: UIView?
+    private var flatImageView: UIImageView?
+    private var appliedFlatMode: Bool = false
+    private var appliedFlatFillColor: UIColor?
+    private var lastSize: CGSize?
+    private var modeObserver: NSObjectProtocol?
     
     /// UIKit's liquid morph must target the effect view itself so the backdrop
     /// participates in the shape transition along with its content.
@@ -590,6 +595,8 @@ public class GlassBackgroundView: UIView {
     public static var useCustomGlassImpl: Bool = false
     public static var flatMode: Bool = false
     public static var flatFillColor: UIColor?
+    public static var classicDesignMode: Bool = false
+    public static let modeDidChangeNotification = Notification.Name("FullGram.GlassModeChanged")
 
     /// The backdrop luminance native glass sees (`EffectSettingsContainerView`'s limits, applied to every luma UIKit
     /// reports by the `backdropLayer:didChangeLuma:` override in UIKitRuntimeUtils): the whole range on the theme's
@@ -612,7 +619,7 @@ public class GlassBackgroundView: UIView {
     }
 
     public override init(frame: CGRect) {
-        if #available(iOS 26.0, *), !GlassBackgroundView.useCustomGlassImpl {
+        if #available(iOS 26.0, *), !GlassBackgroundView.useCustomGlassImpl, !GlassBackgroundView.flatMode {
             self.legacyView = nil
             self.legacyHighlightContainerView = nil
             self.legacyHighlightClippingContext = nil
@@ -684,6 +691,28 @@ public class GlassBackgroundView: UIView {
         if let legacyHighlightContainerView = self.legacyHighlightContainerView {
             self.addSubview(legacyHighlightContainerView)
         }
+        self.modeObserver = NotificationCenter.default.addObserver(forName: GlassBackgroundView.modeDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, let params = self.params, let lastSize = self.lastSize, lastSize.width > 0.0, lastSize.height > 0.0 else {
+                    return
+                }
+                self.update(
+                    size: lastSize,
+                    shape: params.shape,
+                    isDark: params.isDark,
+                    tintColor: params.tintColor,
+                    isInteractive: params.isInteractive,
+                    isVisible: params.isVisible,
+                    transition: .immediate
+                )
+            }
+        }
+    }
+
+    deinit {
+        if let modeObserver = self.modeObserver {
+            NotificationCenter.default.removeObserver(modeObserver)
+        }
     }
     
     required public init?(coder: NSCoder) {
@@ -725,7 +754,34 @@ public class GlassBackgroundView: UIView {
         self.update(size: size, shape: shape, isDark: isDark, tintColor: tintColor, isInteractive: isInteractive, isVisible: isVisible, transition: transition)
     }
 
+    private static func resolvedFlatColor(tintColor: TintColor, isDark: Bool) -> UIColor {
+        let defaultFlat = isDark ? UIColor(rgb: 0x1c1c1d) : UIColor(rgb: 0xf7f7f7)
+        let customFlat = GlassBackgroundView.flatFillColor
+        switch tintColor.kind {
+        case .panel, .untinted:
+            return customFlat ?? defaultFlat
+        case .clear:
+            return customFlat?.withAlphaComponent(isDark ? 0.82 : 0.78) ?? UIColor(white: 0.0, alpha: isDark ? 0.45 : 0.25)
+        case let .custom(_, color):
+            if let customFlat {
+                return color.cgColor.alpha < 0.01 ? customFlat.withAlphaComponent(0.75) : customFlat
+            } else {
+                return color.cgColor.alpha < 0.01 ? UIColor(white: 0.0, alpha: 0.25) : color.withAlphaComponent(1.0)
+            }
+        }
+    }
+
+    private static func flatCornerRadii(shape: Shape, size: CGSize) -> CornerRadii {
+        switch shape {
+        case let .roundedRect(cornerRadius):
+            return CornerRadii(radius: cornerRadius)
+        case let .customRoundedRect(cornerRadii):
+            return GlassBackgroundView.clampedCornerRadii(size: size, cornerRadii: cornerRadii)
+        }
+    }
+
     func update(size: CGSize, shape: Shape, isDark: Bool, tintColor: TintColor, isInteractive: Bool = false, isVisible: Bool = true, transition: ComponentTransition) {
+        self.lastSize = size
         
         if let glassHighlightRecognizer = self.glassHighlightRecognizer {
             glassHighlightRecognizer.isEnabled = isInteractive
@@ -820,8 +876,22 @@ public class GlassBackgroundView: UIView {
         }
         
         let params = Params(shape: shape, isDark: isDark, tintColor: tintColor, isInteractive: isInteractive, isVisible: isVisible)
-        if self.params != params {
+        let currentFlatMode = GlassBackgroundView.flatMode
+        let currentFlatFillColor = GlassBackgroundView.flatFillColor
+        let flatModeChanged = self.appliedFlatMode != currentFlatMode
+        let flatColorChanged = self.appliedFlatFillColor?.cgColor != currentFlatFillColor?.cgColor
+        let sizeChangedForCustomShape: Bool
+        if currentFlatMode, case .customRoundedRect = shape {
+            sizeChangedForCustomShape = true
+        } else {
+            sizeChangedForCustomShape = false
+        }
+        if self.params != params || flatModeChanged || flatColorChanged || sizeChangedForCustomShape {
             self.params = params
+            self.appliedFlatMode = currentFlatMode
+            self.appliedFlatFillColor = currentFlatFillColor
+            self.legacyView?.isHidden = currentFlatMode
+            self.shadowView?.isHidden = currentFlatMode
             
             if let shadowView = self.shadowView {
                 switch shape {
@@ -830,10 +900,11 @@ public class GlassBackgroundView: UIView {
                 case let .customRoundedRect(cornerRadii):
                     shadowView.image = Self.generateLegacyShadowImage(cornerRadii: GlassBackgroundView.clampedCornerRadii(size: size, cornerRadii: cornerRadii), shadowInset: shadowInset)
                 }
-                transition.setAlpha(view: shadowView, alpha: isVisible ? 1.0 : 0.0)
+                transition.setAlpha(view: shadowView, alpha: (isVisible && !currentFlatMode) ? 1.0 : 0.0)
             }
             
             if let foregroundView = self.foregroundView {
+                self.flatImageView?.isHidden = true
                 let fillColor: UIColor
                 let borderWidthFactor: CGFloat
                 switch tintColor.kind {
@@ -856,29 +927,9 @@ public class GlassBackgroundView: UIView {
                         borderWidthFactor = 1.0
                     }
                 }
-                if GlassBackgroundView.flatMode {
-                    let defaultFlat = isDark ? UIColor(rgb: 0x1c1c1d) : UIColor(rgb: 0xf7f7f7)
-                    let customFlat = GlassBackgroundView.flatFillColor
-                    let flatColor: UIColor
-                    switch tintColor.kind {
-                    case .panel, .untinted:
-                        flatColor = customFlat ?? defaultFlat
-                    case .clear:
-                        flatColor = customFlat?.withAlphaComponent(isDark ? 0.82 : 0.78) ?? UIColor(white: 0.0, alpha: isDark ? 0.45 : 0.25)
-                    case let .custom(_, color):
-                        if let customFlat {
-                            flatColor = color.cgColor.alpha < 0.01 ? customFlat.withAlphaComponent(0.75) : customFlat
-                        } else {
-                            flatColor = color.cgColor.alpha < 0.01 ? UIColor(white: 0.0, alpha: 0.25) : color.withAlphaComponent(1.0)
-                        }
-                    }
-                    let radii: CornerRadii
-                    switch shape {
-                    case let .roundedRect(cornerRadius):
-                        radii = CornerRadii(radius: cornerRadius)
-                    case let .customRoundedRect(cornerRadii):
-                        radii = GlassBackgroundView.clampedCornerRadii(size: size, cornerRadii: cornerRadii)
-                    }
+                if currentFlatMode {
+                    let flatColor = Self.resolvedFlatColor(tintColor: tintColor, isDark: isDark)
+                    let radii = Self.flatCornerRadii(shape: shape, size: size)
                     foregroundView.image = GlassBackgroundView.generateFlatImage(cornerRadii: radii, inset: shadowInset, fillColor: flatColor)
                 } else {
                     switch shape {
@@ -897,7 +948,7 @@ public class GlassBackgroundView: UIView {
                     if #available(iOS 26.0, *) {
                         var glassEffect: UIGlassEffect?
                         
-                        if isVisible {
+                        if isVisible && !currentFlatMode {
                             let nativeTint = tintColor.nativeEffect(isDark: isDark)
                             let glassEffectValue = UIGlassEffect(style: nativeTint.isClear ? .clear : .regular)
                             glassEffectValue.tintColor = nativeTint.color
@@ -906,22 +957,20 @@ public class GlassBackgroundView: UIView {
                         }
                         
                         if glassEffect == nil {
-                            if nativeView.effect is UIGlassEffect {
-                                if #available(iOS 26.1, *) {
-                                    if transition.animation.isImmediate {
-                                        nativeView.effect = nil
-                                    } else {
-                                        transition.animateView {
-                                            nativeView.effect = nil
-                                        }
-                                    }
+                            if #available(iOS 26.1, *) {
+                                if transition.animation.isImmediate {
+                                    nativeView.effect = nil
                                 } else {
-                                    if transition.animation.isImmediate {
+                                    transition.animateView {
+                                        nativeView.effect = nil
+                                    }
+                                }
+                            } else {
+                                if transition.animation.isImmediate {
+                                    nativeView.effect = UIVisualEffect()
+                                } else {
+                                    transition.animateView {
                                         nativeView.effect = UIVisualEffect()
-                                    } else {
-                                        transition.animateView {
-                                            nativeView.effect = UIVisualEffect()
-                                        }
                                     }
                                 }
                             }
@@ -939,6 +988,28 @@ public class GlassBackgroundView: UIView {
                         }
                     }
                 }
+                if currentFlatMode {
+                    let flatView: UIImageView
+                    if let existing = self.flatImageView {
+                        flatView = existing
+                    } else {
+                        flatView = UIImageView()
+                        flatView.isUserInteractionEnabled = false
+                        self.flatImageView = flatView
+                        if let nativeParamsView = self.nativeParamsView {
+                            self.insertSubview(flatView, belowSubview: nativeParamsView)
+                        } else {
+                            self.insertSubview(flatView, at: 0)
+                        }
+                    }
+                    let flatColor = Self.resolvedFlatColor(tintColor: tintColor, isDark: isDark)
+                    let radii = Self.flatCornerRadii(shape: shape, size: size)
+                    flatView.image = GlassBackgroundView.generateFlatImage(cornerRadii: radii, inset: shadowInset, fillColor: flatColor)
+                    flatView.isHidden = false
+                    transition.setAlpha(view: flatView, alpha: isVisible ? 1.0 : 0.0)
+                } else {
+                    self.flatImageView?.isHidden = true
+                }
             }
         }
         
@@ -949,6 +1020,9 @@ public class GlassBackgroundView: UIView {
         transition.setFrame(view: self.maskContentView, frame: CGRect(origin: CGPoint(x: shadowInset, y: shadowInset), size: size))
         if let foregroundView = self.foregroundView {
             transition.setFrame(view: foregroundView, frame: CGRect(origin: CGPoint(), size: size).insetBy(dx: -shadowInset, dy: -shadowInset))
+        }
+        if let flatImageView = self.flatImageView {
+            transition.setFrame(view: flatImageView, frame: CGRect(origin: CGPoint(), size: size).insetBy(dx: -shadowInset, dy: -shadowInset))
         }
         if let shadowView = self.shadowView {
             transition.setFrame(view: shadowView, frame: CGRect(origin: CGPoint(), size: size).insetBy(dx: -shadowInset, dy: -shadowInset))
@@ -1036,9 +1110,7 @@ public final class GlassBackgroundContainerView: UIView {
         if let nativeParamsView = self.nativeParamsView {
             self.addSubview(nativeParamsView)
         }
-        if GlassBackgroundView.flatMode {
-            self.legacyView?.isHidden = true
-        } else if let legacyView = self.legacyView {
+        if let legacyView = self.legacyView {
             self.addSubview(legacyView)
         }
     }

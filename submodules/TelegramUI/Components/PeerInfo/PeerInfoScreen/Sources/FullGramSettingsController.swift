@@ -162,59 +162,59 @@ enum FullGramSettingsIcons {
 }
 
 public enum FullGramCategory: Int32, CaseIterable {
-    case privacy = 0
+    case appearance = 0
     case chats = 1
-    case mediaAndAudio = 2
-    case appearance = 3
-    case security = 4
-    case antiScam = 5
-    case other = 6
-    case plugins = 7
-    case aiAssistant = 8
+    case privacy = 2
+    case security = 3
+    case antiScam = 4
+    case mediaAndAudio = 5
+    case plugins = 6
+    case aiAssistant = 7
+    case other = 8
 
     var title: String {
         switch self {
-        case .privacy:
-            return "Приватность"
-        case .chats:
-            return "Чаты"
-        case .mediaAndAudio:
-            return "Медиа и Аудио"
         case .appearance:
             return "Оформление"
+        case .chats:
+            return "Чаты"
+        case .privacy:
+            return "Приватность"
         case .security:
             return "Безопасность"
         case .antiScam:
             return "Анти-скам"
-        case .other:
-            return "Прочее"
+        case .mediaAndAudio:
+            return "Медиа и Аудио"
         case .plugins:
             return "Плагины"
         case .aiAssistant:
             return "ИИ Ассистент"
+        case .other:
+            return "Прочее"
         }
     }
 
     var icon: UIImage? {
         switch self {
-        case .privacy:
-            return FullGramSettingsIcons.bundleGlyph("FullGram/Ghost", color: UIColor(rgb: 0x34C759), side: 20.0, fallbackSystemName: "hand.raised.fill")
-        case .chats:
-            return FullGramSettingsIcons.bundleGlyph("FullGram/Chats", color: UIColor(rgb: 0x007AFF), side: 20.0, fallbackSystemName: "bubble.left.and.bubble.right.fill")
-        case .mediaAndAudio:
-            return FullGramSettingsIcons.symbol("waveform", color: UIColor(rgb: 0xFF2D55))
         case .appearance:
             return FullGramSettingsIcons.symbol("paintbrush.fill", color: UIColor(rgb: 0xAF52DE))
+        case .chats:
+            return FullGramSettingsIcons.bundleGlyph("FullGram/Chats", color: UIColor(rgb: 0x007AFF), side: 20.0, fallbackSystemName: "bubble.left.and.bubble.right.fill")
+        case .privacy:
+            return FullGramSettingsIcons.bundleGlyph("FullGram/Ghost", color: UIColor(rgb: 0x34C759), side: 20.0, fallbackSystemName: "hand.raised.fill")
         case .security:
-            return FullGramSettingsIcons.bundleGlyph("FullGram/GhostOutline", color: UIColor(rgb: 0xFF9500), side: 20.0, fallbackSystemName: "lock.fill")
+            return FullGramSettingsIcons.symbol("lock.shield.fill", color: UIColor(rgb: 0xFF9500))
         case .antiScam:
-            return FullGramSettingsIcons.bundleGlyph("FullGram/Filter", color: UIColor(rgb: 0xFF3B30), side: 20.0, fallbackSystemName: "shield.lefthalf.filled")
-        case .other:
-            return FullGramSettingsIcons.bundleGlyph("FullGram/MediaArchive", color: UIColor(rgb: 0x32ADE6), side: 20.0, fallbackSystemName: "folder.fill")
+            return FullGramSettingsIcons.symbol("checkmark.shield.fill", color: UIColor(rgb: 0xFF3B30))
+        case .mediaAndAudio:
+            return FullGramSettingsIcons.symbol("waveform", color: UIColor(rgb: 0xFF2D55))
         case .plugins:
             return FullGramSettingsIcons.bundleGlyph("FullGram/Plugins", color: UIColor(rgb: 0x5856D6), side: 20.0, fallbackSystemName: "puzzlepiece.extension.fill")
         case .aiAssistant:
             return FullGramSettingsIcons.symbol("sparkles", color: UIColor(rgb: 0x6750A4))
+        case .other:
+            return FullGramSettingsIcons.symbol("gearshape.fill", color: UIColor(rgb: 0x8E8E93))
         }
     }
 }
@@ -705,7 +705,7 @@ private enum FullGramPrivacyCategoryEntry: ItemListNodeEntry {
             return ItemListDisclosureItem(
                 presentationData: presentationData,
                 systemStyle: .glass,
-                icon: PresentationResourcesSettings.security,
+                icon: FullGramSettingsIcons.bundleGlyph("FullGram/Ghost", color: UIColor(rgb: 0x34C759), side: 20.0, fallbackSystemName: "eye.slash.fill"),
                 title: "Режим призрака (Ghost Mode)",
                 label: isActive ? "Вкл." : "Выкл.",
                 sectionId: self.section,
@@ -717,7 +717,7 @@ private enum FullGramPrivacyCategoryEntry: ItemListNodeEntry {
             return ItemListDisclosureItem(
                 presentationData: presentationData,
                 systemStyle: .glass,
-                icon: PresentationResourcesSettings.security,
+                icon: FullGramSettingsIcons.symbol("eye.slash.fill", color: UIColor(rgb: 0x5856D6)),
                 title: "Приватный режим",
                 label: isActive ? "Вкл." : "Выкл.",
                 sectionId: self.section,
@@ -729,7 +729,7 @@ private enum FullGramPrivacyCategoryEntry: ItemListNodeEntry {
             return ItemListDisclosureItem(
                 presentationData: presentationData,
                 systemStyle: .glass,
-                icon: PresentationResourcesSettings.lockOrange,
+                icon: FullGramSettingsIcons.symbol("lock.fill", color: UIColor(rgb: 0xFF9500)),
                 title: "Деятельность и следы",
                 label: "",
                 sectionId: self.section,
@@ -741,7 +741,7 @@ private enum FullGramPrivacyCategoryEntry: ItemListNodeEntry {
             return ItemListDisclosureItem(
                 presentationData: presentationData,
                 systemStyle: .glass,
-                icon: PresentationResourcesSettings.dataAndStorage,
+                icon: FullGramSettingsIcons.symbol("trash.fill", color: UIColor(rgb: 0xFF3B30)),
                 title: "Удалённые",
                 label: "",
                 sectionId: self.section,
@@ -756,6 +756,11 @@ private enum FullGramPrivacyCategoryEntry: ItemListNodeEntry {
 func fullGramPrivacyCategoryController(context: AccountContext) -> ViewController {
     var pushControllerImpl: ((ViewController) -> Void)?
     let store = context.account.network.fullGramGhostMode
+    let extrasTick = ValuePromise<Int>(0, ignoreRepeated: false)
+    let tickCounter = Atomic<Int>(value: 0)
+    let extrasObserver = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { _ in
+        extrasTick.set(tickCounter.modify { $0 + 1 })
+    }
 
     let arguments = FullGramPrivacyCategoryArguments(
         openGhostMode: {
@@ -772,9 +777,9 @@ func fullGramPrivacyCategoryController(context: AccountContext) -> ViewControlle
         }
     )
 
-    let signal = combineLatest(context.sharedContext.presentationData, store.signal)
+    let signal = combineLatest(context.sharedContext.presentationData, store.signal, extrasTick.get())
     |> deliverOnMainQueue
-    |> map { presentationData, settings -> (ItemListControllerState, (ItemListNodeState, Any)) in
+    |> map { presentationData, settings, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let entries: [FullGramPrivacyCategoryEntry] = [
             .ghostModeLink(presentationData.theme, settings.isActive),
             .privateModeLink(presentationData.theme, FullGramExtras.shared.privateMode),
@@ -795,6 +800,9 @@ func fullGramPrivacyCategoryController(context: AccountContext) -> ViewControlle
             style: .blocks
         )
         return (controllerState, (listState, arguments))
+    }
+    |> afterDisposed {
+        NotificationCenter.default.removeObserver(extrasObserver)
     }
 
     let controller = ItemListController(context: context, state: signal)
@@ -3367,8 +3375,6 @@ private struct FullGramAppearanceCategoryArguments {
     let openIcons: () -> Void
     let openFrames: () -> Void
     let openNicknames: () -> Void
-    let openSkins: () -> Void
-    let openBubbles: () -> Void
 }
 
 private enum FullGramAppearanceCategoryEntry: ItemListNodeEntry {
@@ -3376,15 +3382,13 @@ private enum FullGramAppearanceCategoryEntry: ItemListNodeEntry {
     case themes(String)
     case design(String)
     case icons(String)
-    case frames(String)
-    case nicknames(String)
-    case skins(String)
-    case bubbles(String)
+    case frames(String, String)
+    case nicknames(String, String)
 
     var section: ItemListSectionId {
         switch self {
         case .fonts, .themes, .design, .icons: return 0
-        case .frames, .nicknames, .skins, .bubbles: return 1
+        case .frames, .nicknames: return 1
         }
     }
 
@@ -3396,8 +3400,6 @@ private enum FullGramAppearanceCategoryEntry: ItemListNodeEntry {
         case .icons: return 3
         case .frames: return 10
         case .nicknames: return 11
-        case .skins: return 12
-        case .bubbles: return 13
         }
     }
 
@@ -3409,53 +3411,63 @@ private enum FullGramAppearanceCategoryEntry: ItemListNodeEntry {
         let args = arguments as! FullGramAppearanceCategoryArguments
         switch self {
         case let .fonts(title):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.appearance, title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openFonts)
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: FullGramSettingsIcons.symbol("textformat", color: UIColor(rgb: 0x007AFF)), title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openFonts)
         case let .themes(title):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.appearance, title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openThemes)
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: FullGramSettingsIcons.symbol("paintpalette.fill", color: UIColor(rgb: 0xFF2D55)), title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openThemes)
         case let .design(title):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.appearance, title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openDesign)
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: FullGramSettingsIcons.symbol("sparkles.rectangle.stack.fill", color: UIColor(rgb: 0x5856D6)), title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openDesign)
         case let .icons(title):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.appearance, title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openIcons)
-        case let .frames(title):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.appearance, title: title, label: FullGramAvatarFrames.isEnabled ? "Вкл." : "Выкл.", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openFrames)
-        case let .nicknames(title):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.appearance, title: title, label: FullGramNicknameStyle.activePreset?.title ?? "Стандартный", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openNicknames)
-        case let .skins(title):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.appearance, title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openSkins)
-        case let .bubbles(title):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.appearance, title: title, label: "\(Int(FullGramBubbleCustomization.cornerRadius.rounded())) pt", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openBubbles)
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: FullGramSettingsIcons.symbol("app.badge.fill", color: UIColor(rgb: 0xFF9500)), title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openIcons)
+        case let .frames(title, label):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: FullGramSettingsIcons.symbol("person.crop.circle.dashed", color: UIColor(rgb: 0x34C759)), title: title, label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openFrames)
+        case let .nicknames(title, label):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: FullGramSettingsIcons.symbol("signature", color: UIColor(rgb: 0xAF52DE)), title: title, label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openNicknames)
         }
     }
 }
 
 func fullGramAppearanceCategoryController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
+    let cosmeticsTick = ValuePromise<Int>(0, ignoreRepeated: false)
+    let tickCounter = Atomic<Int>(value: 0)
+    let bump: @Sendable () -> Void = {
+        cosmeticsTick.set(tickCounter.modify { $0 + 1 })
+    }
+    let cloudObs = NotificationCenter.default.addObserver(forName: FullGramCloudCosmetics.didChangeNotification, object: nil, queue: .main) { _ in bump() }
+    let framesObs = NotificationCenter.default.addObserver(forName: FullGramAvatarFrames.didChangeNotification, object: nil, queue: .main) { _ in bump() }
+    let nickObs = NotificationCenter.default.addObserver(forName: FullGramNicknameStyle.didChangeNotification, object: nil, queue: .main) { _ in bump() }
+
     let args = FullGramAppearanceCategoryArguments(
         openFonts: { pushImpl?(fullGramFontsController(context: context)) },
         openThemes: { pushImpl?(fullGramThemesController(context: context)) },
         openDesign: { pushImpl?(fullGramDesignController(context: context)) },
         openIcons: { pushImpl?(fullGramAppIconsController(context: context)) },
         openFrames: { pushImpl?(fullGramAvatarFramesController(context: context)) },
-        openNicknames: { pushImpl?(fullGramNicknameStyleController(context: context)) },
-        openSkins: { pushImpl?(fullGramColorSkinsController(context: context)) },
-        openBubbles: { pushImpl?(fullGramBubblesController(context: context)) }
+        openNicknames: { pushImpl?(fullGramNicknameStyleController(context: context)) }
     )
-    let signal = context.sharedContext.presentationData
-    |> map { presentationData -> (ItemListControllerState, (ItemListNodeState, Any)) in
+    let selfPeerId = context.account.peerId.toInt64()
+    let signal = combineLatest(context.sharedContext.presentationData, cosmeticsTick.get())
+    |> deliverOnMainQueue
+    |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
+        let frameLabel = FullGramAvatarFrames.selectedFrameId(forPeerId: selfPeerId, selfPeerId: selfPeerId) != nil ? "Вкл." : "Выкл."
+        let nickLabel = FullGramNicknameStyle.statusSummary(forPeerId: selfPeerId, selfPeerId: selfPeerId)
         let entries: [FullGramAppearanceCategoryEntry] = [
             .fonts("Шрифты"),
             .themes("Темы"),
             .design("Дизайн"),
             .icons("Иконки приложения"),
-            .frames("Анимированные рамки"),
-            .nicknames("Стили ников"),
-            .skins("Скины раскраски"),
-            .bubbles("Настройка пузырей")
+            .frames("Анимированные рамки", frameLabel),
+            .nicknames("Стили ников", nickLabel)
         ]
         let data = ItemListPresentationData(presentationData)
         let state = ItemListControllerState(presentationData: data, title: .text("Оформление"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
         let listState = ItemListNodeState(presentationData: data, entries: entries, style: .blocks)
         return (state, (listState, args))
+    }
+    |> afterDisposed {
+        NotificationCenter.default.removeObserver(cloudObs)
+        NotificationCenter.default.removeObserver(framesObs)
+        NotificationCenter.default.removeObserver(nickObs)
     }
     let controller = ItemListController(context: context, state: signal)
     pushImpl = { [weak controller] c in controller?.push(c) }
@@ -3754,17 +3766,21 @@ func fullGramOtherCategoryController(context: AccountContext) -> ViewController 
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let aiStatus = FullGramAIStore.shared.hasConfiguredKey ? FullGramAIStore.shared.provider.title : "Не настроен"
         let badgesStatus = FullGramBadges.shared.isEnabled ? "\(FullGramBadges.shared.totalCount)" : "Выкл."
-        let entries: [FullGramOtherCategoryEntry] = [
+        var entries: [FullGramOtherCategoryEntry] = [
             .localPremium(FullGramExtras.shared.localPremium),
             .localPremiumInfo("Открывает клиентские возможности Telegram Premium только на этом устройстве."),
             .generalLink("Основное"),
-            .aiAssistantLink("ИИ Ассистент и свой агент", aiStatus),
-            .badgesLink("Бейджи FullGram (badges.json)", badgesStatus),
+            .aiAssistantLink("ИИ Ассистент и свой агент", aiStatus)
+        ]
+        if fullGramCanOpenAdmin(context: context) {
+            entries.append(.badgesLink("Бейджи FullGram (badges.json)", badgesStatus))
+        }
+        entries.append(contentsOf: [
             .backupHeader("БЭКАП FULLGRAM (.FULLGRAM)"),
             .exportBackup("Экспорт настроек, тем и плагинов"),
             .importBackup("Импорт из файла .fullgram"),
             .backupInfo("Сохраняет в один файл .fullgram все переключатели, белый список Анти-скама, пресеты Микшера, шрифты, темы и установленные плагины.")
-        ]
+        ])
         let data = ItemListPresentationData(presentationData)
         let state = ItemListControllerState(presentationData: data, title: .text("Прочее"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
         let listState = ItemListNodeState(presentationData: data, entries: entries, style: .blocks, animateChanges: false)
@@ -4055,6 +4071,9 @@ private enum FullGramBadgesEntry: ItemListNodeEntry {
 }
 
 public func fullGramBadgesController(context: AccountContext) -> ViewController {
+    guard fullGramCanOpenAdmin(context: context) else {
+        return fullGramOtherCategoryController(context: context)
+    }
     var presentNativeImpl: ((UIViewController) -> Void)?
     let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
     var version = 0

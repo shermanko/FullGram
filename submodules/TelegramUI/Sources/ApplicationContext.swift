@@ -267,6 +267,8 @@ final class AuthorizedApplicationContext {
         }
         
         let accountId = context.account.id
+        FullGramCloudCosmetics.shared.setActiveSelfPeerId(context.account.peerId.toInt64())
+        FullGramCloudCosmetics.shared.refreshIfNeeded()
         self.fullGramAIOverlayCoordinator = FullGramAIOverlayCoordinator(context: self.context, rootController: self.rootController)
         FullGramBadges.shared.refreshIfNeeded()
         self.loggedOutDisposable.set((context.account.loggedOut

@@ -8,7 +8,7 @@ import TelegramPresentationData
 import ItemListUI
 import AccountContext
 
-// MARK: - 1. Анимированные рамки аватара (16 рамок из Discord)
+// MARK: - 1. Анимированные рамки аватара (сохраняются на профиль и синхронизируются с облаком)
 
 public func fullGramAvatarFramesController(context: AccountContext) -> ViewController {
     return FullGramAvatarFramesViewController(context: context)
@@ -16,6 +16,7 @@ public func fullGramAvatarFramesController(context: AccountContext) -> ViewContr
 
 private final class FullGramAvatarFramesViewController: ViewController {
     private let context: AccountContext
+    private let selfPeerId: Int64
     private var presentationData: PresentationData
 
     private let headerCard = UIView()
@@ -26,12 +27,19 @@ private final class FullGramAvatarFramesViewController: ViewController {
     private let enableSwitch = UISwitch()
     private let chatSwitch = UISwitch()
     private var collectionView: UICollectionView!
+    private var lastPickedFrameId: String = FullGramAvatarFrames.allFrames[0].id
 
     public init(context: AccountContext) {
         self.context = context
+        self.selfPeerId = context.account.peerId.toInt64()
         self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
         super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: self.presentationData))
         self.title = "Анимированные рамки"
+        if let current = FullGramAvatarFrames.selectedFrameId(forPeerId: self.selfPeerId) {
+            self.lastPickedFrameId = current
+        }
+        FullGramCloudCosmetics.shared.setActiveSelfPeerId(self.selfPeerId)
+        FullGramCloudCosmetics.shared.refreshIfNeeded(maxAge: 15.0)
     }
 
     @available(*, unavailable)
@@ -75,27 +83,27 @@ private final class FullGramAvatarFramesViewController: ViewController {
         self.previewAvatarCircle.addSubview(self.previewFrameView)
 
         self.previewTitleLabel.translatesAutoresizingMaskIntoConstraints = false
-        self.previewTitleLabel.font = UIFont.systemFont(ofSize: 16.0, weight: .semibold)
+        self.previewTitleLabel.font = UIFont.systemFont(ofSize: 15.0, weight: .semibold)
         self.previewTitleLabel.textColor = theme.list.itemPrimaryTextColor
         self.previewTitleLabel.numberOfLines = 2
         self.headerCard.addSubview(self.previewTitleLabel)
 
         let enableRowLabel = UILabel()
         enableRowLabel.translatesAutoresizingMaskIntoConstraints = false
-        enableRowLabel.text = "Включить рамки"
+        enableRowLabel.text = "Рамка на моём профиле"
         enableRowLabel.font = UIFont.systemFont(ofSize: 15.0, weight: .medium)
         enableRowLabel.textColor = theme.list.itemPrimaryTextColor
         self.headerCard.addSubview(enableRowLabel)
 
         self.enableSwitch.translatesAutoresizingMaskIntoConstraints = false
-        self.enableSwitch.isOn = FullGramAvatarFrames.isEnabled
+        self.enableSwitch.isOn = FullGramAvatarFrames.selectedFrameId(forPeerId: self.selfPeerId) != nil
         self.enableSwitch.onTintColor = theme.list.itemAccentColor
         self.enableSwitch.addTarget(self, action: #selector(self.enableToggled), for: .valueChanged)
         self.headerCard.addSubview(self.enableSwitch)
 
         let chatRowLabel = UILabel()
         chatRowLabel.translatesAutoresizingMaskIntoConstraints = false
-        chatRowLabel.text = "Показывать в списке чатов"
+        chatRowLabel.text = "Показывать рамки в списке чатов"
         chatRowLabel.font = UIFont.systemFont(ofSize: 14.0)
         chatRowLabel.textColor = theme.list.itemSecondaryTextColor
         self.headerCard.addSubview(chatRowLabel)
@@ -142,6 +150,7 @@ private final class FullGramAvatarFramesViewController: ViewController {
 
             enableRowLabel.topAnchor.constraint(equalTo: self.previewTitleLabel.bottomAnchor, constant: 12.0),
             enableRowLabel.leadingAnchor.constraint(equalTo: self.previewAvatarCircle.trailingAnchor, constant: 18.0),
+            enableRowLabel.trailingAnchor.constraint(lessThanOrEqualTo: self.enableSwitch.leadingAnchor, constant: -8.0),
             self.enableSwitch.centerYAnchor.constraint(equalTo: enableRowLabel.centerYAnchor),
             self.enableSwitch.trailingAnchor.constraint(equalTo: self.headerCard.trailingAnchor, constant: -16.0),
 
@@ -161,7 +170,14 @@ private final class FullGramAvatarFramesViewController: ViewController {
     }
 
     @objc private func enableToggled() {
-        FullGramAvatarFrames.isEnabled = self.enableSwitch.isOn
+        if self.enableSwitch.isOn {
+            FullGramAvatarFrames.setSelectedFrame(forPeerId: self.selfPeerId, frameId: self.lastPickedFrameId)
+        } else {
+            if let cur = FullGramAvatarFrames.selectedFrameId(forPeerId: self.selfPeerId) {
+                self.lastPickedFrameId = cur
+            }
+            FullGramAvatarFrames.setSelectedFrame(forPeerId: self.selfPeerId, frameId: nil)
+        }
         self.refreshPreview()
         self.collectionView.reloadData()
     }
@@ -171,13 +187,12 @@ private final class FullGramAvatarFramesViewController: ViewController {
     }
 
     private func refreshPreview() {
-        let selectedId = FullGramAvatarFrames.selectedFrameId
-        let preset = FullGramAvatarFrames.allFrames.first(where: { $0.id == selectedId }) ?? FullGramAvatarFrames.allFrames[0]
-        if FullGramAvatarFrames.isEnabled {
-            self.previewTitleLabel.text = "\(preset.title) (\(preset.category))"
+        if let selectedId = FullGramAvatarFrames.selectedFrameId(forPeerId: self.selfPeerId),
+           let preset = FullGramAvatarFrames.allFrames.first(where: { $0.id == selectedId }) {
+            self.previewTitleLabel.text = "\(preset.title) (\(preset.category))\nID: \(self.selfPeerId)"
             self.previewFrameView.configure(with: preset)
         } else {
-            self.previewTitleLabel.text = "Рамки отключены (выберите ниже)"
+            self.previewTitleLabel.text = "Рамка не установлена (выберите ниже)"
             self.previewFrameView.configure(with: nil)
         }
     }
@@ -191,16 +206,21 @@ extension FullGramAvatarFramesViewController: UICollectionViewDataSource, UIColl
     public func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "FrameCell", for: indexPath) as! FullGramFrameGridCell
         let preset = FullGramAvatarFrames.allFrames[indexPath.item]
-        let isSelected = FullGramAvatarFrames.isEnabled && FullGramAvatarFrames.selectedFrameId == preset.id
+        let activeId = FullGramAvatarFrames.selectedFrameId(forPeerId: self.selfPeerId)
+        let isSelected = (activeId == preset.id)
         cell.configure(preset: preset, selected: isSelected, theme: self.presentationData.theme)
         return cell
     }
 
     public func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         let preset = FullGramAvatarFrames.allFrames[indexPath.item]
-        FullGramAvatarFrames.selectedFrameId = preset.id
-        if !FullGramAvatarFrames.isEnabled {
-            FullGramAvatarFrames.isEnabled = true
+        let current = FullGramAvatarFrames.selectedFrameId(forPeerId: self.selfPeerId)
+        if current == preset.id {
+            FullGramAvatarFrames.setSelectedFrame(forPeerId: self.selfPeerId, frameId: nil)
+            self.enableSwitch.setOn(false, animated: true)
+        } else {
+            self.lastPickedFrameId = preset.id
+            FullGramAvatarFrames.setSelectedFrame(forPeerId: self.selfPeerId, frameId: preset.id)
             self.enableSwitch.setOn(true, animated: true)
         }
         self.refreshPreview()
@@ -275,42 +295,105 @@ private final class FullGramFrameGridCell: UICollectionViewCell {
         self.contentView.layer.borderColor = (selected ? UIColor(rgb: preset.accentHex) : theme.list.itemBlocksSeparatorColor.withAlphaComponent(0.35)).cgColor
         self.titleLabel.text = preset.title
         self.titleLabel.textColor = theme.list.itemPrimaryTextColor
-        self.catLabel.text = selected ? "✓ Выбрано" : preset.category
+        self.catLabel.text = selected ? "✓ На профиле" : preset.category
         self.catLabel.textColor = selected ? UIColor(rgb: preset.accentHex) : theme.list.itemSecondaryTextColor
         self.frameView.configure(with: preset)
     }
 }
 
-// MARK: - 2. Кастомные стили ников
+// MARK: - 2. Стиль ника (палитра цветов + неоновое свечение на профиль)
+
+@available(iOS 14.0, *)
+private final class FullGramNickColorPickerDelegate: NSObject, UIColorPickerViewControllerDelegate {
+    private static var retained: FullGramNickColorPickerDelegate?
+    private let onPick: (String) -> Void
+
+    init(onPick: @escaping (String) -> Void) {
+        self.onPick = onPick
+        super.init()
+        Self.retained = self
+    }
+
+    func colorPickerViewControllerDidSelectColor(_ viewController: UIColorPickerViewController) {
+        self.emit(viewController.selectedColor)
+    }
+
+    func colorPickerViewControllerDidFinish(_ viewController: UIColorPickerViewController) {
+        self.emit(viewController.selectedColor)
+        Self.retained = nil
+    }
+
+    private func emit(_ color: UIColor) {
+        var r: CGFloat = 0
+        var g: CGFloat = 0
+        var b: CGFloat = 0
+        var a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        let hex = String(
+            format: "#%02X%02X%02X",
+            Int((max(0, min(1, r)) * 255.0).rounded()),
+            Int((max(0, min(1, g)) * 255.0).rounded()),
+            Int((max(0, min(1, b)) * 255.0).rounded())
+        )
+        self.onPick(hex)
+    }
+}
+
+private final class FullGramNickStyleUIState: @unchecked Sendable {
+    var presentNative: ((UIViewController) -> Void)?
+}
 
 private final class FullGramNicknameArguments {
     let toggleGlow: (Bool) -> Void
-    let toggleApplyChats: (Bool) -> Void
-    let selectPreset: (String) -> Void
+    let openSystemPalette: () -> Void
+    let enterHex: () -> Void
+    let resetDefault: () -> Void
+    let selectSwatch: (String) -> Void
 
     init(
         toggleGlow: @escaping (Bool) -> Void,
-        toggleApplyChats: @escaping (Bool) -> Void,
-        selectPreset: @escaping (String) -> Void
+        openSystemPalette: @escaping () -> Void,
+        enterHex: @escaping () -> Void,
+        resetDefault: @escaping () -> Void,
+        selectSwatch: @escaping (String) -> Void
     ) {
         self.toggleGlow = toggleGlow
-        self.toggleApplyChats = toggleApplyChats
-        self.selectPreset = selectPreset
+        self.openSystemPalette = openSystemPalette
+        self.enterHex = enterHex
+        self.resetDefault = resetDefault
+        self.selectSwatch = selectSwatch
+    }
+}
+
+private func fullGramColorSwatchIcon(_ hex: String) -> UIImage? {
+    guard let rgb = FullGramThemeColors.parse(hex) else { return nil }
+    let color = UIColor(rgb: rgb)
+    let size = CGSize(width: 26.0, height: 26.0)
+    return UIGraphicsImageRenderer(size: size).image { _ in
+        let rect = CGRect(origin: .zero, size: size).insetBy(dx: 1.5, dy: 1.5)
+        let path = UIBezierPath(ovalIn: rect)
+        color.setFill()
+        path.fill()
+        UIColor(white: 1.0, alpha: 0.25).setStroke()
+        path.lineWidth = 1.0
+        path.stroke()
     }
 }
 
 private enum FullGramNicknameEntry: ItemListNodeEntry {
     case optionsHeader(String)
     case glow(Bool)
-    case applyChats(Bool)
-    case presetsHeader(String)
-    case preset(Int32, FullGramNicknamePreset, Bool)
+    case customPalette(String, String)
+    case customHex(String, String)
+    case resetColor(String)
+    case paletteHeader(String)
+    case swatch(Int32, FullGramNicknameColorOption, Bool)
     case info(String)
 
     var section: ItemListSectionId {
         switch self {
-        case .optionsHeader, .glow, .applyChats: return 0
-        case .presetsHeader, .preset, .info: return 1
+        case .optionsHeader, .glow, .customPalette, .customHex, .resetColor: return 0
+        case .paletteHeader, .swatch, .info: return 1
         }
     }
 
@@ -318,9 +401,11 @@ private enum FullGramNicknameEntry: ItemListNodeEntry {
         switch self {
         case .optionsHeader: return 0
         case .glow: return 1
-        case .applyChats: return 2
-        case .presetsHeader: return 100
-        case let .preset(idx, _, _): return 101 + idx
+        case .customPalette: return 2
+        case .customHex: return 3
+        case .resetColor: return 4
+        case .paletteHeader: return 100
+        case let .swatch(idx, _, _): return 101 + idx
         case .info: return 300
         }
     }
@@ -335,22 +420,62 @@ private enum FullGramNicknameEntry: ItemListNodeEntry {
         case let .optionsHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .glow(val):
-            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Неоновое свечение ника", value: val, sectionId: self.section, style: .blocks, updated: args.toggleGlow)
-        case let .applyChats(val):
-            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Применять к названиям в чатах", value: val, sectionId: self.section, style: .blocks, updated: args.toggleApplyChats)
-        case let .presetsHeader(text):
+            return ItemListSwitchItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                title: "Неоновое свечение ника",
+                value: val,
+                sectionId: self.section,
+                style: .blocks,
+                updated: args.toggleGlow
+            )
+        case let .customPalette(title, label):
+            return ItemListDisclosureItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                title: title,
+                label: label,
+                sectionId: self.section,
+                style: .blocks,
+                disclosureStyle: .arrow,
+                action: args.openSystemPalette
+            )
+        case let .customHex(title, label):
+            return ItemListDisclosureItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                title: title,
+                label: label,
+                sectionId: self.section,
+                style: .blocks,
+                disclosureStyle: .arrow,
+                action: args.enterHex
+            )
+        case let .resetColor(title):
+            return ItemListActionItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                title: title,
+                kind: .destructive,
+                alignment: .center,
+                sectionId: self.section,
+                style: .blocks,
+                action: args.resetDefault
+            )
+        case let .paletteHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
-        case let .preset(_, preset, selected):
+        case let .swatch(_, option, selected):
             return ItemListCheckboxItem(
                 presentationData: presentationData,
                 systemStyle: .glass,
-                title: preset.title,
-                style: .left,
+                icon: fullGramColorSwatchIcon(option.hex),
+                title: option.title,
+                style: .right,
                 checked: selected,
                 zeroSeparatorInsets: false,
                 sectionId: self.section,
                 action: {
-                    args.selectPreset(preset.id)
+                    args.selectSwatch(option.hex)
                 }
             )
         case let .info(text):
@@ -360,8 +485,13 @@ private enum FullGramNicknameEntry: ItemListNodeEntry {
 }
 
 public func fullGramNicknameStyleController(context: AccountContext) -> ViewController {
+    let selfPeerId = context.account.peerId.toInt64()
+    FullGramCloudCosmetics.shared.setActiveSelfPeerId(selfPeerId)
+    FullGramCloudCosmetics.shared.refreshIfNeeded(maxAge: 15.0)
+
     let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
+    let uiState = FullGramNickStyleUIState()
     let bump: () -> Void = {
         let next = version.modify { $0 + 1 }
         refresh.set(next)
@@ -376,334 +506,79 @@ public func fullGramNicknameStyleController(context: AccountContext) -> ViewCont
     }
 
     let args = FullGramNicknameArguments(
-        toggleGlow: { FullGramNicknameStyle.glowEnabled = $0 },
-        toggleApplyChats: { FullGramNicknameStyle.applyToChatTitles = $0 },
-        selectPreset: { FullGramNicknameStyle.selectedPresetId = $0 }
-    )
-
-    let signal = combineLatest(context.sharedContext.presentationData, refresh.get())
-    |> deliverOnMainQueue
-    |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
-        var entries: [FullGramNicknameEntry] = [
-            .optionsHeader("ПАРАМЕТРЫ СТИЛЯ НИКОВ"),
-            .glow(FullGramNicknameStyle.glowEnabled),
-            .applyChats(FullGramNicknameStyle.applyToChatTitles),
-            .presetsHeader("ВЫБЕРИТЕ СТИЛЬ НИКА")
-        ]
-        let currentId = FullGramNicknameStyle.selectedPresetId
-        for (idx, preset) in FullGramNicknameStyle.presets.enumerated() {
-            entries.append(.preset(Int32(idx), preset, preset.id == currentId))
-        }
-        entries.append(.info("Стиль применяется к вашему имени в профиле и названиям чатов."))
-
-        let data = ItemListPresentationData(presentationData)
-        let state = ItemListControllerState(
-            presentationData: data,
-            title: .text("Стили ников"),
-            leftNavigationButton: nil,
-            rightNavigationButton: nil,
-            backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back)
-        )
-        return (state, (ItemListNodeState(presentationData: data, entries: entries, style: .blocks), args))
-    }
-    |> afterDisposed {
-        NotificationCenter.default.removeObserver(observer)
-    }
-
-    return ItemListController(context: context, state: signal)
-}
-
-// MARK: - 3. Скины раскраски
-
-private final class FullGramSkinsArguments {
-    let applySkin: (FullGramColorSkin) -> Void
-    let resetAll: () -> Void
-
-    init(applySkin: @escaping (FullGramColorSkin) -> Void, resetAll: @escaping () -> Void) {
-        self.applySkin = applySkin
-        self.resetAll = resetAll
-    }
-}
-
-private enum FullGramSkinsEntry: ItemListNodeEntry {
-    case header(String)
-    case skin(Int32, FullGramColorSkin, Bool)
-    case reset(String)
-    case footer(String)
-
-    var section: ItemListSectionId {
-        switch self {
-        case .header, .skin: return 0
-        case .reset, .footer: return 1
-        }
-    }
-
-    var stableId: Int32 {
-        switch self {
-        case .header: return 0
-        case let .skin(idx, _, _): return 1 + idx
-        case .reset: return 100
-        case .footer: return 101
-        }
-    }
-
-    static func < (lhs: FullGramSkinsEntry, rhs: FullGramSkinsEntry) -> Bool {
-        return lhs.stableId < rhs.stableId
-    }
-
-    func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
-        let args = arguments as! FullGramSkinsArguments
-        switch self {
-        case let .header(text):
-            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
-        case let .skin(_, skin, selected):
-            return ItemListDisclosureItem(
-                presentationData: presentationData,
-                systemStyle: .glass,
-                title: "\(skin.title)\n\(skin.subtitle)",
-                label: selected ? "Активен" : "",
-                sectionId: self.section,
-                style: .blocks,
-                disclosureStyle: .none,
-                action: {
-                    args.applySkin(skin)
+        toggleGlow: { enabled in
+            let currentHex = FullGramNicknameStyle.colorHex(forPeerId: selfPeerId, selfPeerId: selfPeerId) ?? "#00F5D4"
+            FullGramNicknameStyle.setOwnStyle(peerId: selfPeerId, colorHex: currentHex, glowEnabled: enabled)
+        },
+        openSystemPalette: {
+            if #available(iOS 14.0, *) {
+                let picker = UIColorPickerViewController()
+                picker.supportsAlpha = false
+                if let hex = FullGramNicknameStyle.colorHex(forPeerId: selfPeerId, selfPeerId: selfPeerId),
+                   let rgb = FullGramThemeColors.parse(hex) {
+                    picker.selectedColor = UIColor(rgb: rgb)
+                } else {
+                    picker.selectedColor = UIColor(rgb: 0x00F5D4)
                 }
-            )
-        case let .reset(title):
-            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .destructive, alignment: .center, sectionId: self.section, style: .blocks, action: args.resetAll)
-        case let .footer(text):
-            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
-        }
-    }
-}
-
-public func fullGramColorSkinsController(context: AccountContext) -> ViewController {
-    let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
-    let version = Atomic<Int>(value: 0)
-    let bump: () -> Void = {
-        let next = version.modify { $0 + 1 }
-        refresh.set(next)
-    }
-
-    let observer = NotificationCenter.default.addObserver(
-        forName: FullGramThemeColors.didChangeNotification,
-        object: nil,
-        queue: .main
-    ) { _ in
-        bump()
-    }
-
-    let args = FullGramSkinsArguments(
-        applySkin: { skin in
-            FullGramColorSkins.apply(skin)
-            bump()
-        },
-        resetAll: {
-            FullGramColorSkins.resetAll()
-            bump()
-        }
-    )
-
-    let signal = combineLatest(context.sharedContext.presentationData, refresh.get())
-    |> deliverOnMainQueue
-    |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
-        var entries: [FullGramSkinsEntry] = [
-            .header("СКИНЫ РАСКРАСКИ (ВСЕ ЦВЕТА + ПУЗЫРИ + НИК)")
-        ]
-        let activeId = FullGramColorSkins.selectedSkinId
-        for (idx, skin) in FullGramColorSkins.skins.enumerated() {
-            entries.append(.skin(Int32(idx), skin, skin.id == activeId))
-        }
-        entries.append(.reset("Сбросить скин по умолчанию"))
-        entries.append(.footer("Скин в одно нажатие настраивает цвета темы, фон чата, стиль пузырей и цвет ника."))
-
-        let data = ItemListPresentationData(presentationData)
-        let state = ItemListControllerState(
-            presentationData: data,
-            title: .text("Скины раскраски"),
-            leftNavigationButton: nil,
-            rightNavigationButton: nil,
-            backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back)
-        )
-        return (state, (ItemListNodeState(presentationData: data, entries: entries, style: .blocks), args))
-    }
-    |> afterDisposed {
-        NotificationCenter.default.removeObserver(observer)
-    }
-
-    return ItemListController(context: context, state: signal)
-}
-
-// MARK: - 4. Настройка пузырей сообщений
-
-private final class FullGramBubblesArguments {
-    let selectRadius: () -> Void
-    let selectOpacity: () -> Void
-    let toggleHideTail: (Bool) -> Void
-    let toggleOutline: (Bool) -> Void
-    let editOutlineColor: () -> Void
-    let reset: () -> Void
-
-    init(
-        selectRadius: @escaping () -> Void,
-        selectOpacity: @escaping () -> Void,
-        toggleHideTail: @escaping (Bool) -> Void,
-        toggleOutline: @escaping (Bool) -> Void,
-        editOutlineColor: @escaping () -> Void,
-        reset: @escaping () -> Void
-    ) {
-        self.selectRadius = selectRadius
-        self.selectOpacity = selectOpacity
-        self.toggleHideTail = toggleHideTail
-        self.toggleOutline = toggleOutline
-        self.editOutlineColor = editOutlineColor
-        self.reset = reset
-    }
-}
-
-private enum FullGramBubblesEntry: ItemListNodeEntry {
-    case header(String)
-    case radius(String, String)
-    case opacity(String, String)
-    case hideTail(Bool)
-    case outline(Bool)
-    case outlineColor(String, String)
-    case reset(String)
-    case footer(String)
-
-    var section: ItemListSectionId {
-        switch self {
-        case .header, .radius, .opacity, .hideTail, .outline, .outlineColor: return 0
-        case .reset, .footer: return 1
-        }
-    }
-
-    var stableId: Int32 {
-        switch self {
-        case .header: return 0
-        case .radius: return 1
-        case .opacity: return 2
-        case .hideTail: return 3
-        case .outline: return 4
-        case .outlineColor: return 5
-        case .reset: return 10
-        case .footer: return 11
-        }
-    }
-
-    static func < (lhs: FullGramBubblesEntry, rhs: FullGramBubblesEntry) -> Bool {
-        return lhs.stableId < rhs.stableId
-    }
-
-    func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
-        let args = arguments as! FullGramBubblesArguments
-        switch self {
-        case let .header(text):
-            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
-        case let .radius(title, value):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.selectRadius)
-        case let .opacity(title, value):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.selectOpacity)
-        case let .hideTail(val):
-            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Убрать хвостики пузырей", value: val, sectionId: self.section, style: .blocks, updated: args.toggleHideTail)
-        case let .outline(val):
-            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Контур (обводка) пузырей", value: val, sectionId: self.section, style: .blocks, updated: args.toggleOutline)
-        case let .outlineColor(title, value):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.editOutlineColor)
-        case let .reset(title):
-            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .destructive, alignment: .center, sectionId: self.section, style: .blocks, action: args.reset)
-        case let .footer(text):
-            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
-        }
-    }
-}
-
-public func fullGramBubblesController(context: AccountContext) -> ViewController {
-    var presentNativeImpl: ((UIViewController) -> Void)?
-    let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
-    let version = Atomic<Int>(value: 0)
-    let bump: () -> Void = {
-        let next = version.modify { $0 + 1 }
-        refresh.set(next)
-    }
-
-    let observer = NotificationCenter.default.addObserver(
-        forName: FullGramBubbleCustomization.didChangeNotification,
-        object: nil,
-        queue: .main
-    ) { _ in
-        bump()
-    }
-
-    let args = FullGramBubblesArguments(
-        selectRadius: {
-            let sheet = UIAlertController(title: "Скругление пузырей", message: nil, preferredStyle: .actionSheet)
-            for (title, val) in [("Острые (6 pt)", 6.0), ("Средние (12 pt)", 12.0), ("Стандарт (17 pt)", 17.0), ("Пилюли (22 pt)", 22.0)] {
-                sheet.addAction(UIAlertAction(title: title, style: .default, handler: { _ in
-                    FullGramBubbleCustomization.cornerRadius = CGFloat(val)
-                }))
+                let delegate = FullGramNickColorPickerDelegate { hex in
+                    let glow = FullGramNicknameStyle.glowEnabled(forPeerId: selfPeerId, selfPeerId: selfPeerId)
+                    FullGramNicknameStyle.setOwnStyle(peerId: selfPeerId, colorHex: hex, glowEnabled: glow)
+                }
+                picker.delegate = delegate
+                uiState.presentNative?(picker)
             }
-            sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            presentNativeImpl?(sheet)
         },
-        selectOpacity: {
-            let sheet = UIAlertController(title: "Прозрачность пузырей", message: nil, preferredStyle: .actionSheet)
-            for (title, val) in [("Полупрозрачные (55%)", 0.55), ("Мягкие (75%)", 0.75), ("Лёгкие (90%)", 0.90), ("Непрозрачные (100%)", 1.0)] {
-                sheet.addAction(UIAlertAction(title: title, style: .default, handler: { _ in
-                    FullGramBubbleCustomization.opacity = CGFloat(val)
-                }))
-            }
-            sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            presentNativeImpl?(sheet)
-        },
-        toggleHideTail: { FullGramBubbleCustomization.hideTail = $0 },
-        toggleOutline: { FullGramBubbleCustomization.outlineEnabled = $0 },
-        editOutlineColor: {
-            let alert = UIAlertController(title: "Цвет обводки (HEX)", message: "Например: #00E5FF или #FF2A85", preferredStyle: .alert)
+        enterHex: {
+            let alert = UIAlertController(title: "Цвет ника (HEX)", message: "Введите цвет в формате #RRGGBB", preferredStyle: .alert)
             alert.addTextField { tf in
-                tf.text = FullGramBubbleCustomization.outlineColorHex ?? ""
-                tf.placeholder = "#00E5FF"
+                tf.text = FullGramNicknameStyle.colorHex(forPeerId: selfPeerId, selfPeerId: selfPeerId) ?? ""
+                tf.placeholder = "#00F5D4"
                 tf.autocapitalizationType = .allCharacters
+                tf.autocorrectionType = .no
             }
             alert.addAction(UIAlertAction(title: "Применить", style: .default, handler: { _ in
                 let raw = alert.textFields?.first?.text ?? ""
                 if let parsed = FullGramThemeColors.parse(raw) {
-                    FullGramBubbleCustomization.outlineColorHex = String(format: "#%06X", parsed)
-                    FullGramBubbleCustomization.outlineEnabled = true
-                } else {
-                    FullGramBubbleCustomization.outlineColorHex = nil
+                    let hex = String(format: "#%06X", parsed)
+                    let glow = FullGramNicknameStyle.glowEnabled(forPeerId: selfPeerId, selfPeerId: selfPeerId)
+                    FullGramNicknameStyle.setOwnStyle(peerId: selfPeerId, colorHex: hex, glowEnabled: glow)
                 }
             }))
             alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            presentNativeImpl?(alert)
+            uiState.presentNative?(alert)
         },
-        reset: {
-            FullGramBubbleCustomization.reset()
+        resetDefault: {
+            FullGramNicknameStyle.setOwnStyle(peerId: selfPeerId, colorHex: nil, glowEnabled: false)
+        },
+        selectSwatch: { hex in
+            let glow = FullGramNicknameStyle.glowEnabled(forPeerId: selfPeerId, selfPeerId: selfPeerId)
+            FullGramNicknameStyle.setOwnStyle(peerId: selfPeerId, colorHex: hex, glowEnabled: glow)
         }
     )
 
     let signal = combineLatest(context.sharedContext.presentationData, refresh.get())
     |> deliverOnMainQueue
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
-        let r = Int(FullGramBubbleCustomization.cornerRadius.rounded())
-        let op = Int((FullGramBubbleCustomization.opacity * 100.0).rounded())
-        let hex = FullGramBubbleCustomization.outlineColorHex ?? "Авто"
-
-        let entries: [FullGramBubblesEntry] = [
-            .header("ФОРМА И СТИЛЬ ПУЗЫРЕЙ"),
-            .radius("Скругление углов", "\(r) pt"),
-            .opacity("Прозрачность пузырей", "\(op)%"),
-            .hideTail(FullGramBubbleCustomization.hideTail),
-            .outline(FullGramBubbleCustomization.outlineEnabled),
-            .outlineColor("Цвет обводки", hex),
-            .reset("Сбросить настройки пузырей"),
-            .footer("Изменения применяются ко всем пузырям сообщений в чатах.")
+        let currentHex = FullGramNicknameStyle.colorHex(forPeerId: selfPeerId, selfPeerId: selfPeerId)
+        let glow = FullGramNicknameStyle.glowEnabled(forPeerId: selfPeerId, selfPeerId: selfPeerId)
+        var entries: [FullGramNicknameEntry] = [
+            .optionsHeader("НАСТРОЙКА НИКА ДЛЯ ВАШЕГО АККАУНТА"),
+            .glow(glow),
+            .customPalette("Палитра цветов", currentHex ?? "Выбрать"),
+            .customHex("Ввести HEX-код", currentHex ?? "Авто"),
+            .resetColor("Сбросить цвет ника (Стандартный)"),
+            .paletteHeader("ГОТОВЫЕ ЦВЕТА")
         ]
+        for (idx, option) in FullGramNicknameStyle.palette.enumerated() {
+            let isSelected = currentHex?.caseInsensitiveCompare(option.hex) == .orderedSame
+            entries.append(.swatch(Int32(idx), option, isSelected))
+        }
+        entries.append(.info("Цвет и неоновое свечение привязываются к вашему ID (\(selfPeerId)) и видны другим пользователям FullGram в вашем профиле и списке чатов."))
 
         let data = ItemListPresentationData(presentationData)
         let state = ItemListControllerState(
             presentationData: data,
-            title: .text("Настройка пузырей"),
+            title: .text("Стиль ника"),
             leftNavigationButton: nil,
             rightNavigationButton: nil,
             backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back)
@@ -715,11 +590,13 @@ public func fullGramBubblesController(context: AccountContext) -> ViewController
     }
 
     let controller = ItemListController(context: context, state: signal)
-    presentNativeImpl = { [weak controller] vc in controller?.present(vc, animated: true) }
+    uiState.presentNative = { vc in
+        context.sharedContext.applicationBindings.presentNativeController(vc)
+    }
     return controller
 }
 
-// MARK: - 5. Приватный режим (режим стримера)
+// MARK: - 3. Приватный режим (режим стримера)
 
 private final class FullGramPrivateModeArguments {
     let toggleMaster: (Bool) -> Void
@@ -778,7 +655,7 @@ private enum FullGramPrivateModeEntry: ItemListNodeEntry {
         case let .header(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .master(val):
-            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Приватный режим", value: val, sectionId: self.section, style: .blocks, updated: args.toggleMaster)
+            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Приватный режим (режим стримера)", value: val, sectionId: self.section, style: .blocks, updated: args.toggleMaster)
         case let .optionsHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .hidePreviews(val):
@@ -821,13 +698,13 @@ public func fullGramPrivateModeController(context: AccountContext) -> ViewContro
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let extras = FullGramExtras.shared
         let entries: [FullGramPrivateModeEntry] = [
-            .header("БЫСТРАЯ ЗАЩИТА ЭКРАНА"),
+            .header("ЗАЩИТА ПРИ ЗАПИСИ И ДЕМОНСТРАЦИИ ЭКРАНА"),
             .master(extras.privateMode),
-            .optionsHeader("ЧТО СКРЫВАТЬ ПРИ АКТИВНОМ РЕЖИМЕ"),
+            .optionsHeader("ЧТО СКРЫВАТЬ ВО ВРЕМЯ ЗАХВАТА ЭКРАНА"),
             .hidePreviews(extras.privateModeHidePreviews),
             .hideUsername(extras.privateModeHideUsername),
             .hidePhone(extras.hidePhoneNumber),
-            .footer("Приватный режим скрывает конфиденциальные данные (номер телефона, @username и текст последних сообщений в списке чатов) во время демонстрации экрана или стрима.")
+            .footer("Скрытие активируется автоматически только во время записи видео с экрана, демонстрации экрана или после скриншота. «Скрывать превью сообщений в чатах» заменяет текст последнего сообщения в списке чатов на заглушку.")
         ]
 
         let data = ItemListPresentationData(presentationData)

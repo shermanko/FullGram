@@ -2575,20 +2575,26 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
             reactionSourceMessage = .single(nil)
         }
 
+        FullGramCloudCosmetics.shared.refreshIfNeeded()
         let fullGramExtrasTick = Signal<Int, NoError> { subscriber in
-            var tick = 0
-            subscriber.putNext(tick)
+            let tick = Atomic<Int>(value: 0)
+            subscriber.putNext(0)
+            let bump: @Sendable () -> Void = {
+                subscriber.putNext(tick.modify { $0 + 1 })
+            }
             let extrasObserver = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { _ in
-                tick += 1
-                subscriber.putNext(tick)
+                bump()
             }
             let badgesObserver = NotificationCenter.default.addObserver(forName: FullGramBadges.didChangeNotification, object: nil, queue: .main) { _ in
-                tick += 1
-                subscriber.putNext(tick)
+                bump()
+            }
+            let cosmeticsObserver = NotificationCenter.default.addObserver(forName: FullGramCloudCosmetics.didChangeNotification, object: nil, queue: .main) { _ in
+                bump()
             }
             return ActionDisposable {
                 NotificationCenter.default.removeObserver(extrasObserver)
                 NotificationCenter.default.removeObserver(badgesObserver)
+                NotificationCenter.default.removeObserver(cosmeticsObserver)
             }
         }
         self.dataDisposable = combineLatest(

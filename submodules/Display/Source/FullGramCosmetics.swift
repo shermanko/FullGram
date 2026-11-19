@@ -1,686 +1,340 @@
 import Foundation
 import UIKit
 
-// MARK: - Кастомные стили ников
+// MARK: - Облачная синхронизация косметики по ID аккаунта (как в Discord)
 
-public struct FullGramNicknamePreset: Equatable {
+public struct FullGramUserCosmetics: Codable, Equatable, Sendable {
+    public var frameId: String?
+    public var nickColor: String?
+    public var nickGlow: Bool
+
+    public init(frameId: String? = nil, nickColor: String? = nil, nickGlow: Bool = false) {
+        self.frameId = frameId
+        self.nickColor = nickColor
+        self.nickGlow = nickGlow
+    }
+
+    public var isEmpty: Bool {
+        return (self.frameId == nil || self.frameId?.isEmpty == true)
+            && (self.nickColor == nil || self.nickColor?.isEmpty == true)
+    }
+}
+
+private struct FullGramCosmeticsPayload: Codable {
+    var version: Int?
+    var users: [String: FullGramUserCosmetics]
+}
+
+public final class FullGramCloudCosmetics: @unchecked Sendable {
+    public static let shared = FullGramCloudCosmetics()
+    public static let didChangeNotification = Notification.Name("FullGram.CloudCosmeticsChanged")
+
+    private static let cosmeticsURL = "https://fullgram.korsakovx.workers.dev/cosmetics.json"
+    private static let updateEndpointURL = "https://fullgram.korsakovx.workers.dev/cosmetics"
+    private static let localPrefix = "fullgram.cosmetics.user."
+    private static let lastSyncKey = "fullgram.cosmetics.lastSync"
+
+    private let lock = NSRecursiveLock()
+    private var activeSelfPeerId: Int64?
+    private var localCache: [Int64: FullGramUserCosmetics] = [:]
+    private var remoteUsers: [Int64: FullGramUserCosmetics] = [:]
+    private var isRefreshing = false
+
+    private static let session: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 10.0
+        cfg.timeoutIntervalForResource = 15.0
+        cfg.cachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: cfg)
+    }()
+
+    private init() {
+        self.loadDiskCache()
+    }
+
+    private var cacheFileURL: URL {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return dir.appendingPathComponent("fullgram_cosmetics.json")
+    }
+
+    private func loadDiskCache() {
+        guard let data = try? Data(contentsOf: self.cacheFileURL),
+              let payload = try? JSONDecoder().decode(FullGramCosmeticsPayload.self, from: data) else {
+            return
+        }
+        var mapped: [Int64: FullGramUserCosmetics] = [:]
+        for (k, v) in payload.users {
+            if let id = Int64(k), !v.isEmpty {
+                mapped[id] = v
+            }
+        }
+        self.lock.lock()
+        self.remoteUsers = mapped
+        self.lock.unlock()
+    }
+
+    public func setActiveSelfPeerId(_ peerId: Int64) {
+        self.lock.lock()
+        self.activeSelfPeerId = peerId
+        self.lock.unlock()
+    }
+
+    public var currentSelfPeerId: Int64? {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.activeSelfPeerId
+    }
+
+    public func localCosmetics(forPeerId peerId: Int64) -> FullGramUserCosmetics? {
+        self.lock.lock()
+        if let cached = self.localCache[peerId] {
+            self.lock.unlock()
+            return cached.isEmpty ? nil : cached
+        }
+        self.lock.unlock()
+
+        if let data = UserDefaults.standard.data(forKey: Self.localPrefix + "\(peerId)"),
+           let decoded = try? JSONDecoder().decode(FullGramUserCosmetics.self, from: data) {
+            self.lock.lock()
+            self.localCache[peerId] = decoded
+            self.lock.unlock()
+            return decoded.isEmpty ? nil : decoded
+        }
+
+        // Fall back to remote entry if user logged into the same account on a fresh device
+        self.lock.lock()
+        let remote = self.remoteUsers[peerId]
+        self.lock.unlock()
+        return remote
+    }
+
+    public func cosmetics(forPeerId peerId: Int64?, selfPeerId: Int64?) -> FullGramUserCosmetics? {
+        guard let peerId, peerId != 0 else { return nil }
+        let effectiveSelfId = selfPeerId ?? self.currentSelfPeerId
+        if let effectiveSelfId, peerId == effectiveSelfId {
+            return self.localCosmetics(forPeerId: peerId)
+        }
+        self.lock.lock()
+        let remote = self.remoteUsers[peerId]
+        self.lock.unlock()
+        return remote
+    }
+
+    public func setFrame(forPeerId peerId: Int64, frameId: String?) {
+        self.setActiveSelfPeerId(peerId)
+        var entry = self.localCosmetics(forPeerId: peerId) ?? FullGramUserCosmetics()
+        let cleaned = frameId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        entry.frameId = (cleaned?.isEmpty == false) ? cleaned : nil
+        self.saveLocal(entry, forPeerId: peerId)
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        NotificationCenter.default.post(name: FullGramAvatarFrames.didChangeNotification, object: nil)
+        self.pushToCloud(peerId: peerId, entry: entry)
+    }
+
+    public func setNickStyle(forPeerId peerId: Int64, colorHex: String?, glowEnabled: Bool) {
+        self.setActiveSelfPeerId(peerId)
+        var entry = self.localCosmetics(forPeerId: peerId) ?? FullGramUserCosmetics()
+        let cleaned = colorHex?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        entry.nickColor = (cleaned?.isEmpty == false) ? cleaned : nil
+        entry.nickGlow = entry.nickColor != nil ? glowEnabled : false
+        self.saveLocal(entry, forPeerId: peerId)
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        NotificationCenter.default.post(name: FullGramNicknameStyle.didChangeNotification, object: nil)
+        self.pushToCloud(peerId: peerId, entry: entry)
+    }
+
+    private func saveLocal(_ entry: FullGramUserCosmetics, forPeerId peerId: Int64) {
+        self.lock.lock()
+        self.localCache[peerId] = entry
+        if entry.isEmpty {
+            self.remoteUsers.removeValue(forKey: peerId)
+        } else {
+            self.remoteUsers[peerId] = entry
+        }
+        self.lock.unlock()
+
+        if let data = try? JSONEncoder().encode(entry) {
+            UserDefaults.standard.set(data, forKey: Self.localPrefix + "\(peerId)")
+        }
+    }
+
+    private func pushToCloud(peerId: Int64, entry: FullGramUserCosmetics) {
+        guard let url = URL(string: Self.updateEndpointURL) else { return }
+        var body: [String: Any] = [
+            "peerId": String(peerId),
+            "frameId": entry.frameId as Any? ?? NSNull(),
+            "nickColor": entry.nickColor as Any? ?? NSNull(),
+            "nickGlow": entry.nickGlow
+        ]
+        if entry.frameId == nil { body["frameId"] = "" }
+        if entry.nickColor == nil { body["nickColor"] = "" }
+
+        guard let data = try? JSONSerialization.data(withJSONObject: body, options: []) else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        req.httpBody = data
+        Self.session.dataTask(with: req) { [weak self] _, response, _ in
+            if let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) {
+                UserDefaults.standard.set(0.0, forKey: Self.lastSyncKey)
+                self?.refreshNow(completion: nil)
+            }
+        }.resume()
+    }
+
+    public func refreshIfNeeded(maxAge: TimeInterval = 90.0) {
+        let last = UserDefaults.standard.double(forKey: Self.lastSyncKey)
+        if Date().timeIntervalSince1970 - last < maxAge {
+            return
+        }
+        self.refreshNow(completion: nil)
+    }
+
+    public func refreshNow(completion: ((Bool) -> Void)? = nil) {
+        guard let url = URL(string: Self.cosmeticsURL) else {
+            completion?(false)
+            return
+        }
+        self.lock.lock()
+        if self.isRefreshing {
+            self.lock.unlock()
+            return
+        }
+        self.isRefreshing = true
+        self.lock.unlock()
+
+        var req = URLRequest(url: url)
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        Self.session.dataTask(with: req) { [weak self] data, response, _ in
+            guard let self else { return }
+            defer {
+                self.lock.lock()
+                self.isRefreshing = false
+                self.lock.unlock()
+            }
+            guard let http = response as? HTTPURLResponse,
+                  (200 ..< 300).contains(http.statusCode),
+                  let data,
+                  data.count <= 1_000_000,
+                  let payload = try? JSONDecoder().decode(FullGramCosmeticsPayload.self, from: data) else {
+                DispatchQueue.main.async { completion?(false) }
+                return
+            }
+
+            try? data.write(to: self.cacheFileURL, options: .atomic)
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastSyncKey)
+
+            var mapped: [Int64: FullGramUserCosmetics] = [:]
+            for (k, v) in payload.users {
+                if let id = Int64(k), !v.isEmpty {
+                    mapped[id] = v
+                }
+            }
+            self.lock.lock()
+            self.remoteUsers = mapped
+            self.lock.unlock()
+
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+                NotificationCenter.default.post(name: FullGramAvatarFrames.didChangeNotification, object: nil)
+                NotificationCenter.default.post(name: FullGramNicknameStyle.didChangeNotification, object: nil)
+                completion?(true)
+            }
+        }.resume()
+    }
+}
+
+// MARK: - Кастомные стили ников (палитра цветов + неоновое свечение на профиль)
+
+public struct FullGramNicknameColorOption: Equatable, Sendable {
     public let id: String
     public let title: String
-    public let colors: [UIColor]
-    public let glowColor: UIColor?
-    public let isBold: Bool
-    public let isMono: Bool
-    public let isItalic: Bool
+    public let hex: String
 }
 
 public enum FullGramNicknameStyle {
     public static let didChangeNotification = Notification.Name("FullGram.NicknameStyleChanged")
 
-    private static let presetKey = "fullgram.nickname.presetId"
-    private static let glowKey = "fullgram.nickname.glowEnabled"
-    private static let applyOthersKey = "fullgram.nickname.applyOthers"
-
-    private static let stateLock = NSLock()
-    private static var cachedPresetId: String?
-    private static var cachedGlow: Bool?
-    private static var cachedApplyOthers: Bool?
-    private static let gradientCache: NSCache<NSString, UIColor> = {
-        let c = NSCache<NSString, UIColor>()
-        c.countLimit = 48
-        return c
-    }()
-
-    public static var selectedPresetId: String {
-        get {
-            self.stateLock.lock()
-            if let v = self.cachedPresetId {
-                self.stateLock.unlock()
-                return v
-            }
-            let resolved = UserDefaults.standard.string(forKey: presetKey) ?? "none"
-            self.cachedPresetId = resolved
-            self.stateLock.unlock()
-            return resolved
-        }
-        set {
-            self.stateLock.lock()
-            self.cachedPresetId = newValue
-            self.stateLock.unlock()
-            UserDefaults.standard.set(newValue, forKey: presetKey)
-            NotificationCenter.default.post(name: didChangeNotification, object: nil)
-        }
-    }
-
-    public static var glowEnabled: Bool {
-        get {
-            self.stateLock.lock()
-            if let v = self.cachedGlow {
-                self.stateLock.unlock()
-                return v
-            }
-            let resolved = (UserDefaults.standard.object(forKey: glowKey) == nil)
-                ? true
-                : UserDefaults.standard.bool(forKey: glowKey)
-            self.cachedGlow = resolved
-            self.stateLock.unlock()
-            return resolved
-        }
-        set {
-            self.stateLock.lock()
-            self.cachedGlow = newValue
-            self.stateLock.unlock()
-            UserDefaults.standard.set(newValue, forKey: glowKey)
-            NotificationCenter.default.post(name: didChangeNotification, object: nil)
-        }
-    }
-
-    public static var applyToChatTitles: Bool {
-        get {
-            self.stateLock.lock()
-            if let v = self.cachedApplyOthers {
-                self.stateLock.unlock()
-                return v
-            }
-            let resolved = (UserDefaults.standard.object(forKey: applyOthersKey) == nil)
-                ? true
-                : UserDefaults.standard.bool(forKey: applyOthersKey)
-            self.cachedApplyOthers = resolved
-            self.stateLock.unlock()
-            return resolved
-        }
-        set {
-            self.stateLock.lock()
-            self.cachedApplyOthers = newValue
-            self.stateLock.unlock()
-            UserDefaults.standard.set(newValue, forKey: applyOthersKey)
-            NotificationCenter.default.post(name: didChangeNotification, object: nil)
-        }
-    }
-
-    private static let presetsById: [String: FullGramNicknamePreset] = Dictionary(
-        uniqueKeysWithValues: presets.map { ($0.id, $0) }
-    )
-
-    public static var activePreset: FullGramNicknamePreset? {
-        let id = self.selectedPresetId
-        guard id != "none" else { return nil }
-        return self.presetsById[id]
-    }
-
-    public static let presets: [FullGramNicknamePreset] = [
-        FullGramNicknamePreset(
-            id: "none",
-            title: "Стандартный",
-            colors: [],
-            glowColor: nil,
-            isBold: false,
-            isMono: false,
-            isItalic: false
-        ),
-        FullGramNicknamePreset(
-            id: "neon_cyan_pink",
-            title: "Неон (Бирюза → Розовый)",
-            colors: [UIColor(rgb: 0x00F5D4), UIColor(rgb: 0xFF2A85)],
-            glowColor: UIColor(rgb: 0xFF2A85),
-            isBold: true,
-            isMono: false,
-            isItalic: false
-        ),
-        FullGramNicknamePreset(
-            id: "cyberpunk",
-            title: "Киберпанк (Пурпур → Жёлтый)",
-            colors: [UIColor(rgb: 0xC026D3), UIColor(rgb: 0xFACC15)],
-            glowColor: UIColor(rgb: 0xC026D3),
-            isBold: true,
-            isMono: true,
-            isItalic: false
-        ),
-        FullGramNicknamePreset(
-            id: "royal_gold",
-            title: "Королевское золото",
-            colors: [UIColor(rgb: 0xFFF3B0), UIColor(rgb: 0xF59E0B), UIColor(rgb: 0xB45309)],
-            glowColor: UIColor(rgb: 0xF59E0B),
-            isBold: true,
-            isMono: false,
-            isItalic: false
-        ),
-        FullGramNicknamePreset(
-            id: "blood_fire",
-            title: "Огненный закат",
-            colors: [UIColor(rgb: 0xFF3B30), UIColor(rgb: 0xFF9500)],
-            glowColor: UIColor(rgb: 0xFF453A),
-            isBold: true,
-            isMono: false,
-            isItalic: false
-        ),
-        FullGramNicknamePreset(
-            id: "matrix",
-            title: "Матрица (Хакер)",
-            colors: [UIColor(rgb: 0x00FF66), UIColor(rgb: 0x10B981)],
-            glowColor: UIColor(rgb: 0x00FF66),
-            isBold: true,
-            isMono: true,
-            isItalic: false
-        ),
-        FullGramNicknamePreset(
-            id: "rainbow",
-            title: "Радужный спектр",
-            colors: [UIColor(rgb: 0xFF3B30), UIColor(rgb: 0xFFCC00), UIColor(rgb: 0x34C759), UIColor(rgb: 0x00C7BE), UIColor(rgb: 0xAF52DE)],
-            glowColor: UIColor(rgb: 0xAF52DE),
-            isBold: true,
-            isMono: false,
-            isItalic: false
-        ),
-        FullGramNicknamePreset(
-            id: "ice_chrome",
-            title: "Ледяной хром",
-            colors: [UIColor(rgb: 0xE0F2FE), UIColor(rgb: 0x38BDF8), UIColor(rgb: 0x818CF8)],
-            glowColor: UIColor(rgb: 0x38BDF8),
-            isBold: false,
-            isMono: false,
-            isItalic: true
-        ),
-        FullGramNicknamePreset(
-            id: "sakura",
-            title: "Сакура",
-            colors: [UIColor(rgb: 0xFFC1E3), UIColor(rgb: 0xF43F5E)],
-            glowColor: UIColor(rgb: 0xFB7185),
-            isBold: true,
-            isMono: false,
-            isItalic: true
-        )
+    public static let palette: [FullGramNicknameColorOption] = [
+        FullGramNicknameColorOption(id: "cyan", title: "Неоновый бирюзовый", hex: "#00F5D4"),
+        FullGramNicknameColorOption(id: "pink", title: "Неоновый розовый", hex: "#FF2A85"),
+        FullGramNicknameColorOption(id: "blue", title: "Электрик синий", hex: "#0A84FF"),
+        FullGramNicknameColorOption(id: "purple", title: "Фиолетовый неон", hex: "#BF5AF2"),
+        FullGramNicknameColorOption(id: "gold", title: "Золотой", hex: "#FFD60A"),
+        FullGramNicknameColorOption(id: "orange", title: "Огненный оранжевый", hex: "#FF9500"),
+        FullGramNicknameColorOption(id: "red", title: "Неоновый алый", hex: "#FF3B30"),
+        FullGramNicknameColorOption(id: "green", title: "Матричный зелёный", hex: "#00FF66"),
+        FullGramNicknameColorOption(id: "emerald", title: "Изумрудный", hex: "#30D158"),
+        FullGramNicknameColorOption(id: "ice", title: "Ледяной голубой", hex: "#64D2FF"),
+        FullGramNicknameColorOption(id: "lavender", title: "Лавандовый", hex: "#A78BFA"),
+        FullGramNicknameColorOption(id: "sakura", title: "Сакура", hex: "#FF85B3"),
+        FullGramNicknameColorOption(id: "lime", title: "Кислотный лайм", hex: "#A3E635"),
+        FullGramNicknameColorOption(id: "indigo", title: "Индиго", hex: "#5E5CE6"),
+        FullGramNicknameColorOption(id: "coral", title: "Коралловый", hex: "#FB7185"),
+        FullGramNicknameColorOption(id: "silver", title: "Белый хром", hex: "#F8FAFC")
     ]
+
+    public static func colorHex(forPeerId peerId: Int64?, selfPeerId: Int64?) -> String? {
+        guard let cosmetics = FullGramCloudCosmetics.shared.cosmetics(forPeerId: peerId, selfPeerId: selfPeerId),
+              let hex = cosmetics.nickColor,
+              !hex.isEmpty else {
+            return nil
+        }
+        return hex
+    }
+
+    public static func glowEnabled(forPeerId peerId: Int64?, selfPeerId: Int64?) -> Bool {
+        guard let cosmetics = FullGramCloudCosmetics.shared.cosmetics(forPeerId: peerId, selfPeerId: selfPeerId) else {
+            return false
+        }
+        return cosmetics.nickGlow
+    }
+
+    public static func style(forPeerId peerId: Int64?, selfPeerId: Int64?) -> (color: UIColor, glowEnabled: Bool)? {
+        guard let hex = self.colorHex(forPeerId: peerId, selfPeerId: selfPeerId),
+              let rgb = FullGramThemeColors.parse(hex) else {
+            return nil
+        }
+        let glow = self.glowEnabled(forPeerId: peerId, selfPeerId: selfPeerId)
+        return (UIColor(rgb: rgb), glow)
+    }
+
+    public static func setOwnStyle(peerId: Int64, colorHex: String?, glowEnabled: Bool) {
+        FullGramCloudCosmetics.shared.setNickStyle(forPeerId: peerId, colorHex: colorHex, glowEnabled: glowEnabled)
+    }
+
+    public static func statusSummary(forPeerId peerId: Int64, selfPeerId: Int64?) -> String {
+        guard let hex = self.colorHex(forPeerId: peerId, selfPeerId: selfPeerId) else {
+            return "Стандартный"
+        }
+        let option = self.palette.first(where: { $0.hex.caseInsensitiveCompare(hex) == .orderedSame })?.title ?? hex
+        let glow = self.glowEnabled(forPeerId: peerId, selfPeerId: selfPeerId)
+        return glow ? "\(option) · Неон" : option
+    }
 
     public static func styledAttributedString(
         _ text: String,
         baseFont: UIFont,
-        baseColor: UIColor
+        baseColor: UIColor,
+        peerId: Int64?,
+        selfPeerId: Int64?
     ) -> NSAttributedString {
-        guard let preset = self.activePreset, !text.isEmpty else {
+        guard !text.isEmpty, let style = self.style(forPeerId: peerId, selfPeerId: selfPeerId) else {
             return NSAttributedString(string: text, attributes: [.font: baseFont, .foregroundColor: baseColor])
         }
-
-        var font = baseFont
-        if preset.isMono {
-            font = UIFont.monospacedSystemFont(ofSize: baseFont.pointSize, weight: preset.isBold ? .bold : .medium)
-        } else if preset.isBold && preset.isItalic {
-            if let desc = baseFont.fontDescriptor.withSymbolicTraits([.traitBold, .traitItalic]) {
-                font = UIFont(descriptor: desc, size: baseFont.pointSize)
-            } else {
-                font = UIFont.boldSystemFont(ofSize: baseFont.pointSize)
-            }
-        } else if preset.isBold {
-            font = UIFont.systemFont(ofSize: baseFont.pointSize, weight: .bold)
-        } else if preset.isItalic {
-            font = UIFont.italicSystemFont(ofSize: baseFont.pointSize)
-        }
-
-        let gradientColor = self.gradientPatternColor(presetId: preset.id, text: text, font: font, colors: preset.colors) ?? preset.colors.first ?? baseColor
         var attrs: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: gradientColor
+            .font: baseFont,
+            .foregroundColor: style.color
         ]
-        if self.glowEnabled, let glow = preset.glowColor {
+        if style.glowEnabled {
             let shadow = NSShadow()
-            shadow.shadowColor = glow.withAlphaComponent(0.65)
+            shadow.shadowColor = style.color.withAlphaComponent(0.75)
             shadow.shadowOffset = .zero
-            shadow.shadowBlurRadius = 6.0
+            shadow.shadowBlurRadius = 7.0
             attrs[.shadow] = shadow
         }
         return NSAttributedString(string: text, attributes: attrs)
-    }
-
-    private static func gradientPatternColor(presetId: String, text: String, font: UIFont, colors: [UIColor]) -> UIColor? {
-        guard colors.count >= 2 else { return colors.first }
-        let measured = (text as NSString).size(withAttributes: [.font: font])
-        let bucketW = max(32, (Int(ceil(measured.width)) + 15) / 16 * 16)
-        let bucketH = max(16, Int(ceil(measured.height)))
-        let key = "\(presetId)_\(bucketW)_\(bucketH)" as NSString
-        if let cached = self.gradientCache.object(forKey: key) {
-            return cached
-        }
-        let size = CGSize(width: CGFloat(bucketW), height: CGFloat(bucketH))
-        let format = UIGraphicsImageRendererFormat()
-        format.opaque = false
-        let renderer = UIGraphicsImageRenderer(size: size, format: format)
-        let img = renderer.image { renderCtx in
-            let cgColors = colors.map { $0.cgColor } as CFArray
-            guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: cgColors, locations: nil) else {
-                return
-            }
-            renderCtx.cgContext.drawLinearGradient(
-                gradient,
-                start: CGPoint(x: 0.0, y: size.height * 0.5),
-                end: CGPoint(x: size.width, y: size.height * 0.5),
-                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
-            )
-        }
-        let pattern = UIColor(patternImage: img)
-        self.gradientCache.setObject(pattern, forKey: key)
-        return pattern
-    }
-}
-
-// MARK: - Настройка пузырей сообщений
-
-public enum FullGramBubbleCustomization {
-    public static let didChangeNotification = Notification.Name("FullGram.BubbleCustomizationChanged")
-
-    private static let radiusKey = "fullgram.bubbles.cornerRadius"
-    private static let opacityKey = "fullgram.bubbles.opacity"
-    private static let hideTailKey = "fullgram.bubbles.hideTail"
-    private static let outlineEnabledKey = "fullgram.bubbles.outlineEnabled"
-    private static let outlineColorKey = "fullgram.bubbles.outlineColorHex"
-
-    private static let stateLock = NSLock()
-    private static var cachedRadius: CGFloat?
-    private static var cachedHasCustomRadius: Bool?
-    private static var cachedOpacity: CGFloat?
-    private static var cachedHideTail: Bool?
-    private static var cachedOutlineEnabled: Bool?
-    private static var cachedOutlineHex: String??
-    private static var cachedOutlineColor: UIColor??
-
-    public static var cornerRadius: CGFloat {
-        get {
-            self.stateLock.lock()
-            if let v = self.cachedRadius {
-                self.stateLock.unlock()
-                return v
-            }
-            let resolved: CGFloat = (UserDefaults.standard.object(forKey: radiusKey) == nil)
-                ? 17.0
-                : CGFloat(max(4.0, min(24.0, UserDefaults.standard.double(forKey: radiusKey))))
-            self.cachedRadius = resolved
-            self.cachedHasCustomRadius = (UserDefaults.standard.object(forKey: radiusKey) != nil && abs(resolved - 17.0) > 0.25)
-            self.stateLock.unlock()
-            return resolved
-        }
-        set {
-            let clamped = CGFloat(max(4.0, min(24.0, newValue)))
-            self.stateLock.lock()
-            self.cachedRadius = clamped
-            self.cachedHasCustomRadius = abs(clamped - 17.0) > 0.25
-            self.stateLock.unlock()
-            UserDefaults.standard.set(Double(clamped), forKey: radiusKey)
-            NotificationCenter.default.post(name: didChangeNotification, object: nil)
-        }
-    }
-
-    public static var hasCustomCornerRadius: Bool {
-        self.stateLock.lock()
-        if let v = self.cachedHasCustomRadius {
-            self.stateLock.unlock()
-            return v
-        }
-        self.stateLock.unlock()
-        _ = self.cornerRadius
-        self.stateLock.lock()
-        let result = self.cachedHasCustomRadius ?? false
-        self.stateLock.unlock()
-        return result
-    }
-
-    public static var opacity: CGFloat {
-        get {
-            self.stateLock.lock()
-            if let v = self.cachedOpacity {
-                self.stateLock.unlock()
-                return v
-            }
-            let resolved: CGFloat = (UserDefaults.standard.object(forKey: opacityKey) == nil)
-                ? 1.0
-                : CGFloat(max(0.35, min(1.0, UserDefaults.standard.double(forKey: opacityKey))))
-            self.cachedOpacity = resolved
-            self.stateLock.unlock()
-            return resolved
-        }
-        set {
-            let clamped = CGFloat(max(0.35, min(1.0, newValue)))
-            self.stateLock.lock()
-            self.cachedOpacity = clamped
-            self.stateLock.unlock()
-            UserDefaults.standard.set(Double(clamped), forKey: opacityKey)
-            NotificationCenter.default.post(name: didChangeNotification, object: nil)
-        }
-    }
-
-    public static var hideTail: Bool {
-        get {
-            self.stateLock.lock()
-            if let v = self.cachedHideTail {
-                self.stateLock.unlock()
-                return v
-            }
-            let resolved = UserDefaults.standard.bool(forKey: hideTailKey)
-            self.cachedHideTail = resolved
-            self.stateLock.unlock()
-            return resolved
-        }
-        set {
-            self.stateLock.lock()
-            self.cachedHideTail = newValue
-            self.stateLock.unlock()
-            UserDefaults.standard.set(newValue, forKey: hideTailKey)
-            NotificationCenter.default.post(name: didChangeNotification, object: nil)
-        }
-    }
-
-    public static var outlineEnabled: Bool {
-        get {
-            self.stateLock.lock()
-            if let v = self.cachedOutlineEnabled {
-                self.stateLock.unlock()
-                return v
-            }
-            let resolved = UserDefaults.standard.bool(forKey: outlineEnabledKey)
-            self.cachedOutlineEnabled = resolved
-            self.stateLock.unlock()
-            return resolved
-        }
-        set {
-            self.stateLock.lock()
-            self.cachedOutlineEnabled = newValue
-            self.stateLock.unlock()
-            UserDefaults.standard.set(newValue, forKey: outlineEnabledKey)
-            NotificationCenter.default.post(name: didChangeNotification, object: nil)
-        }
-    }
-
-    public static var outlineColorHex: String? {
-        get {
-            self.stateLock.lock()
-            if let v = self.cachedOutlineHex {
-                self.stateLock.unlock()
-                return v
-            }
-            let v = UserDefaults.standard.string(forKey: outlineColorKey) ?? ""
-            let resolved: String? = v.isEmpty ? nil : v
-            self.cachedOutlineHex = .some(resolved)
-            self.cachedOutlineColor = .some(resolved.flatMap { FullGramThemeColors.parse($0) }.map { UIColor(rgb: $0).withAlphaComponent(0.85) })
-            self.stateLock.unlock()
-            return resolved
-        }
-        set {
-            let cleaned: String? = (newValue?.isEmpty == false) ? newValue : nil
-            let parsedColor = cleaned.flatMap { FullGramThemeColors.parse($0) }.map { UIColor(rgb: $0).withAlphaComponent(0.85) }
-            self.stateLock.lock()
-            self.cachedOutlineHex = .some(cleaned)
-            self.cachedOutlineColor = .some(parsedColor)
-            self.stateLock.unlock()
-            if let cleaned {
-                UserDefaults.standard.set(cleaned, forKey: outlineColorKey)
-            } else {
-                UserDefaults.standard.removeObject(forKey: outlineColorKey)
-            }
-            NotificationCenter.default.post(name: didChangeNotification, object: nil)
-        }
-    }
-
-    public static var resolvedOutlineColor: UIColor {
-        self.stateLock.lock()
-        if let v = self.cachedOutlineColor {
-            self.stateLock.unlock()
-            return v ?? UIColor.white.withAlphaComponent(0.35)
-        }
-        self.stateLock.unlock()
-        _ = self.outlineColorHex
-        self.stateLock.lock()
-        let resolved = (self.cachedOutlineColor ?? nil) ?? UIColor.white.withAlphaComponent(0.35)
-        self.stateLock.unlock()
-        return resolved
-    }
-
-    public static func reset() {
-        self.stateLock.lock()
-        self.cachedRadius = 17.0
-        self.cachedHasCustomRadius = false
-        self.cachedOpacity = 1.0
-        self.cachedHideTail = false
-        self.cachedOutlineEnabled = false
-        self.cachedOutlineHex = .some(nil)
-        self.cachedOutlineColor = .some(nil)
-        self.stateLock.unlock()
-        UserDefaults.standard.removeObject(forKey: radiusKey)
-        UserDefaults.standard.removeObject(forKey: opacityKey)
-        UserDefaults.standard.removeObject(forKey: hideTailKey)
-        UserDefaults.standard.removeObject(forKey: outlineEnabledKey)
-        UserDefaults.standard.removeObject(forKey: outlineColorKey)
-        NotificationCenter.default.post(name: didChangeNotification, object: nil)
-    }
-}
-
-// MARK: - Скины раскраски (полные цветовые пресеты)
-
-public struct FullGramColorSkin: Equatable {
-    public let id: String
-    public let title: String
-    public let subtitle: String
-    public let themePreset: FullGramThemeColors.Preset
-    public let recommendedNicknameId: String
-    public let recommendedCornerRadius: CGFloat
-    public let recommendedOutlineHex: String?
-}
-
-public enum FullGramColorSkins {
-    private static let selectedKey = "fullgram.skins.selectedId"
-
-    public static var selectedSkinId: String? {
-        get { UserDefaults.standard.string(forKey: selectedKey) }
-        set {
-            if let newValue {
-                UserDefaults.standard.set(newValue, forKey: selectedKey)
-            } else {
-                UserDefaults.standard.removeObject(forKey: selectedKey)
-            }
-        }
-    }
-
-    public static let skins: [FullGramColorSkin] = [
-        FullGramColorSkin(
-            id: "cyberpunk_2077",
-            title: "⚡ Cyberpunk Neon",
-            subtitle: "Неоновый розовый, тёмный индиго и кибер-пузыри",
-            themePreset: FullGramThemeColors.Preset(
-                id: "skin_cyberpunk_2077",
-                title: "Cyberpunk Neon",
-                colors: [
-                    .accent: "#FF2A85",
-                    .outgoingBubble: "#7B1FA2",
-                    .outgoingText: "#FFFFFF",
-                    .incomingBubble: "#16122B",
-                    .incomingText: "#E2E8F0",
-                    .wallpaper: "#090714",
-                    .wallpaperSecond: "#1E0B36",
-                    .listBackground: "#090714",
-                    .chatTitle: "#00F5D4"
-                ]
-            ),
-            recommendedNicknameId: "cyberpunk",
-            recommendedCornerRadius: 10.0,
-            recommendedOutlineHex: "#FF2A85"
-        ),
-        FullGramColorSkin(
-            id: "sakura_bloom",
-            title: "🌸 Sakura Bloom",
-            subtitle: "Нежно-розовая сакура и мягкие округлые пузыри",
-            themePreset: FullGramThemeColors.Preset(
-                id: "skin_sakura_bloom",
-                title: "Sakura Bloom",
-                colors: [
-                    .accent: "#F43F5E",
-                    .outgoingBubble: "#BE185D",
-                    .outgoingText: "#FFFFFF",
-                    .incomingBubble: "#2D1221",
-                    .incomingText: "#FFE4E6",
-                    .wallpaper: "#180A12",
-                    .wallpaperSecond: "#3B1228",
-                    .listBackground: "#14080F",
-                    .chatTitle: "#FDA4AF"
-                ]
-            ),
-            recommendedNicknameId: "sakura",
-            recommendedCornerRadius: 20.0,
-            recommendedOutlineHex: "#FB7185"
-        ),
-        FullGramColorSkin(
-            id: "toxic_matrix",
-            title: "🟢 Toxic Matrix",
-            subtitle: "Кислотно-зелёный терминал на глубоком чёрном",
-            themePreset: FullGramThemeColors.Preset(
-                id: "skin_toxic_matrix",
-                title: "Toxic Matrix",
-                colors: [
-                    .accent: "#00FF66",
-                    .outgoingBubble: "#064E3B",
-                    .outgoingText: "#6EE7B7",
-                    .incomingBubble: "#0A1410",
-                    .incomingText: "#A7F3D0",
-                    .wallpaper: "#020503",
-                    .wallpaperSecond: "#052014",
-                    .listBackground: "#020503",
-                    .chatTitle: "#00FF66"
-                ]
-            ),
-            recommendedNicknameId: "matrix",
-            recommendedCornerRadius: 8.0,
-            recommendedOutlineHex: "#00FF66"
-        ),
-        FullGramColorSkin(
-            id: "blood_moon",
-            title: "🩸 Blood Moon",
-            subtitle: "Багровый неон и тёмный кармин",
-            themePreset: FullGramThemeColors.Preset(
-                id: "skin_blood_moon",
-                title: "Blood Moon",
-                colors: [
-                    .accent: "#FF3B30",
-                    .outgoingBubble: "#991B1B",
-                    .outgoingText: "#FFFFFF",
-                    .incomingBubble: "#220D0D",
-                    .incomingText: "#FECACA",
-                    .wallpaper: "#0D0404",
-                    .wallpaperSecond: "#2B0909",
-                    .listBackground: "#0D0404",
-                    .chatTitle: "#FCA5A5"
-                ]
-            ),
-            recommendedNicknameId: "blood_fire",
-            recommendedCornerRadius: 14.0,
-            recommendedOutlineHex: "#EF4444"
-        ),
-        FullGramColorSkin(
-            id: "arctic_frost",
-            title: "❄️ Arctic Frost",
-            subtitle: "Холодный ледяной синий и воздушный контраст",
-            themePreset: FullGramThemeColors.Preset(
-                id: "skin_arctic_frost",
-                title: "Arctic Frost",
-                colors: [
-                    .accent: "#38BDF8",
-                    .outgoingBubble: "#0284C7",
-                    .outgoingText: "#FFFFFF",
-                    .incomingBubble: "#0F172A",
-                    .incomingText: "#E0F2FE",
-                    .wallpaper: "#060D1A",
-                    .wallpaperSecond: "#0C2340",
-                    .listBackground: "#060D1A",
-                    .chatTitle: "#7DD3FC"
-                ]
-            ),
-            recommendedNicknameId: "ice_chrome",
-            recommendedCornerRadius: 18.0,
-            recommendedOutlineHex: "#38BDF8"
-        ),
-        FullGramColorSkin(
-            id: "royal_gold",
-            title: "👑 Royal Gold",
-            subtitle: "Премиальный чёрно-золотой люкс",
-            themePreset: FullGramThemeColors.Preset(
-                id: "skin_royal_gold",
-                title: "Royal Gold",
-                colors: [
-                    .accent: "#F59E0B",
-                    .outgoingBubble: "#92400E",
-                    .outgoingText: "#FEF3C7",
-                    .incomingBubble: "#1C160C",
-                    .incomingText: "#FDE68A",
-                    .wallpaper: "#0B0804",
-                    .wallpaperSecond: "#231907",
-                    .listBackground: "#0B0804",
-                    .chatTitle: "#FCD34D"
-                ]
-            ),
-            recommendedNicknameId: "royal_gold",
-            recommendedCornerRadius: 16.0,
-            recommendedOutlineHex: "#F59E0B"
-        ),
-        FullGramColorSkin(
-            id: "discord_nitro",
-            title: "🎮 Discord Nitro",
-            subtitle: "Фирменный Blurple и тёмный графит",
-            themePreset: FullGramThemeColors.Preset(
-                id: "skin_discord_nitro",
-                title: "Discord Nitro",
-                colors: [
-                    .accent: "#5865F2",
-                    .outgoingBubble: "#5865F2",
-                    .outgoingText: "#FFFFFF",
-                    .incomingBubble: "#2B2D31",
-                    .incomingText: "#F2F3F5",
-                    .wallpaper: "#1E1F22",
-                    .wallpaperSecond: "#2B2D31",
-                    .listBackground: "#1E1F22",
-                    .chatTitle: "#FFFFFF"
-                ]
-            ),
-            recommendedNicknameId: "neon_cyan_pink",
-            recommendedCornerRadius: 17.0,
-            recommendedOutlineHex: "#5865F2"
-        ),
-        FullGramColorSkin(
-            id: "vaporwave",
-            title: "🌆 Vaporwave 1984",
-            subtitle: "Ретро-волна: бирюза, фиолетовый и закат",
-            themePreset: FullGramThemeColors.Preset(
-                id: "skin_vaporwave",
-                title: "Vaporwave 1984",
-                colors: [
-                    .accent: "#00E5FF",
-                    .outgoingBubble: "#6D28D9",
-                    .outgoingText: "#FFFFFF",
-                    .incomingBubble: "#1F1638",
-                    .incomingText: "#DDD6FE",
-                    .wallpaper: "#110B22",
-                    .wallpaperSecond: "#3B1347",
-                    .listBackground: "#110B22",
-                    .chatTitle: "#F472B6"
-                ]
-            ),
-            recommendedNicknameId: "rainbow",
-            recommendedCornerRadius: 12.0,
-            recommendedOutlineHex: "#00E5FF"
-        )
-    ]
-
-    public static func apply(_ skin: FullGramColorSkin) {
-        self.selectedSkinId = skin.id
-        FullGramThemeColors.apply(skin.themePreset)
-        FullGramNicknameStyle.selectedPresetId = skin.recommendedNicknameId
-        FullGramBubbleCustomization.cornerRadius = skin.recommendedCornerRadius
-        if let outline = skin.recommendedOutlineHex {
-            FullGramBubbleCustomization.outlineEnabled = true
-            FullGramBubbleCustomization.outlineColorHex = outline
-        } else {
-            FullGramBubbleCustomization.outlineEnabled = false
-        }
-    }
-
-    public static func resetAll() {
-        self.selectedSkinId = nil
-        FullGramThemeColors.reset()
-        FullGramNicknameStyle.selectedPresetId = "none"
-        FullGramBubbleCustomization.reset()
     }
 }
 

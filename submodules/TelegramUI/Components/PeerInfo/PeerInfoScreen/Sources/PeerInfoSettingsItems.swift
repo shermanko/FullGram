@@ -103,7 +103,7 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
             items[.phone]!.append(PeerInfoScreenActionItem(id: 1, text: "Restore Subscription", action: {
                 interaction.openSettings(.premiumManagement)
             }))
-        } else if settings.suggestPhoneNumberConfirmation, case let .user(peer) = data.peer, !FullGramExtras.shared.hidePhoneNumber {
+        } else if settings.suggestPhoneNumberConfirmation, case let .user(peer) = data.peer, !FullGramExtras.shared.shouldHidePhoneNumberNow {
             let phoneNumber = formatPhoneNumber(context: context, number: peer.phone ?? "")
             items[.phone]!.append(PeerInfoScreenInfoItem(id: 0, title: presentationData.strings.Settings_CheckPhoneNumberTitle(phoneNumber).string, text: .markdown(presentationData.strings.Settings_CheckPhoneNumberText), linkAction: { link in
                 if case .tap = link {
@@ -496,7 +496,7 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
     
     if case let .user(user) = data.peer {
         let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
-        let phoneLabel = (FullGramExtras.shared.hidePhoneNumber || FullGramExtras.shared.privateMode)
+        let phoneLabel = FullGramExtras.shared.shouldHidePhoneNumberNow
             ? (ru ? "Скрыт" : "Hidden")
             : (user.phone.flatMap({ formatPhoneNumber(context: context, number: $0) }) ?? "")
         items[.info]!.append(PeerInfoScreenDisclosureItem(id: ItemPhoneNumber, label: .text(phoneLabel), text: presentationData.strings.Settings_PhoneNumber, icon: PresentationResourcesSettings.recentCalls, action: {

@@ -8,6 +8,7 @@ import ComponentDisplayAdapters
 import TabBarComponent
 import TabBarLayout
 import GlassControls
+import GlassBackgroundComponent
 
 final class TabBarControllerNode: ASDisplayNode {
     private struct Params: Equatable {
@@ -17,19 +18,22 @@ final class TabBarControllerNode: ASDisplayNode {
         let currentControllerSearchState: ViewController.TabBarSearchState?
         /// The side placement depends on it, and with it the bottom inset the tab gets.
         let itemCount: Int
+        let isClassicDesign: Bool
         
         init(
             layout: ContainerViewLayout,
             toolbar: Toolbar?,
             isTabBarHidden: Bool,
             currentControllerSearchState: ViewController.TabBarSearchState?,
-            itemCount: Int
+            itemCount: Int,
+            isClassicDesign: Bool
         ) {
             self.layout = layout
             self.toolbar = toolbar
             self.isTabBarHidden = isTabBarHidden
             self.currentControllerSearchState = currentControllerSearchState
             self.itemCount = itemCount
+            self.isClassicDesign = isClassicDesign
         }
     }
     
@@ -61,9 +65,13 @@ final class TabBarControllerNode: ASDisplayNode {
     private let contextAction: (Int, ContextExtractedContentContainingView, ContextGesture) -> Void
     
     private let tabBarView = ComponentView<Empty>()
+    private var classicTabBarNode: TabBarNode?
+    private let classicSeparatorNode = ASDisplayNode()
+    private var modeObserver: NSObjectProtocol?
     
     private let disabledOverlayNode: ASDisplayNode
     private var toolbar: ComponentView<Empty>?
+    private let swipeAction: (Int, TabBarItemSwipeDirection) -> Void
     private let toolbarActionSelected: (ToolbarActionOption) -> Void
     private let disabledPressed: () -> Void
     private let activateSearch: () -> Void
@@ -96,6 +104,12 @@ final class TabBarControllerNode: ASDisplayNode {
             if let tabBarView = self.tabBarView.view {
                 self.view.bringSubviewToFront(tabBarView)
             }
+            if let classicTabBarNode = self.classicTabBarNode, classicTabBarNode.supernode === self {
+                self.view.bringSubviewToFront(classicTabBarNode.view)
+            }
+            if self.classicSeparatorNode.supernode === self {
+                self.view.bringSubviewToFront(self.classicSeparatorNode.view)
+            }
         }
         
         return { [weak self, weak previousNode] in
@@ -122,10 +136,13 @@ final class TabBarControllerNode: ASDisplayNode {
         self.disabledOverlayNode = ASDisplayNode()
         self.disabledOverlayNode.backgroundColor = theme.rootController.tabBar.backgroundColor.withAlphaComponent(0.5)
         self.disabledOverlayNode.alpha = 0.0
+        self.swipeAction = swipeAction
         self.toolbarActionSelected = toolbarActionSelected
         self.disabledPressed = disabledPressed
         self.activateSearch = activateSearch
         self.deactivateSearch = deactivateSearch
+        self.classicSeparatorNode.backgroundColor = theme.rootController.tabBar.separatorColor
+        self.classicSeparatorNode.isHidden = true
 
         super.init()
         
@@ -146,9 +163,20 @@ final class TabBarControllerNode: ASDisplayNode {
         }
         
         self.backgroundColor = theme.list.plainBackgroundColor
+        self.modeObserver = NotificationCenter.default.addObserver(forName: GlassBackgroundView.modeDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.requestUpdate()
+            }
+        }
         
         //self.addSubnode(self.tabBarNode)
         //self.addSubnode(self.disabledOverlayNode)
+    }
+
+    deinit {
+        if let modeObserver = self.modeObserver {
+            NotificationCenter.default.removeObserver(modeObserver)
+        }
     }
     
     override func didLoad() {
@@ -168,6 +196,8 @@ final class TabBarControllerNode: ASDisplayNode {
         self.backgroundColor = theme.list.plainBackgroundColor
         
         self.disabledOverlayNode.backgroundColor = theme.rootController.tabBar.backgroundColor.withAlphaComponent(0.5)
+        self.classicSeparatorNode.backgroundColor = theme.rootController.tabBar.separatorColor
+        self.classicTabBarNode?.updateTheme(theme)
         self.requestUpdate()
     }
     
@@ -191,7 +221,7 @@ final class TabBarControllerNode: ASDisplayNode {
     
     /// The bottom inset the current tab gets, or nil to leave the tab's own.
     func containerLayoutUpdated(_ layout: ContainerViewLayout, toolbar: Toolbar?, transition: ContainedViewLayoutTransition) -> CGFloat? {
-        let params = Params(layout: layout, toolbar: toolbar, isTabBarHidden: self.tabBarHidden, currentControllerSearchState: self.currentController?.tabBarSearchState, itemCount: self.tabBarItems.count)
+        let params = Params(layout: layout, toolbar: toolbar, isTabBarHidden: self.tabBarHidden, currentControllerSearchState: self.currentController?.tabBarSearchState, itemCount: self.tabBarItems.count, isClassicDesign: GlassBackgroundView.classicDesignMode)
         if let layoutResult = self.layoutResult, layoutResult.params == params {
             return layoutResult.bottomInset
         } else {
@@ -356,11 +386,74 @@ final class TabBarControllerNode: ASDisplayNode {
             tabBarFrame = CGRect(origin: CGPoint(x: centeredX, y: params.layout.size.height - (self.tabBarHidden ? 0.0 : (tabBarSize.height + tabBarBottomInset))), size: tabBarSize)
         }
         
+        let useClassicTabBar = params.isClassicDesign && (params.currentControllerSearchState?.isActive != true)
+        var classicBottomInsetResult: CGFloat?
+
+        if useClassicTabBar {
+            self.tabBarView.view?.isHidden = true
+            let classicNode: TabBarNode
+            if let existing = self.classicTabBarNode {
+                classicNode = existing
+            } else {
+                let created = TabBarNode(
+                    theme: self.theme,
+                    itemSelected: self.itemSelected,
+                    contextAction: { [weak self] index, _, _ in
+                        self?.itemSelected(index, true, [])
+                    },
+                    swipeAction: self.swipeAction
+                )
+                created.tabBarItems = self.tabBarItems
+                self.classicTabBarNode = created
+                self.addSubnode(created)
+                self.addSubnode(self.classicSeparatorNode)
+                classicNode = created
+            }
+            if classicNode.selectedIndex != self.selectedIndex {
+                classicNode.selectedIndex = self.selectedIndex
+            }
+            classicNode.isHidden = false
+            self.classicSeparatorNode.isHidden = false
+
+            let rawBottomInset = params.layout.insets(options: []).bottom
+            let leftInset = params.layout.safeInsets.left
+            let rightInset = params.layout.safeInsets.right
+            let isHorizontal = !leftInset.isZero
+            let classicBarHeight = (isHorizontal ? 34.0 : 49.0) + rawBottomInset
+            let classicFrame = CGRect(
+                x: 0.0,
+                y: self.tabBarHidden ? params.layout.size.height : params.layout.size.height - classicBarHeight,
+                width: params.layout.size.width,
+                height: classicBarHeight
+            )
+            let barAlpha: CGFloat = params.toolbar == nil ? 1.0 : 0.0
+            tabBarFrameTransition.updateFrame(node: classicNode, frame: classicFrame)
+            transition.updateAlpha(node: classicNode, alpha: barAlpha)
+            classicNode.updateLayout(
+                size: classicFrame.size,
+                leftInset: leftInset,
+                rightInset: rightInset,
+                additionalSideInsets: UIEdgeInsets(),
+                bottomInset: rawBottomInset,
+                transition: tabBarFrameTransition
+            )
+            let sepHeight = 1.0 / UIScreenScale
+            self.classicSeparatorNode.backgroundColor = self.theme.rootController.tabBar.separatorColor
+            tabBarFrameTransition.updateFrame(node: self.classicSeparatorNode, frame: CGRect(x: 0.0, y: classicFrame.minY, width: params.layout.size.width, height: sepHeight))
+            transition.updateAlpha(node: self.classicSeparatorNode, alpha: self.tabBarHidden ? 0.0 : barAlpha)
+            tabBarFrameTransition.updateFrame(node: self.disabledOverlayNode, frame: classicFrame)
+            classicBottomInsetResult = params.layout.size.height - classicFrame.minY
+        } else {
+            self.classicTabBarNode?.isHidden = true
+            self.classicSeparatorNode.isHidden = true
+            self.tabBarView.view?.isHidden = false
+        }
+
         if let tabBarComponentView = self.tabBarView.view {
             if tabBarComponentView.superview == nil {
                 self.view.addSubview(tabBarComponentView)
             }
-            let tabBarAlpha: CGFloat = params.toolbar == nil ? 1.0 : 0.0
+            let tabBarAlpha: CGFloat = (params.toolbar == nil && !useClassicTabBar) ? 1.0 : 0.0
             if let crossfadeDuration, let previousAppliedPlacement, let previousPlacement = previousAppliedPlacement.placement {
                 if !previousAppliedPlacement.isHidden && tabBarComponentView.alpha > 0.0, let snapshotView = tabBarComponentView.snapshotView(afterScreenUpdates: false) {
                     snapshotView.frame = previousPlacement.movedFrame(from: previousAppliedPlacement.containerSize, to: params.layout.size)
@@ -376,10 +469,12 @@ final class TabBarControllerNode: ASDisplayNode {
             tabBarFrameTransition.updateFrame(view: tabBarComponentView, frame: tabBarFrame)
             transition.updateAlpha(layer: tabBarComponentView.layer, alpha: tabBarAlpha)
             // A hidden bar is moved below the screen, not removed: VoiceOver must not reach it there.
-            tabBarComponentView.accessibilityElementsHidden = self.tabBarHidden
+            tabBarComponentView.accessibilityElementsHidden = self.tabBarHidden || useClassicTabBar
         }
         
-        tabBarFrameTransition.updateFrame(node: self.disabledOverlayNode, frame: tabBarFrame)
+        if !useClassicTabBar {
+            tabBarFrameTransition.updateFrame(node: self.disabledOverlayNode, frame: tabBarFrame)
+        }
         
         let toolbarHeight = 44.0
         let toolbarFrame: CGRect
@@ -475,6 +570,9 @@ final class TabBarControllerNode: ASDisplayNode {
             }
         }
         
+        if let classicBottomInsetResult {
+            return params.toolbar != nil ? panelsBottomInset + toolbarHeight : classicBottomInsetResult
+        }
         if sidePlacement != nil {
             // The content already keeps clear of the strip through the side safe inset; only the edit
             // toolbar at the bottom needs an inset.
@@ -484,6 +582,15 @@ final class TabBarControllerNode: ASDisplayNode {
     }
     
     func frameForControllerTab(at index: Int) -> CGRect? {
+        if let classicTabBarNode = self.classicTabBarNode, !classicTabBarNode.isHidden {
+            guard index >= 0 && index < self.tabBarItems.count else {
+                return nil
+            }
+            if let itemFrame = classicTabBarNode.frameForControllerTab(at: index) {
+                return self.view.convert(itemFrame, from: classicTabBarNode.view)
+            }
+            return nil
+        }
         guard let tabBarView = self.tabBarView.view as? TabBarComponent.View else {
             return nil
         }
@@ -494,6 +601,9 @@ final class TabBarControllerNode: ASDisplayNode {
     }
     
     func isPointInsideContentArea(point: CGPoint) -> Bool {
+        if let classicTabBarNode = self.classicTabBarNode, !classicTabBarNode.isHidden {
+            return point.y < classicTabBarNode.frame.minY
+        }
         guard let tabBarView = self.tabBarView.view else {
             return false
         }
@@ -513,6 +623,7 @@ final class TabBarControllerNode: ASDisplayNode {
     
     func updateTabBarItems(items: [TabBarNodeItem]) {
         self.tabBarItems = items
+        self.classicTabBarNode?.tabBarItems = items
         self.requestUpdate()
     }
     

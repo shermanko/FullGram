@@ -370,10 +370,13 @@ private final class FullGramMascotPetView: UIView {
 
 private final class FullGramAIChatBubbleRow: UIView {
     private let cardView = UIView()
+    private let senderLabel = UILabel()
+    private let copyButton = UIButton(type: .system)
     private let textLabel = UILabel()
     private let actionButton = UIButton(type: .system)
     private let secondaryButton = UIButton(type: .system)
     private var messageId: String = ""
+    private var messageText: String = ""
     private var action: FullGramAIProposedAction?
 
     var onConfirmAction: ((String, FullGramAIProposedAction) -> Void)?
@@ -385,47 +388,91 @@ private final class FullGramAIChatBubbleRow: UIView {
         maxWidth: CGFloat
     ) -> CGFloat {
         self.messageId = message.id
+        self.messageText = message.text
         self.action = message.action
 
         self.subviews.forEach { $0.removeFromSuperview() }
+        self.cardView.subviews.forEach { $0.removeFromSuperview() }
         self.addSubview(self.cardView)
-        self.cardView.addSubview(self.textLabel)
 
         let accent = theme.chat.inputPanel.actionControlFillColor
         let isUser = message.isUser
+        let isDark = theme.overallDarkAppearance
 
-        self.cardView.layer.cornerRadius = 14.0
-        self.cardView.backgroundColor = isUser
-            ? accent
-            : (theme.overallDarkAppearance ? UIColor.white.withAlphaComponent(0.08) : UIColor.black.withAlphaComponent(0.06))
+        self.cardView.layer.cornerRadius = 17.0
+        self.cardView.layer.cornerCurve = .continuous
+        self.cardView.layer.maskedCorners = isUser
+            ? [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMinXMaxYCorner]
+            : [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+        if isUser {
+            self.cardView.backgroundColor = accent
+            self.cardView.layer.borderWidth = 0.0
+            self.cardView.layer.borderColor = nil
+        } else {
+            self.cardView.backgroundColor = isDark
+                ? UIColor.white.withAlphaComponent(0.09)
+                : UIColor.black.withAlphaComponent(0.05)
+            self.cardView.layer.borderWidth = 0.5
+            self.cardView.layer.borderColor = (isDark
+                ? UIColor.white.withAlphaComponent(0.12)
+                : UIColor.black.withAlphaComponent(0.07)).cgColor
+        }
+
+        let bubbleMaxW = max(180.0, maxWidth * 0.86)
+        let padH: CGFloat = 13.0
+        let padV: CGFloat = 10.0
+
+        var textTopY: CGFloat = padV
+        var minCardW: CGFloat = 84.0
+        if !isUser {
+            self.senderLabel.text = "✨ FullGram AI"
+            self.senderLabel.font = .systemFont(ofSize: 10.5, weight: .bold)
+            self.senderLabel.textColor = accent
+            self.cardView.addSubview(self.senderLabel)
+
+            self.copyButton.removeTarget(nil, action: nil, for: .allEvents)
+            let copyCfg = UIImage.SymbolConfiguration(pointSize: 11.0, weight: .medium)
+            self.copyButton.setImage(UIImage(systemName: "doc.on.doc", withConfiguration: copyCfg), for: .normal)
+            self.copyButton.tintColor = theme.list.itemSecondaryTextColor
+            self.copyButton.addTarget(self, action: #selector(self.copyTapped), for: .touchUpInside)
+            self.cardView.addSubview(self.copyButton)
+
+            textTopY = padV + 18.0
+            minCardW = 148.0
+        }
 
         self.textLabel.numberOfLines = 0
-        self.textLabel.font = .systemFont(ofSize: 13.5)
+        self.textLabel.font = .systemFont(ofSize: 14.0, weight: .regular)
         self.textLabel.textColor = isUser ? .white : theme.list.itemPrimaryTextColor
         self.textLabel.text = message.text
+        self.cardView.addSubview(self.textLabel)
 
-        let bubbleMaxW = max(160.0, maxWidth * 0.84)
-        let padH: CGFloat = 11.0
-        let padV: CGFloat = 8.0
         let textFit = self.textLabel.sizeThatFits(CGSize(width: bubbleMaxW - padH * 2.0, height: .greatestFiniteMagnitude))
+        var contentW = min(bubbleMaxW, max(minCardW, ceil(textFit.width) + padH * 2.0))
+        if message.action != nil && !isUser {
+            contentW = bubbleMaxW
+        }
 
-        var contentW = min(bubbleMaxW, max(72.0, ceil(textFit.width) + padH * 2.0))
-        var contentH = ceil(textFit.height) + padV * 2.0
-        self.textLabel.frame = CGRect(x: padH, y: padV, width: contentW - padH * 2.0, height: ceil(textFit.height))
+        if !isUser {
+            self.senderLabel.frame = CGRect(x: padH, y: padV - 1.0, width: max(60.0, contentW - padH * 2.0 - 26.0), height: 14.0)
+            self.copyButton.frame = CGRect(x: contentW - padH - 22.0, y: padV - 5.0, width: 24.0, height: 22.0)
+        }
+
+        self.textLabel.frame = CGRect(x: padH, y: textTopY, width: contentW - padH * 2.0, height: ceil(textFit.height))
+        var contentH = self.textLabel.frame.maxY + padV
 
         if let action = message.action, !isUser {
-            contentW = bubbleMaxW
             let buttonW = contentW - padH * 2.0
-            let statusY = self.textLabel.frame.maxY + 8.0
+            let statusY = self.textLabel.frame.maxY + 10.0
 
             self.actionButton.removeTarget(nil, action: nil, for: .allEvents)
             self.secondaryButton.removeTarget(nil, action: nil, for: .allEvents)
 
             var btnCfg = UIButton.Configuration.filled()
-            btnCfg.cornerStyle = .medium
+            btnCfg.cornerStyle = .capsule
             btnCfg.titleAlignment = .center
             btnCfg.baseBackgroundColor = action.status == .applied
-                ? UIColor.systemGreen.withAlphaComponent(0.18)
+                ? UIColor.systemGreen.withAlphaComponent(0.20)
                 : accent.withAlphaComponent(0.18)
             btnCfg.baseForegroundColor = action.status == .applied ? UIColor.systemGreen : accent
 
@@ -445,7 +492,7 @@ private final class FullGramAIChatBubbleRow: UIView {
             btnCfg.attributedTitle = titleAttr
             self.actionButton.configuration = btnCfg
             self.actionButton.addTarget(self, action: #selector(self.primaryActionTapped), for: .touchUpInside)
-            self.actionButton.frame = CGRect(x: padH, y: statusY, width: buttonW, height: 32.0)
+            self.actionButton.frame = CGRect(x: padH, y: statusY, width: buttonW, height: 34.0)
             self.cardView.addSubview(self.actionButton)
             contentH = self.actionButton.frame.maxY + padV
 
@@ -454,12 +501,12 @@ private final class FullGramAIChatBubbleRow: UIView {
                 var secTitle = AttributedString("Вставить как черновик")
                 secTitle.font = .systemFont(ofSize: 12.0, weight: .medium)
                 secCfg.attributedTitle = secTitle
-                secCfg.cornerStyle = .medium
+                secCfg.cornerStyle = .capsule
                 secCfg.baseBackgroundColor = theme.list.itemSecondaryTextColor.withAlphaComponent(0.14)
                 secCfg.baseForegroundColor = theme.list.itemPrimaryTextColor
                 self.secondaryButton.configuration = secCfg
                 self.secondaryButton.addTarget(self, action: #selector(self.draftActionTapped), for: .touchUpInside)
-                self.secondaryButton.frame = CGRect(x: padH, y: self.actionButton.frame.maxY + 6.0, width: buttonW, height: 28.0)
+                self.secondaryButton.frame = CGRect(x: padH, y: self.actionButton.frame.maxY + 6.0, width: buttonW, height: 30.0)
                 self.cardView.addSubview(self.secondaryButton)
                 contentH = self.secondaryButton.frame.maxY + padV
             }
@@ -468,6 +515,20 @@ private final class FullGramAIChatBubbleRow: UIView {
         let originX = isUser ? (maxWidth - contentW) : 0.0
         self.cardView.frame = CGRect(x: originX, y: 0.0, width: contentW, height: contentH)
         return contentH
+    }
+
+    @objc private func copyTapped() {
+        guard !self.messageText.isEmpty else { return }
+        UIPasteboard.general.string = self.messageText
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        let checkCfg = UIImage.SymbolConfiguration(pointSize: 11.0, weight: .bold)
+        self.copyButton.setImage(UIImage(systemName: "checkmark", withConfiguration: checkCfg), for: .normal)
+        self.copyButton.tintColor = .systemGreen
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) { [weak self] in
+            guard let self else { return }
+            let docCfg = UIImage.SymbolConfiguration(pointSize: 11.0, weight: .medium)
+            self.copyButton.setImage(UIImage(systemName: "doc.on.doc", withConfiguration: docCfg), for: .normal)
+        }
     }
 
     @objc private func primaryActionTapped() {
@@ -494,8 +555,11 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
     private var theme: PresentationTheme
     private var isLoading = false
 
+    private let clipView = UIView()
+    private let backdropBlur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
     private let headerView = UIView()
     private let avatarView = UIImageView()
+    private let onlineDot = UIView()
     private let titleLabel = UILabel()
     private let subtitleLabel = UILabel()
 
@@ -507,9 +571,15 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
     private let headerSeparator = UIView()
     private let bodyContainer = UIView()
     private let scrollView = UIScrollView()
+    private let emptyCardView = UIView()
+    private let emptyIconView = UIImageView()
+    private let emptyTitleLabel = UILabel()
     private let emptyHintLabel = UILabel()
+    private let typingCardView = UIView()
+    private let typingSpinner = UIActivityIndicatorView(style: .medium)
+    private let typingLabel = UILabel()
     private let chipsScroll = UIScrollView()
-    private let footerSeparator = UIView()
+    private let composerPillView = UIView()
     private let inputField = UITextField()
     private let sendButton = UIButton(type: .system)
     private let clearButton = UIButton(type: .system)
@@ -529,30 +599,39 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
         self.theme = theme
         super.init(frame: .zero)
 
-        self.layer.cornerRadius = 22.0
-        self.layer.borderWidth = 0.75
+        self.layer.cornerRadius = 26.0
+        self.layer.cornerCurve = .continuous
+        self.layer.borderWidth = 0.65
         self.layer.shadowColor = UIColor.black.cgColor
         self.layer.shadowOpacity = 0.28
-        self.layer.shadowRadius = 20.0
-        self.layer.shadowOffset = CGSize(width: 0.0, height: 10.0)
+        self.layer.shadowRadius = 24.0
+        self.layer.shadowOffset = CGSize(width: 0.0, height: 12.0)
 
-        self.headerView.clipsToBounds = true
-        self.headerView.layer.cornerRadius = 22.0
-        self.headerView.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
-        self.addSubview(self.headerView)
+        self.clipView.layer.cornerRadius = 26.0
+        self.clipView.layer.cornerCurve = .continuous
+        self.clipView.clipsToBounds = true
+        self.addSubview(self.clipView)
+
+        self.clipView.addSubview(self.backdropBlur)
+        self.clipView.addSubview(self.headerView)
 
         self.avatarView.image = UIImage(named: "FullGramMascotPortrait") ?? UIImage(named: "FullGramMascotPet")
         self.avatarView.contentMode = .scaleAspectFill
-        self.avatarView.layer.cornerRadius = 15.0
-        self.avatarView.layer.borderWidth = 1.25
+        self.avatarView.layer.cornerRadius = 17.0
+        self.avatarView.layer.borderWidth = 1.5
         self.avatarView.clipsToBounds = true
         self.headerView.addSubview(self.avatarView)
 
+        self.onlineDot.backgroundColor = UIColor(rgb: 0x30D158)
+        self.onlineDot.layer.cornerRadius = 4.5
+        self.onlineDot.layer.borderWidth = 1.5
+        self.headerView.addSubview(self.onlineDot)
+
         self.titleLabel.text = "FullGram AI"
-        self.titleLabel.font = .systemFont(ofSize: 14.5, weight: .bold)
+        self.titleLabel.font = .systemFont(ofSize: 15.0, weight: .bold)
         self.headerView.addSubview(self.titleLabel)
 
-        self.subtitleLabel.font = .systemFont(ofSize: 11.0, weight: .medium)
+        self.subtitleLabel.font = .systemFont(ofSize: 11.5, weight: .medium)
         self.headerView.addSubview(self.subtitleLabel)
 
         self.setupHeaderButton(self.petButton, systemName: "pawprint.fill", action: #selector(self.petTapped))
@@ -563,46 +642,72 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
         let drag = UIPanGestureRecognizer(target: self, action: #selector(self.handleHeaderDrag(_:)))
         self.headerView.addGestureRecognizer(drag)
 
-        self.addSubview(self.headerSeparator)
-        self.addSubview(self.bodyContainer)
+        self.clipView.addSubview(self.headerSeparator)
+        self.clipView.addSubview(self.bodyContainer)
 
         self.scrollView.alwaysBounceVertical = true
         self.scrollView.keyboardDismissMode = .interactive
         self.bodyContainer.addSubview(self.scrollView)
 
+        self.emptyCardView.layer.cornerRadius = 18.0
+        self.emptyCardView.layer.cornerCurve = .continuous
+        self.emptyCardView.layer.borderWidth = 0.5
+        self.scrollView.addSubview(self.emptyCardView)
+
+        let iconCfg = UIImage.SymbolConfiguration(pointSize: 22.0, weight: .semibold)
+        self.emptyIconView.image = UIImage(systemName: "sparkles", withConfiguration: iconCfg)
+        self.emptyIconView.contentMode = .scaleAspectFit
+        self.emptyCardView.addSubview(self.emptyIconView)
+
+        self.emptyTitleLabel.text = "ИИ-помощник FullGram"
+        self.emptyTitleLabel.textAlignment = .center
+        self.emptyTitleLabel.font = .systemFont(ofSize: 15.0, weight: .bold)
+        self.emptyCardView.addSubview(self.emptyTitleLabel)
+
         self.emptyHintLabel.numberOfLines = 0
         self.emptyHintLabel.textAlignment = .center
-        self.emptyHintLabel.font = .systemFont(ofSize: 13.0)
-        self.emptyHintLabel.text = "Спросите про текущий чат, статистику сообщений по дате, подготовьте ответ или управляйте диалогами.\n\nМожно также писать прямо в чате:\n.ai сколько сообщений было 15.05.2026"
-        self.scrollView.addSubview(self.emptyHintLabel)
+        self.emptyHintLabel.font = .systemFont(ofSize: 12.5, weight: .regular)
+        self.emptyHintLabel.text = "Спросите о текущем чате, попросите сводку или черновик ответа.\n\nКоманда прямо в строке ввода:\n.ai сколько сообщений сегодня"
+        self.emptyCardView.addSubview(self.emptyHintLabel)
+
+        self.typingCardView.layer.cornerRadius = 15.0
+        self.typingCardView.layer.cornerCurve = .continuous
+        self.typingCardView.isHidden = true
+        self.typingSpinner.transform = CGAffineTransform(scaleX: 0.78, y: 0.78)
+        self.typingCardView.addSubview(self.typingSpinner)
+        self.typingLabel.text = "Думаю…"
+        self.typingLabel.font = .systemFont(ofSize: 12.5, weight: .medium)
+        self.typingCardView.addSubview(self.typingLabel)
 
         self.chipsScroll.showsHorizontalScrollIndicator = false
         self.bodyContainer.addSubview(self.chipsScroll)
         self.buildQuickChips()
 
-        self.bodyContainer.addSubview(self.footerSeparator)
+        self.composerPillView.layer.cornerRadius = 20.0
+        self.composerPillView.layer.cornerCurve = .continuous
+        self.composerPillView.layer.borderWidth = 0.65
+        self.bodyContainer.addSubview(self.composerPillView)
+
+        let trashCfg = UIImage.SymbolConfiguration(pointSize: 13.5, weight: .medium)
+        self.clearButton.setImage(UIImage(systemName: "trash", withConfiguration: trashCfg), for: .normal)
+        self.clearButton.addTarget(self, action: #selector(self.clearTapped), for: .touchUpInside)
+        self.composerPillView.addSubview(self.clearButton)
 
         self.inputField.placeholder = "Задать вопрос или команду…"
         self.inputField.font = .systemFont(ofSize: 14.0)
-        self.inputField.layer.cornerRadius = 16.0
-        self.inputField.leftView = UIView(frame: CGRect(x: 0.0, y: 0.0, width: 12.0, height: 34.0))
-        self.inputField.leftViewMode = .always
-        self.inputField.rightView = UIView(frame: CGRect(x: 0.0, y: 0.0, width: 10.0, height: 34.0))
-        self.inputField.rightViewMode = .always
         self.inputField.returnKeyType = .send
         self.inputField.delegate = self
-        self.bodyContainer.addSubview(self.inputField)
+        self.composerPillView.addSubview(self.inputField)
 
-        self.clearButton.setImage(UIImage(systemName: "trash"), for: .normal)
-        self.clearButton.addTarget(self, action: #selector(self.clearTapped), for: .touchUpInside)
-        self.bodyContainer.addSubview(self.clearButton)
-
-        self.sendButton.setImage(UIImage(systemName: "arrow.up.circle.fill"), for: .normal)
+        let sendCfg = UIImage.SymbolConfiguration(pointSize: 14.0, weight: .bold)
+        self.sendButton.setImage(UIImage(systemName: "arrow.up", withConfiguration: sendCfg), for: .normal)
+        self.sendButton.layer.cornerRadius = 15.0
+        self.sendButton.clipsToBounds = true
         self.sendButton.addTarget(self, action: #selector(self.sendTapped), for: .touchUpInside)
-        self.bodyContainer.addSubview(self.sendButton)
+        self.composerPillView.addSubview(self.sendButton)
 
         self.activityIndicator.hidesWhenStopped = true
-        self.bodyContainer.addSubview(self.activityIndicator)
+        self.composerPillView.addSubview(self.activityIndicator)
 
         self.applyTheme(theme)
     }
@@ -610,7 +715,7 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
     required init?(coder: NSCoder) { return nil }
 
     private func setupHeaderButton(_ btn: UIButton, systemName: String, action: Selector) {
-        let cfg = UIImage.SymbolConfiguration(pointSize: 12.0, weight: .semibold)
+        let cfg = UIImage.SymbolConfiguration(pointSize: 11.5, weight: .semibold)
         btn.setImage(UIImage(systemName: systemName, withConfiguration: cfg), for: .normal)
         btn.layer.cornerRadius = 14.0
         btn.clipsToBounds = true
@@ -620,27 +725,27 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
 
     private func buildQuickChips() {
         self.chipsScroll.subviews.forEach { $0.removeFromSuperview() }
-        let prompts = [
-            "Сводка чата",
-            "Сколько сообщений сегодня?",
-            "Черновик ответа",
-            "Покажи последние чаты"
+        let items: [(title: String, prompt: String)] = [
+            ("✨ Сводка чата", "Сделай краткую сводку этого чата"),
+            ("📊 Сегодня", "Сколько сообщений было сегодня?"),
+            ("✍️ Черновик", "Подготовь вежливый черновик ответа"),
+            ("💬 Чаты", "Покажи последние чаты")
         ]
-        var x: CGFloat = 10.0
-        for p in prompts {
+        var x: CGFloat = 12.0
+        for item in items {
             var cfg = UIButton.Configuration.filled()
-            var titleAttr = AttributedString(p)
-            titleAttr.font = .systemFont(ofSize: 12.0, weight: .medium)
+            var titleAttr = AttributedString(item.title)
+            titleAttr.font = .systemFont(ofSize: 12.0, weight: .semibold)
             cfg.attributedTitle = titleAttr
             cfg.cornerStyle = .capsule
-            cfg.contentInsets = NSDirectionalEdgeInsets(top: 5.0, leading: 10.0, bottom: 5.0, trailing: 10.0)
+            cfg.contentInsets = NSDirectionalEdgeInsets(top: 5.0, leading: 11.0, bottom: 5.0, trailing: 11.0)
             let btn = UIButton(configuration: cfg)
-            btn.accessibilityLabel = p
+            btn.accessibilityLabel = item.prompt
             btn.addTarget(self, action: #selector(self.chipTapped(_:)), for: .touchUpInside)
             btn.sizeToFit()
             btn.frame = CGRect(x: x, y: 2.0, width: btn.bounds.width, height: 28.0)
             self.chipsScroll.addSubview(btn)
-            x += btn.bounds.width + 6.0
+            x += btn.bounds.width + 7.0
         }
         self.chipsScroll.contentSize = CGSize(width: x + 6.0, height: 32.0)
     }
@@ -648,46 +753,59 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
     func applyTheme(_ theme: PresentationTheme) {
         self.theme = theme
         let accent = theme.chat.inputPanel.actionControlFillColor
-        let bgColor = theme.list.itemBlocksBackgroundColor
-        let secondaryBg = theme.list.blocksBackgroundColor
+        let isDark = theme.overallDarkAppearance
+        let bgColor = theme.list.itemBlocksBackgroundColor.withAlphaComponent(isDark ? 0.86 : 0.90)
+        let secondaryBg = theme.list.blocksBackgroundColor.withAlphaComponent(isDark ? 0.55 : 0.65)
 
-        self.backgroundColor = bgColor
+        self.backdropBlur.effect = UIBlurEffect(style: isDark ? .systemUltraThinMaterialDark : .systemUltraThinMaterialLight)
+        self.backgroundColor = .clear
+        self.clipView.backgroundColor = bgColor
         self.headerView.backgroundColor = secondaryBg
-        self.layer.borderColor = accent.withAlphaComponent(0.28).cgColor
-        self.avatarView.layer.borderColor = accent.withAlphaComponent(0.55).cgColor
+        self.layer.borderColor = (isDark ? UIColor.white.withAlphaComponent(0.16) : UIColor.black.withAlphaComponent(0.08)).cgColor
+        self.avatarView.layer.borderColor = accent.withAlphaComponent(0.65).cgColor
+        self.onlineDot.layer.borderColor = theme.list.itemBlocksBackgroundColor.cgColor
 
         self.titleLabel.textColor = theme.list.itemPrimaryTextColor
         self.subtitleLabel.textColor = theme.list.itemSecondaryTextColor
-        self.headerSeparator.backgroundColor = theme.list.itemPlainSeparatorColor
-        self.footerSeparator.backgroundColor = theme.list.itemPlainSeparatorColor
+        self.headerSeparator.backgroundColor = theme.list.itemPlainSeparatorColor.withAlphaComponent(0.55)
+
+        self.emptyCardView.backgroundColor = isDark ? UIColor.white.withAlphaComponent(0.06) : UIColor.black.withAlphaComponent(0.04)
+        self.emptyCardView.layer.borderColor = (isDark ? UIColor.white.withAlphaComponent(0.10) : UIColor.black.withAlphaComponent(0.06)).cgColor
+        self.emptyIconView.tintColor = accent
+        self.emptyTitleLabel.textColor = theme.list.itemPrimaryTextColor
         self.emptyHintLabel.textColor = theme.list.itemSecondaryTextColor
 
-        let pillBg = accent.withAlphaComponent(0.10)
+        self.typingCardView.backgroundColor = isDark ? UIColor.white.withAlphaComponent(0.09) : UIColor.black.withAlphaComponent(0.05)
+        self.typingSpinner.color = accent
+        self.typingLabel.textColor = theme.list.itemSecondaryTextColor
+
+        let pillBg = isDark ? UIColor.white.withAlphaComponent(0.10) : UIColor.black.withAlphaComponent(0.06)
         self.resizeButton.backgroundColor = pillBg
         self.minimizeButton.backgroundColor = pillBg
-        self.closeButton.backgroundColor = theme.list.itemSecondaryTextColor.withAlphaComponent(0.12)
-        self.petButton.backgroundColor = FullGramAIStore.shared.showFloatingPet ? accent.withAlphaComponent(0.18) : pillBg
+        self.closeButton.backgroundColor = pillBg
+        self.petButton.backgroundColor = FullGramAIStore.shared.showFloatingPet ? accent.withAlphaComponent(0.20) : pillBg
 
         self.resizeButton.tintColor = theme.list.itemPrimaryTextColor
         self.minimizeButton.tintColor = theme.list.itemPrimaryTextColor
         self.closeButton.tintColor = theme.list.itemSecondaryTextColor
         self.petButton.tintColor = FullGramAIStore.shared.showFloatingPet ? accent : theme.list.itemSecondaryTextColor
 
-        self.inputField.backgroundColor = secondaryBg
-        self.inputField.layer.borderWidth = 0.5
-        self.inputField.layer.borderColor = theme.list.itemPlainSeparatorColor.cgColor
+        self.composerPillView.backgroundColor = isDark ? UIColor.white.withAlphaComponent(0.08) : UIColor.black.withAlphaComponent(0.045)
+        self.composerPillView.layer.borderColor = (isDark ? UIColor.white.withAlphaComponent(0.14) : UIColor.black.withAlphaComponent(0.08)).cgColor
         self.inputField.textColor = theme.list.itemPrimaryTextColor
+        self.inputField.tintColor = accent
         self.inputField.attributedPlaceholder = NSAttributedString(
             string: "Задать вопрос или команду…",
             attributes: [.foregroundColor: theme.list.itemSecondaryTextColor]
         )
         self.clearButton.tintColor = theme.list.itemSecondaryTextColor
-        self.sendButton.tintColor = accent
+        self.sendButton.backgroundColor = accent
+        self.sendButton.tintColor = .white
         self.activityIndicator.color = accent
 
         for case let btn as UIButton in self.chipsScroll.subviews {
             var cfg = btn.configuration
-            cfg?.baseBackgroundColor = accent.withAlphaComponent(0.14)
+            cfg?.baseBackgroundColor = accent.withAlphaComponent(isDark ? 0.16 : 0.11)
             cfg?.baseForegroundColor = accent
             btn.configuration = cfg
         }
@@ -703,15 +821,18 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
         self.sendButton.isHidden = loading
         if loading {
             self.activityIndicator.startAnimating()
+            self.typingSpinner.startAnimating()
         } else {
             self.activityIndicator.stopAnimating()
+            self.typingSpinner.stopAnimating()
         }
+        self.reloadConversation()
     }
 
     func setMode(_ newMode: WindowMode, in hostBounds: CGRect, safeInsets: UIEdgeInsets, animated: Bool = true) {
         self.mode = newMode
         self.customOrigin = nil
-        let cfg = UIImage.SymbolConfiguration(pointSize: 13.0, weight: .semibold)
+        let cfg = UIImage.SymbolConfiguration(pointSize: 12.0, weight: .semibold)
         switch newMode {
         case .standard:
             self.resizeButton.setImage(UIImage(systemName: "arrow.down.right.and.arrow.up.left", withConfiguration: cfg), for: .normal)
@@ -741,19 +862,19 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
     }
 
     func layoutInHost(bounds: CGRect, safeInsets: UIEdgeInsets) {
-        let usableW = max(280.0, bounds.width - safeInsets.left - safeInsets.right - 24.0)
+        let usableW = max(290.0, bounds.width - safeInsets.left - safeInsets.right - 20.0)
         let targetSize: CGSize
         switch self.mode {
         case .standard:
-            targetSize = CGSize(width: min(440.0, usableW), height: min(470.0, max(280.0, bounds.height * 0.56)))
+            targetSize = CGSize(width: min(440.0, usableW), height: min(500.0, max(300.0, bounds.height * 0.58)))
         case .compact:
-            targetSize = CGSize(width: min(320.0, usableW), height: 265.0)
+            targetSize = CGSize(width: min(330.0, usableW), height: 280.0)
         case .minimized:
-            targetSize = CGSize(width: min(295.0, usableW), height: 48.0)
+            targetSize = CGSize(width: min(305.0, usableW), height: 54.0)
         }
 
         let bottomReserve = max(safeInsets.bottom + 14.0, self.keyboardHeight + 10.0)
-        let maxY = max(safeInsets.top + 52.0, bounds.height - bottomReserve - targetSize.height)
+        let maxY = max(safeInsets.top + 50.0, bounds.height - bottomReserve - targetSize.height)
         let defaultOrigin: CGPoint
         if self.mode == .minimized {
             defaultOrigin = CGPoint(x: bounds.width - safeInsets.right - targetSize.width - 12.0, y: safeInsets.top + 56.0)
@@ -765,34 +886,33 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
         let clampedX = min(bounds.width - safeInsets.right - targetSize.width - 8.0, max(safeInsets.left + 8.0, chosen.x))
         let clampedY = min(maxY, max(safeInsets.top + 48.0, chosen.y))
         self.frame = CGRect(x: clampedX, y: clampedY, width: targetSize.width, height: targetSize.height)
+        self.clipView.frame = self.bounds
+        self.backdropBlur.frame = self.clipView.bounds
 
-        let headerH: CGFloat = 48.0
+        let headerH: CGFloat = 54.0
         self.headerView.frame = CGRect(x: 0.0, y: 0.0, width: targetSize.width, height: headerH)
-        self.headerView.layer.maskedCorners = self.mode == .minimized
-            ? [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
-            : [.layerMinXMinYCorner, .layerMaxXMinYCorner]
-
-        self.avatarView.frame = CGRect(x: 10.0, y: 9.0, width: 30.0, height: 30.0)
+        self.avatarView.frame = CGRect(x: 12.0, y: 10.0, width: 34.0, height: 34.0)
+        self.onlineDot.frame = CGRect(x: self.avatarView.frame.maxX - 9.0, y: self.avatarView.frame.maxY - 9.0, width: 9.0, height: 9.0)
 
         let btnSize: CGFloat = 28.0
-        self.closeButton.frame = CGRect(x: targetSize.width - 36.0, y: 10.0, width: btnSize, height: btnSize)
-        self.minimizeButton.frame = CGRect(x: self.closeButton.frame.minX - 30.0, y: 10.0, width: btnSize, height: btnSize)
+        self.closeButton.frame = CGRect(x: targetSize.width - 38.0, y: 13.0, width: btnSize, height: btnSize)
+        self.minimizeButton.frame = CGRect(x: self.closeButton.frame.minX - 32.0, y: 13.0, width: btnSize, height: btnSize)
         if self.mode == .minimized {
             self.resizeButton.isHidden = true
             self.petButton.isHidden = true
-            let textRight = self.minimizeButton.frame.minX - 6.0
-            self.titleLabel.frame = CGRect(x: 48.0, y: 8.0, width: max(60.0, textRight - 48.0), height: 17.0)
-            self.subtitleLabel.frame = CGRect(x: 48.0, y: 25.0, width: max(60.0, textRight - 48.0), height: 14.0)
+            let textRight = self.minimizeButton.frame.minX - 8.0
+            self.titleLabel.frame = CGRect(x: 54.0, y: 10.0, width: max(60.0, textRight - 54.0), height: 18.0)
+            self.subtitleLabel.frame = CGRect(x: 54.0, y: 28.0, width: max(60.0, textRight - 54.0), height: 14.0)
             self.headerSeparator.isHidden = true
             self.bodyContainer.isHidden = true
         } else {
             self.resizeButton.isHidden = false
             self.petButton.isHidden = false
-            self.resizeButton.frame = CGRect(x: self.minimizeButton.frame.minX - 30.0, y: 10.0, width: btnSize, height: btnSize)
-            self.petButton.frame = CGRect(x: self.resizeButton.frame.minX - 30.0, y: 10.0, width: btnSize, height: btnSize)
-            let textRight = self.petButton.frame.minX - 6.0
-            self.titleLabel.frame = CGRect(x: 48.0, y: 8.0, width: max(60.0, textRight - 48.0), height: 17.0)
-            self.subtitleLabel.frame = CGRect(x: 48.0, y: 25.0, width: max(60.0, textRight - 48.0), height: 14.0)
+            self.resizeButton.frame = CGRect(x: self.minimizeButton.frame.minX - 32.0, y: 13.0, width: btnSize, height: btnSize)
+            self.petButton.frame = CGRect(x: self.resizeButton.frame.minX - 32.0, y: 13.0, width: btnSize, height: btnSize)
+            let textRight = self.petButton.frame.minX - 8.0
+            self.titleLabel.frame = CGRect(x: 54.0, y: 10.0, width: max(60.0, textRight - 54.0), height: 18.0)
+            self.subtitleLabel.frame = CGRect(x: 54.0, y: 28.0, width: max(60.0, textRight - 54.0), height: 14.0)
             self.headerSeparator.isHidden = false
             self.bodyContainer.isHidden = false
             self.headerSeparator.frame = CGRect(x: 0.0, y: headerH, width: targetSize.width, height: 0.5)
@@ -800,7 +920,7 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
 
             let bodyW = self.bodyContainer.bounds.width
             let bodyH = self.bodyContainer.bounds.height
-            let footerH: CGFloat = 46.0
+            let footerH: CGFloat = 54.0
             let chipsH: CGFloat = self.mode == .compact ? 0.0 : 34.0
             self.chipsScroll.isHidden = self.mode == .compact
 
@@ -808,11 +928,12 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
             if !self.chipsScroll.isHidden {
                 self.chipsScroll.frame = CGRect(x: 0.0, y: self.scrollView.frame.maxY, width: bodyW, height: chipsH)
             }
-            self.footerSeparator.frame = CGRect(x: 0.0, y: bodyH - footerH, width: bodyW, height: 0.5)
-            self.clearButton.frame = CGRect(x: 6.0, y: bodyH - 39.0, width: 32.0, height: 32.0)
-            self.sendButton.frame = CGRect(x: bodyW - 38.0, y: bodyH - 39.0, width: 32.0, height: 32.0)
+            let pillW = max(120.0, bodyW - 20.0)
+            self.composerPillView.frame = CGRect(x: 10.0, y: bodyH - 46.0, width: pillW, height: 38.0)
+            self.clearButton.frame = CGRect(x: 6.0, y: 4.0, width: 30.0, height: 30.0)
+            self.sendButton.frame = CGRect(x: pillW - 34.0, y: 4.0, width: 30.0, height: 30.0)
             self.activityIndicator.center = self.sendButton.center
-            self.inputField.frame = CGRect(x: 42.0, y: bodyH - 39.0, width: max(80.0, bodyW - 86.0), height: 32.0)
+            self.inputField.frame = CGRect(x: 40.0, y: 3.0, width: max(60.0, pillW - 78.0), height: 32.0)
 
             self.reloadConversation()
         }
@@ -820,20 +941,27 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
 
     func reloadConversation() {
         let msgs = FullGramAIStore.shared.messagesSnapshot()
-        for view in self.scrollView.subviews where view !== self.emptyHintLabel {
+        for view in self.scrollView.subviews where view !== self.emptyCardView {
             view.removeFromSuperview()
         }
-        self.emptyHintLabel.isHidden = !msgs.isEmpty
+        self.emptyCardView.isHidden = !msgs.isEmpty || self.isLoading
 
-        let width = max(200.0, self.scrollView.bounds.width - 20.0)
-        if msgs.isEmpty {
-            let hintFit = self.emptyHintLabel.sizeThatFits(CGSize(width: width - 16.0, height: .greatestFiniteMagnitude))
-            self.emptyHintLabel.frame = CGRect(x: 18.0, y: 18.0, width: width - 16.0, height: ceil(hintFit.height))
-            self.scrollView.contentSize = CGSize(width: self.scrollView.bounds.width, height: self.emptyHintLabel.frame.maxY + 16.0)
+        let width = max(200.0, self.scrollView.bounds.width - 24.0)
+        if msgs.isEmpty && !self.isLoading {
+            let cardW = min(width, 320.0)
+            let innerW = cardW - 32.0
+            let hintFit = self.emptyHintLabel.sizeThatFits(CGSize(width: innerW, height: .greatestFiniteMagnitude))
+            self.emptyIconView.frame = CGRect(x: (cardW - 30.0) * 0.5, y: 18.0, width: 30.0, height: 30.0)
+            self.emptyTitleLabel.frame = CGRect(x: 16.0, y: self.emptyIconView.frame.maxY + 8.0, width: innerW, height: 20.0)
+            self.emptyHintLabel.frame = CGRect(x: 16.0, y: self.emptyTitleLabel.frame.maxY + 8.0, width: innerW, height: ceil(hintFit.height))
+            let cardH = self.emptyHintLabel.frame.maxY + 18.0
+            let cardY = max(16.0, floor((self.scrollView.bounds.height - cardH) * 0.42))
+            self.emptyCardView.frame = CGRect(x: floor((self.scrollView.bounds.width - cardW) * 0.5), y: cardY, width: cardW, height: cardH)
+            self.scrollView.contentSize = CGSize(width: self.scrollView.bounds.width, height: self.emptyCardView.frame.maxY + 16.0)
             return
         }
 
-        var y: CGFloat = 10.0
+        var y: CGFloat = 12.0
         for msg in msgs {
             let row = FullGramAIChatBubbleRow()
             row.onConfirmAction = { [weak self] id, action in
@@ -843,10 +971,22 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
                 self?.onInsertDraftInstead?(id, action)
             }
             let h = row.configure(message: msg, theme: self.theme, maxWidth: width)
-            row.frame = CGRect(x: 10.0, y: y, width: width, height: h)
+            row.frame = CGRect(x: 12.0, y: y, width: width, height: h)
             self.scrollView.addSubview(row)
-            y += h + 8.0
+            y += h + 10.0
         }
+
+        if self.isLoading {
+            self.typingCardView.isHidden = false
+            self.typingCardView.frame = CGRect(x: 12.0, y: y, width: 126.0, height: 32.0)
+            self.typingSpinner.center = CGPoint(x: 18.0, y: 16.0)
+            self.typingLabel.frame = CGRect(x: 34.0, y: 0.0, width: 84.0, height: 32.0)
+            self.scrollView.addSubview(self.typingCardView)
+            y += 40.0
+        } else {
+            self.typingCardView.isHidden = true
+        }
+
         self.scrollView.contentSize = CGSize(width: self.scrollView.bounds.width, height: y + 8.0)
         let offsetY = max(0.0, self.scrollView.contentSize.height - self.scrollView.bounds.height)
         if self.scrollView.bounds.height > 20.0 {
@@ -1158,21 +1298,31 @@ final class FullGramAIOverlayCoordinator {
         })
     }
 
-    private func presentPluginGUI(spec: [String: Any], retryCount: Int = 0) {
-        guard let root = self.rootController else { return }
-        var presenter: UIViewController = root
-        while let next = presenter.presentedViewController, !next.isBeingDismissed {
-            presenter = next
-        }
-        if presenter.isBeingDismissed || presenter.isBeingPresented {
-            if retryCount < 4 {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { [weak self] in
-                    self?.presentPluginGUI(spec: spec, retryCount: retryCount + 1)
-                }
+    private func presentNativeUIKitController(_ vc: UIViewController, retryCount: Int = 0) {
+        if let rootWindowVC = self.rootController?.view.window?.rootViewController, !(rootWindowVC is NavigationController) {
+            var presenter = rootWindowVC
+            while let next = presenter.presentedViewController, !next.isBeingDismissed {
+                presenter = next
             }
+            if presenter.isBeingDismissed || presenter.isBeingPresented {
+                if retryCount < 4 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { [weak self] in
+                        self?.presentNativeUIKitController(vc, retryCount: retryCount + 1)
+                    }
+                }
+                return
+            }
+            presenter.present(vc, animated: true)
             return
         }
+        if let mainWindow = self.context.sharedContext.mainWindow {
+            mainWindow.presentNative(vc)
+        } else {
+            self.context.sharedContext.applicationBindings.presentNativeController(vc)
+        }
+    }
 
+    private func presentPluginGUI(spec: [String: Any], retryCount: Int = 0) {
         let kind = (spec["kind"] as? String)?.lowercased() ?? (spec["pluginId"] as? String)?.lowercased() ?? ""
         let targetPeerId = self.activeChatController()?.chatLocation.peerId ?? self.currentPeerId
 
@@ -1207,11 +1357,11 @@ final class FullGramAIOverlayCoordinator {
 
         let nav = UINavigationController(rootViewController: vc)
         nav.modalPresentationStyle = .pageSheet
-        presenter.present(nav, animated: true)
+        self.presentNativeUIKitController(nav, retryCount: retryCount)
     }
 
     private func presentPluginActionsPicker(peerId: PeerId?, chatTitle: String) {
-        guard let root = self.rootController else { return }
+        guard let rootView = self.rootController?.view else { return }
         let sheet = UIAlertController(title: "Плагины и ИИ FullGram", message: chatTitle, preferredStyle: .actionSheet)
         sheet.addAction(UIAlertAction(title: "✨ Сводка чата (ИИ)", style: .default) { [weak self] _ in
             self?.openWindow(
@@ -1234,10 +1384,10 @@ final class FullGramAIOverlayCoordinator {
         }
         sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
         if let pop = sheet.popoverPresentationController {
-            pop.sourceView = root.view
-            pop.sourceRect = CGRect(x: root.view.bounds.midX, y: root.view.bounds.midY, width: 1.0, height: 1.0)
+            pop.sourceView = rootView
+            pop.sourceRect = CGRect(x: rootView.bounds.midX, y: rootView.bounds.midY, width: 1.0, height: 1.0)
         }
-        root.present(sheet, animated: true)
+        self.presentNativeUIKitController(sheet)
     }
 
     private func executePluginCommand(_ rawCommand: String, peerId: PeerId?, chatTitle: String) {
@@ -1266,7 +1416,7 @@ final class FullGramAIOverlayCoordinator {
                     chatStats: chatStats
                 )
                 DispatchQueue.main.async {
-                    guard let self, let root = self.rootController else { return }
+                    guard let self else { return }
                     let resultText: String
                     switch decision {
                     case let .replaceText(text):
@@ -1282,7 +1432,7 @@ final class FullGramAIOverlayCoordinator {
                         UIPasteboard.general.string = resultText
                     })
                     alert.addAction(UIAlertAction(title: "OK", style: .cancel))
-                    root.present(alert, animated: true)
+                    self.presentNativeUIKitController(alert)
                 }
             }
         })
@@ -1345,7 +1495,11 @@ final class FullGramAIOverlayCoordinator {
             FullGramAIStore.shared.showFloatingPet = false
         }))
         controller.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-        self.rootController?.present(controller, animated: true)
+        if let pop = controller.popoverPresentationController, let host = self.hostContainerView() {
+            pop.sourceView = host
+            pop.sourceRect = self.petView?.frame ?? CGRect(x: host.bounds.midX, y: host.bounds.midY, width: 1.0, height: 1.0)
+        }
+        self.presentNativeUIKitController(controller)
     }
 
     private func openWindow(initialPrompt: String?, explicitPeerId: PeerId?, autoSend: Bool) {
@@ -1468,7 +1622,7 @@ final class FullGramAIOverlayCoordinator {
             alert.addAction(UIAlertAction(title: "Отмена", style: .cancel, handler: { _ in
                 store.updateActionStatus(messageId: messageId, status: .cancelled)
             }))
-            self.rootController?.present(alert, animated: true)
+            self.presentNativeUIKitController(alert)
 
         case .openChat:
             guard let peerId = targetPeer, let nav = self.rootController else { return }

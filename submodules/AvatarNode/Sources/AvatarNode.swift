@@ -1226,11 +1226,11 @@ public final class AvatarNode: ASDisplayNode {
     public private(set) var storyStats: StoryStats?
     private var fullGramFrameView: FullGramAvatarFrameView?
     private var fullGramFrameObserver: NSObjectProtocol?
-    private var fullGramIsSelfPeer: Bool = false {
+    private var fullGramIsSelfPeer: Bool = false
+    private var fullGramPeerId: Int64?
+    private var fullGramAccountPeerId: Int64? {
         didSet {
-            if oldValue != self.fullGramIsSelfPeer {
-                self.updateFullGramFrame()
-            }
+            self.updateFullGramFrame()
         }
     }
     
@@ -1335,12 +1335,18 @@ public final class AvatarNode: ASDisplayNode {
 
     private func updateFullGramFrame() {
         guard self.isNodeLoaded else { return }
-        if self.fullGramFrameView == nil && !FullGramAvatarFrames.isEnabled {
+        guard let peerId = self.fullGramPeerId, peerId != 0 else {
+            if let existing = self.fullGramFrameView, !existing.isHidden {
+                existing.configure(with: nil)
+                existing.isHidden = true
+            }
             return
         }
         let size = self.bounds.size
-        let shouldShow = size.width >= 26.0 && (self.fullGramIsSelfPeer || FullGramAvatarFrames.showInChatListAndMessages)
-        guard shouldShow, let preset = FullGramAvatarFrames.activeFrame else {
+        let isCircularSize = size.width >= 26.0 && size.width <= 140.0
+        let allowedHere = self.fullGramIsSelfPeer || FullGramAvatarFrames.showInChatListAndMessages || size.width >= 72.0
+        guard isCircularSize, allowedHere,
+              let preset = FullGramAvatarFrames.frame(forPeerId: peerId, selfPeerId: self.fullGramAccountPeerId) else {
             if let existing = self.fullGramFrameView, !existing.isHidden {
                 existing.configure(with: nil)
                 existing.isHidden = true
@@ -1392,7 +1398,11 @@ public final class AvatarNode: ASDisplayNode {
         displayDimensions: CGSize = CGSize(width: 60.0, height: 60.0),
         storeUnrounded: Bool = false
     ) {
+        let acctId = accountPeerId.toInt64()
+        FullGramCloudCosmetics.shared.setActiveSelfPeerId(acctId)
         self.fullGramIsSelfPeer = (peer?.id == accountPeerId)
+        self.fullGramPeerId = peer?.id.toInt64()
+        self.fullGramAccountPeerId = acctId
         self.contentNode.setPeer(
             accountPeerId: accountPeerId,
             postbox: postbox,
@@ -1422,7 +1432,11 @@ public final class AvatarNode: ASDisplayNode {
         displayDimensions: CGSize = CGSize(width: 60.0, height: 60.0),
         storeUnrounded: Bool = false
     ) {
+        let acctId = genericContext.account.peerId.toInt64()
+        FullGramCloudCosmetics.shared.setActiveSelfPeerId(acctId)
         self.fullGramIsSelfPeer = (peer?.id == genericContext.account.peerId)
+        self.fullGramPeerId = peer?.id.toInt64()
+        self.fullGramAccountPeerId = acctId
         self.contentNode.setPeerV2(
             context: genericContext,
             theme: theme,
@@ -1451,7 +1465,12 @@ public final class AvatarNode: ASDisplayNode {
         storeUnrounded: Bool = false,
         cutoutRect: CGRect? = nil
     ) {
-        self.fullGramIsSelfPeer = (peer?.id == (account?.peerId ?? context.account.peerId))
+        let acctPeerId = account?.peerId ?? context.account.peerId
+        let acctId = acctPeerId.toInt64()
+        FullGramCloudCosmetics.shared.setActiveSelfPeerId(acctId)
+        self.fullGramIsSelfPeer = (peer?.id == acctPeerId)
+        self.fullGramPeerId = peer?.id.toInt64()
+        self.fullGramAccountPeerId = acctId
         self.contentNode.setPeer(
             context: context,
             account: account,

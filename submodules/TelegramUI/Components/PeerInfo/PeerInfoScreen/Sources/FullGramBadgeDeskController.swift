@@ -243,6 +243,9 @@ func fullGramBadgeDeskController(
     peerId: Int64,
     username: String?
 ) -> ViewController {
+    guard fullGramCanOpenAdmin(context: context) else {
+        return fullGramPluginsController(context: context)
+    }
     let existing = FullGramBadges.shared.rawAssignment(forPeerId: peerId, username: username)
     let defaultRole = FullGramBadges.builtInRoles["premium"]!
     let baseRoleId: String

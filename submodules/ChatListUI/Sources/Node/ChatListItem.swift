@@ -3541,17 +3541,19 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
                         if case let .channel(channel) = itemPeer.peer, channel.flags.contains(.isMonoforum) {
                             titleBadgeText = item.presentationData.strings.ChatList_MonoforumLabel
                         }
-                        if FullGramNicknameStyle.activePreset != nil && FullGramNicknameStyle.applyToChatTitles {
-                            titleAttributedString = FullGramNicknameStyle.styledAttributedString(displayTitle, baseFont: titleFont, baseColor: textColor)
-                        } else {
-                            titleAttributedString = NSAttributedString(string: displayTitle, font: titleFont, textColor: textColor)
-                        }
+                        titleAttributedString = FullGramNicknameStyle.styledAttributedString(
+                            displayTitle,
+                            baseFont: titleFont,
+                            baseColor: textColor,
+                            peerId: itemPeer.chatOrMonoforumMainPeer?.id.toInt64(),
+                            selfPeerId: item.context.account.peerId.toInt64()
+                        )
                     }
                 case .group:
                     titleAttributedString = NSAttributedString(string: item.presentationData.strings.ChatList_ArchivedChatsTitle, font: titleFont, textColor: theme.titleColor)
             }
             
-            if FullGramExtras.shared.privateMode && FullGramExtras.shared.privateModeHidePreviews {
+            if FullGramExtras.shared.shouldHidePreviewsNow {
                 textAttributedString = NSAttributedString(string: "🔒 Скрыто (Приватный режим)", font: textFont, textColor: theme.messageTextColor)
             } else {
                 attributedText = renderInstantPagePreviewIcons(attributedText, font: textFont, textColor: theme.messageTextColor)

@@ -75,7 +75,6 @@ public class ChatMessageBackground: ASDisplayNode {
 
     private var tearBands: [BubbleTearBand] = []
     private var tearMaskView: BubbleTearMaskView?
-    private var fullGramBubbleObserver: NSObjectProtocol?
     
     public var customHighlightColor: UIColor? {
         didSet {
@@ -112,72 +111,6 @@ public class ChatMessageBackground: ASDisplayNode {
         
         if let imageFrame = self.imageFrame {
             imageView.frame = imageFrame
-        }
-
-        self.applyFullGramBubbleStyle()
-        self.fullGramBubbleObserver = NotificationCenter.default.addObserver(
-            forName: FullGramBubbleCustomization.didChangeNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.applyFullGramBubbleStyle()
-            }
-        }
-    }
-
-    deinit {
-        if let observer = self.fullGramBubbleObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
-    }
-
-    private func applyFullGramBubbleStyle() {
-        let isBubble: Bool
-        if let type = self.type, type != .none {
-            isBubble = true
-        } else {
-            isBubble = false
-        }
-        let targetAlpha = isBubble ? FullGramBubbleCustomization.opacity : 1.0
-        if self.alpha != targetAlpha {
-            self.alpha = targetAlpha
-        }
-        guard let imageView = self.imageView else { return }
-        guard isBubble else {
-            if imageView.layer.cornerRadius != 0.0 { imageView.layer.cornerRadius = 0.0 }
-            if imageView.clipsToBounds { imageView.clipsToBounds = false }
-            if imageView.layer.borderWidth != 0.0 {
-                imageView.layer.borderWidth = 0.0
-                imageView.layer.borderColor = nil
-            }
-            return
-        }
-        let customRadius = FullGramBubbleCustomization.cornerRadius
-        let useCustomRadius = FullGramBubbleCustomization.hasCustomCornerRadius || FullGramBubbleCustomization.hideTail
-        if useCustomRadius {
-            if imageView.layer.cornerRadius != customRadius {
-                imageView.layer.cornerRadius = customRadius
-                imageView.layer.cornerCurve = .continuous
-            }
-            if !imageView.clipsToBounds { imageView.clipsToBounds = true }
-        } else {
-            if !FullGramBubbleCustomization.outlineEnabled && imageView.layer.cornerRadius != 0.0 {
-                imageView.layer.cornerRadius = 0.0
-            }
-            if imageView.clipsToBounds { imageView.clipsToBounds = false }
-        }
-        if FullGramBubbleCustomization.outlineEnabled {
-            let color = FullGramBubbleCustomization.resolvedOutlineColor
-            imageView.layer.borderWidth = 1.5
-            imageView.layer.borderColor = color.cgColor
-            if !useCustomRadius && imageView.layer.cornerRadius != customRadius {
-                imageView.layer.cornerRadius = customRadius
-                imageView.layer.cornerCurve = .continuous
-            }
-        } else if imageView.layer.borderWidth != 0.0 {
-            imageView.layer.borderWidth = 0.0
-            imageView.layer.borderColor = nil
         }
     }
     

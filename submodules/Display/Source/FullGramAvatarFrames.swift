@@ -14,38 +14,13 @@ public struct FullGramAvatarFramePreset: Equatable, Sendable {
 public enum FullGramAvatarFrames {
     public static let didChangeNotification = Notification.Name("FullGram.AvatarFramesChanged")
 
-    private static let enabledKey = "fullgram.frames.enabled"
-    private static let selectedIdKey = "fullgram.frames.selectedId"
     private static let showInChatsKey = "fullgram.frames.showInChats"
 
     private static let rawBaseURL = "https://raw.githubusercontent.com/shermanko/FullGram/master/assets/frames/"
     private static let cdnBaseURL = "https://cdn.jsdelivr.net/gh/shermanko/FullGram@master/assets/frames/"
 
     private static let stateLock = NSLock()
-    private static var cachedEnabled: Bool?
     private static var cachedShowInChats: Bool?
-    private static var cachedSelectedId: String?
-
-    public static var isEnabled: Bool {
-        get {
-            self.stateLock.lock()
-            if let v = self.cachedEnabled {
-                self.stateLock.unlock()
-                return v
-            }
-            let resolved = UserDefaults.standard.bool(forKey: enabledKey)
-            self.cachedEnabled = resolved
-            self.stateLock.unlock()
-            return resolved
-        }
-        set {
-            self.stateLock.lock()
-            self.cachedEnabled = newValue
-            self.stateLock.unlock()
-            UserDefaults.standard.set(newValue, forKey: enabledKey)
-            NotificationCenter.default.post(name: didChangeNotification, object: nil)
-        }
-    }
 
     public static var showInChatListAndMessages: Bool {
         get {
@@ -70,31 +45,21 @@ public enum FullGramAvatarFrames {
         }
     }
 
-    public static var selectedFrameId: String {
-        get {
-            self.stateLock.lock()
-            if let v = self.cachedSelectedId {
-                self.stateLock.unlock()
-                return v
-            }
-            let resolved = UserDefaults.standard.string(forKey: selectedIdKey) ?? allFrames[0].id
-            self.cachedSelectedId = resolved
-            self.stateLock.unlock()
-            return resolved
-        }
-        set {
-            self.stateLock.lock()
-            self.cachedSelectedId = newValue
-            self.stateLock.unlock()
-            UserDefaults.standard.set(newValue, forKey: selectedIdKey)
-            NotificationCenter.default.post(name: didChangeNotification, object: nil)
-        }
+    public static func selectedFrameId(forPeerId peerId: Int64, selfPeerId: Int64? = nil) -> String? {
+        return FullGramCloudCosmetics.shared.cosmetics(forPeerId: peerId, selfPeerId: selfPeerId ?? peerId)?.frameId
     }
 
-    public static var activeFrame: FullGramAvatarFramePreset? {
-        guard self.isEnabled else { return nil }
-        let id = self.selectedFrameId
-        return self.framesById[id] ?? self.allFrames.first
+    public static func setSelectedFrame(forPeerId peerId: Int64, frameId: String?) {
+        FullGramCloudCosmetics.shared.setFrame(forPeerId: peerId, frameId: frameId)
+    }
+
+    public static func frame(forPeerId peerId: Int64?, selfPeerId: Int64?) -> FullGramAvatarFramePreset? {
+        guard let cosmetics = FullGramCloudCosmetics.shared.cosmetics(forPeerId: peerId, selfPeerId: selfPeerId),
+              let id = cosmetics.frameId,
+              !id.isEmpty else {
+            return nil
+        }
+        return self.framesById[id]
     }
 
     /// 4 лёгкие рамки встроены офлайн в IPA, ещё 12 загружаются по требованию с GitHub/jsDelivr и кэшируются локально (экономия ~6 МБ IPA).

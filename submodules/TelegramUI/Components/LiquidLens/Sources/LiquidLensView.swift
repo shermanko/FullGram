@@ -9,6 +9,8 @@ import GlassBackgroundComponent
 /// resolution, in a backdrop group of its own, blurred by 2 with normalized edges, then through a color matrix.
 private final class RestingBackgroundView: UIVisualEffectView {
     var isDark: Bool?
+    private var isFlat: Bool?
+    private var modeObserver: NSObjectProtocol?
 
     /// `_ColorMatrix.YCC(black:white:saturation:hue:).colorMatrix` (DesignLibrary), as `currentColorMatrixValue`
     /// builds it: light YCC(-0.2, 0.93, 1.2, 0), dark YCC(-0.07, 0.8, 1.2, 0), computed by calling DesignLibrary in
@@ -22,7 +24,7 @@ private final class RestingBackgroundView: UIVisualEffectView {
     }
 
     init() {
-        let effect = UIBlurEffect(style: .light)
+        let effect: UIVisualEffect? = GlassBackgroundView.flatMode ? nil : UIBlurEffect(style: .light)
         super.init(effect: effect)
         
         for subview in self.subviews {
@@ -32,17 +34,41 @@ private final class RestingBackgroundView: UIVisualEffectView {
         }
         
         self.clipsToBounds = true
+        self.modeObserver = NotificationCenter.default.addObserver(forName: GlassBackgroundView.modeDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, let isDark = self.isDark else { return }
+                self.update(isDark: isDark)
+            }
+        }
     }
     
+    deinit {
+        if let modeObserver = self.modeObserver {
+            NotificationCenter.default.removeObserver(modeObserver)
+        }
+    }
+
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
     func update(isDark: Bool) {
-        if self.isDark == isDark {
+        let flatMode = GlassBackgroundView.flatMode
+        if self.isDark == isDark && self.isFlat == flatMode && !flatMode {
             return
         }
         self.isDark = isDark
+        self.isFlat = flatMode
+        
+        if flatMode {
+            self.effect = nil
+            self.backgroundColor = GlassBackgroundView.flatFillColor ?? (isDark ? UIColor(rgb: 0x1c1c1d) : UIColor(rgb: 0xf7f7f7))
+            return
+        }
+        if self.effect == nil {
+            self.effect = UIBlurEffect(style: .light)
+        }
+        self.backgroundColor = nil
         
         if let sublayer = self.layer.sublayers?[0], let _ = sublayer.filters {
             sublayer.backgroundColor = nil
@@ -294,7 +320,7 @@ public final class LiquidLensView: UIView {
         }
         self.containerView.isUserInteractionEnabled = false
         
-        if #available(iOS 26.0, *) {
+        if #available(iOS 26.0, *), !GlassBackgroundView.useCustomGlassImpl, !GlassBackgroundView.flatMode {
             if let viewClass = NSClassFromString("_UILiquidLensView") as AnyObject as? NSObjectProtocol {
                 let allocSelector = NSSelectorFromString("alloc")
                 let initSelector = NSSelectorFromString("initWithRestingBackground:")

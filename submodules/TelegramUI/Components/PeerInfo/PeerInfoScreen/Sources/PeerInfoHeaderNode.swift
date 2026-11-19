@@ -1314,10 +1314,10 @@ final class PeerInfoHeaderNode: ASDisplayNode {
                 title = "" //"\u{00A0}"
             }
             if title.isEmpty {
-                if case let .user(user) = peer, let phone = user.phone, !(user.id == self.context.account.peerId && (FullGramExtras.shared.hidePhoneNumber || FullGramExtras.shared.privateMode)) {
+                if case let .user(user) = peer, let phone = user.phone, !(user.id == self.context.account.peerId && FullGramExtras.shared.shouldHidePhoneNumberNow) {
                     title = formatPhoneNumber(context: self.context, number: phone)
                 } else if let addressName = peer.addressName {
-                    if FullGramExtras.shared.privateMode && FullGramExtras.shared.privateModeHideUsername {
+                    if FullGramExtras.shared.shouldHideUsernameNow {
                         title = "@••••••••"
                     } else {
                         title = "@\(addressName)"
@@ -1328,23 +1328,18 @@ final class PeerInfoHeaderNode: ASDisplayNode {
             }
 
             titleStringText = title
-            if let nickPreset = FullGramNicknameStyle.activePreset,
-               (peer.id == self.context.account.peerId || FullGramNicknameStyle.applyToChatTitles) {
-                let nickFont: UIFont = nickPreset.isMono
-                    ? UIFont.monospacedSystemFont(ofSize: 28.0, weight: nickPreset.isBold ? .bold : .medium)
-                    : (nickPreset.isBold ? Font.bold(28.0) : Font.medium(28.0))
-                let nickColor = nickPreset.colors.first ?? .white
-                let nickShadow = FullGramNicknameStyle.glowEnabled ? (nickPreset.glowColor ?? titleShadowColor) : titleShadowColor
-                titleAttributes = MultiScaleTextState.Attributes(font: nickFont, color: nickColor, shadowColor: nickShadow)
-                smallTitleAttributes = MultiScaleTextState.Attributes(font: nickFont, color: nickColor, shadowColor: nickShadow)
+            if let nickStyle = FullGramNicknameStyle.style(forPeerId: peer?.id.toInt64(), selfPeerId: self.context.account.peerId.toInt64()) {
+                let nickShadow = nickStyle.glowEnabled ? nickStyle.color.withAlphaComponent(0.75) : titleShadowColor
+                titleAttributes = MultiScaleTextState.Attributes(font: Font.bold(28.0), color: nickStyle.color, shadowColor: nickShadow)
+                smallTitleAttributes = MultiScaleTextState.Attributes(font: Font.bold(28.0), color: nickStyle.color, shadowColor: nickShadow)
             } else {
                 titleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: .white)
                 smallTitleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: .white, shadowColor: titleShadowColor)
             }
             
             if self.isSettings, case let .user(user) = peer {
-                let hidePhone = FullGramExtras.shared.hidePhoneNumber || FullGramExtras.shared.privateMode
-                let hideUser = FullGramExtras.shared.privateMode && FullGramExtras.shared.privateModeHideUsername
+                let hidePhone = FullGramExtras.shared.shouldHidePhoneNumberNow
+                let hideUser = FullGramExtras.shared.shouldHideUsernameNow
                 var subtitle = hidePhone ? "" : formatPhoneNumber(context: self.context, number: user.phone ?? "")
                 if hidePhone {
                     if let mainUsername = user.addressName, !mainUsername.isEmpty {
@@ -2952,13 +2947,13 @@ final class PeerInfoHeaderNode: ASDisplayNode {
         
         if !(self.state?.isEditing ?? false) {
             switch self.currentCredibilityIcon {
-            case .premium:
-                let iconFrame = self.titleCredibilityIconView.convert(self.titleCredibilityIconView.bounds, to: self.view)
-                let expandedIconFrame = self.titleExpandedCredibilityIconView.convert(self.titleExpandedCredibilityIconView.bounds, to: self.view)
-                if expandedIconFrame.contains(point) && self.isAvatarExpanded {
-                    return self.titleExpandedCredibilityIconView.hitTest(self.view.convert(point, to: self.titleExpandedCredibilityIconView), with: event)
-                } else if iconFrame.contains(point) {
-                    return self.titleCredibilityIconView.hitTest(self.view.convert(point, to: self.titleCredibilityIconView), with: event)
+            case .premium, .fullGram:
+                let iconFrame = self.titleCredibilityIconView.convert(self.titleCredibilityIconView.bounds, to: self.view).insetBy(dx: -8.0, dy: -8.0)
+                let expandedIconFrame = self.titleExpandedCredibilityIconView.convert(self.titleExpandedCredibilityIconView.bounds, to: self.view).insetBy(dx: -8.0, dy: -8.0)
+                if expandedIconFrame.contains(point) && self.isAvatarExpanded && self.titleExpandedCredibilityIconView.alpha > 0.0 {
+                    return self.titleExpandedCredibilityIconView.hitTest(self.view.convert(point, to: self.titleExpandedCredibilityIconView), with: event) ?? self.titleExpandedCredibilityIconView
+                } else if iconFrame.contains(point) && self.titleCredibilityIconView.alpha > 0.0 {
+                    return self.titleCredibilityIconView.hitTest(self.view.convert(point, to: self.titleCredibilityIconView), with: event) ?? self.titleCredibilityIconView
                 }
             default:
                 break
@@ -3048,7 +3043,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
     }
 
     private func presentFullGramBadgeBanner(badge: FullGramBadge) {
-        guard let hostView = self.controller?.view.window ?? self.controller?.displayNode.view else {
+        guard let hostView = self.view.window ?? self.controller?.view.window ?? self.controller?.displayNode.view else {
             return
         }
         let bannerTag = 984312

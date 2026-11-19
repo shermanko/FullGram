@@ -559,6 +559,7 @@ public final class SharedAccountContextImpl: SharedAccountContext {
         let fullGramFlat = FullGramExtras.shared.classicDesign || FullGramExtras.shared.removeGlass
         GlassBackgroundView.useCustomGlassImpl = immediateExperimentalUISettingsValue.with({ $0.fakeGlass }) || fullGramFlat
         GlassBackgroundView.flatMode = fullGramFlat
+        GlassBackgroundView.classicDesignMode = FullGramExtras.shared.classicDesign
         GlassBackgroundView.flatFillColor = FullGramExtras.shared.removeGlassColorHex.flatMap { FullGramThemeColors.parse($0) }.map { UIColor(rgb: $0) }
         ManagedAudioSessionImpl.respectsSystemRecordingInput = immediateExperimentalUISettingsValue.with({ $0.respectSystemMicrophone })
         MediaEditorVideoExport.forceLegacyStoryWriter = immediateExperimentalUISettingsValue.with({ $0.storyLegacyVideoWriter })
@@ -573,7 +574,9 @@ public final class SharedAccountContextImpl: SharedAccountContext {
                 let isFlat = FullGramExtras.shared.classicDesign || FullGramExtras.shared.removeGlass
                 GlassBackgroundView.useCustomGlassImpl = settings.fakeGlass || isFlat
                 GlassBackgroundView.flatMode = isFlat
+                GlassBackgroundView.classicDesignMode = FullGramExtras.shared.classicDesign
                 GlassBackgroundView.flatFillColor = FullGramExtras.shared.removeGlassColorHex.flatMap { FullGramThemeColors.parse($0) }.map { UIColor(rgb: $0) }
+                NotificationCenter.default.post(name: GlassBackgroundView.modeDidChangeNotification, object: nil)
                 ManagedAudioSessionImpl.respectsSystemRecordingInput = settings.respectSystemMicrophone
                 MediaEditorVideoExport.forceLegacyStoryWriter = settings.storyLegacyVideoWriter
                 MediaEditorVideoExport.forceLegacyChatWriter = settings.chatLegacyVideoWriter
@@ -584,7 +587,9 @@ public final class SharedAccountContextImpl: SharedAccountContext {
             let settings = immediateExperimentalUISettingsValue.with { $0 }
             GlassBackgroundView.useCustomGlassImpl = settings.fakeGlass || isFlat
             GlassBackgroundView.flatMode = isFlat
+            GlassBackgroundView.classicDesignMode = FullGramExtras.shared.classicDesign
             GlassBackgroundView.flatFillColor = FullGramExtras.shared.removeGlassColorHex.flatMap { FullGramThemeColors.parse($0) }.map { UIColor(rgb: $0) }
+            NotificationCenter.default.post(name: GlassBackgroundView.modeDidChangeNotification, object: nil)
         }
         
         let _ = self.contactDataManager?.personNameDisplayOrder().start(next: { order in

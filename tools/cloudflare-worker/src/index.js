@@ -1088,6 +1088,79 @@ async function saveBadges(env, badges) {
   await env.FULLGRAM_KV.put("badges.json", JSON.stringify(badges, null, 2));
 }
 
+async function loadCosmetics(env) {
+  const empty = { version: 1, users: {} };
+  if (!env.FULLGRAM_KV) return empty;
+  const raw = await env.FULLGRAM_KV.get("cosmetics.json");
+  if (!raw) return empty;
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      version: parsed.version || 1,
+      users: parsed.users && typeof parsed.users === "object" ? parsed.users : {}
+    };
+  } catch {
+    return empty;
+  }
+}
+
+async function saveCosmetics(env, cosmetics) {
+  if (!env.FULLGRAM_KV) return;
+  await env.FULLGRAM_KV.put("cosmetics.json", JSON.stringify(cosmetics, null, 2));
+}
+
+async function applyCosmeticChange(env, body) {
+  const peerId = body.peerId != null ? String(body.peerId).trim() : "";
+  if (!/^-?\d{1,20}$/.test(peerId)) {
+    throw new Error("Invalid peerId");
+  }
+  const cosmetics = await loadCosmetics(env);
+  const existing = cosmetics.users[peerId] || {};
+
+  let frameId = existing.frameId || null;
+  if ("frameId" in body) {
+    if (body.frameId == null || String(body.frameId).trim() === "") {
+      frameId = null;
+    } else {
+      const candidate = String(body.frameId).trim();
+      if (!/^[a-z0-9_]{1,48}$/i.test(candidate)) {
+        throw new Error("Invalid frameId");
+      }
+      frameId = candidate;
+    }
+  }
+
+  let nickColor = existing.nickColor || null;
+  if ("nickColor" in body) {
+    if (body.nickColor == null || String(body.nickColor).trim() === "") {
+      nickColor = null;
+    } else {
+      const candidate = String(body.nickColor).trim().toUpperCase();
+      if (!/^#[0-9A-F]{6}$/.test(candidate)) {
+        throw new Error("Invalid nickColor");
+      }
+      nickColor = candidate;
+    }
+  }
+
+  let nickGlow = typeof existing.nickGlow === "boolean" ? existing.nickGlow : false;
+  if ("nickGlow" in body) {
+    nickGlow = Boolean(body.nickGlow);
+  }
+
+  if (!frameId && !nickColor) {
+    delete cosmetics.users[peerId];
+  } else {
+    cosmetics.users[peerId] = {
+      frameId: frameId || null,
+      nickColor: nickColor || null,
+      nickGlow: Boolean(nickColor ? nickGlow : false)
+    };
+  }
+  await saveCosmetics(env, cosmetics);
+  return cosmetics.users[peerId] || null;
+}
+
 async function loadPlugins(env) {
   const base = structuredClone(DEFAULT_PLUGINS.plugins);
   if (!env.FULLGRAM_KV) return { version: 1, plugins: base };
@@ -1456,6 +1529,20 @@ export default {
 
     if (request.method === "GET" && path === "/badges.json") {
       return jsonResponse(await loadBadges(env));
+    }
+
+    if (request.method === "GET" && path === "/cosmetics.json") {
+      return jsonResponse(await loadCosmetics(env));
+    }
+
+    if (request.method === "POST" && path === "/cosmetics") {
+      try {
+        const body = await request.json();
+        const user = await applyCosmeticChange(env, body);
+        return jsonResponse({ ok: true, user });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err.message }, 400);
+      }
     }
 
     if (request.method === "GET" && path === "/plugins.json") {

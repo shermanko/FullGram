@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import Postbox
 import SwiftSignalKit
 internal import TelegramApi
@@ -882,6 +883,15 @@ public enum FullGramChatPrivacy {
         lock.unlock()
     }
 
+    public static func relock(peerId: Int64) {
+        lock.lock()
+        let removed = unlocked.remove(peerId) != nil
+        lock.unlock()
+        if removed {
+            NotificationCenter.default.post(name: didRelockNotification, object: peerId)
+        }
+    }
+
     public static func relock() {
         lock.lock()
         unlocked.removeAll()
@@ -1544,6 +1554,100 @@ public final class FullGramExtras: @unchecked Sendable {
     public var privateModeHideUsername: Bool {
         get { bool("privateModeHideUsername", default: true) }
         set { setBool("privateModeHideUsername", newValue) }
+    }
+
+    // MARK: - Screen Capture / Streamer Auto-Activation
+
+    private final class ScreenCaptureMonitor: @unchecked Sendable {
+        static let shared = ScreenCaptureMonitor()
+        private let lock = NSLock()
+        private var captured: Bool = false
+        private var screenshotActiveUntil: CFAbsoluteTime = 0.0
+        private var observers: [NSObjectProtocol] = []
+
+        private init() {
+            let nc = NotificationCenter.default
+            let c1 = nc.addObserver(forName: UIScreen.capturedDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.refreshCapturedState()
+                }
+            }
+            let c2 = nc.addObserver(forName: UIApplication.userDidTakeScreenshotNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.triggerScreenshotGrace()
+            }
+            let c3 = nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.refreshCapturedState()
+                }
+            }
+            self.observers = [c1, c2, c3]
+            Task { @MainActor [weak self] in
+                self?.refreshCapturedState()
+            }
+        }
+
+        deinit {
+            for observer in self.observers {
+                NotificationCenter.default.removeObserver(observer)
+            }
+        }
+
+        @MainActor
+        private func refreshCapturedState() {
+            let nowCaptured = UIScreen.screens.contains { $0.isCaptured }
+            self.lock.lock()
+            let changed = self.captured != nowCaptured
+            self.captured = nowCaptured
+            self.lock.unlock()
+            if changed {
+                NotificationCenter.default.post(name: FullGramExtras.didChangeNotification, object: "screenCapture")
+            }
+        }
+
+        private func triggerScreenshotGrace() {
+            let until = CFAbsoluteTimeGetCurrent() + 10.0
+            self.lock.lock()
+            self.screenshotActiveUntil = until
+            self.lock.unlock()
+            NotificationCenter.default.post(name: FullGramExtras.didChangeNotification, object: "screenCapture")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10.2) { [weak self] in
+                guard let self = self else { return }
+                let now = CFAbsoluteTimeGetCurrent()
+                self.lock.lock()
+                let expired = now >= self.screenshotActiveUntil
+                self.lock.unlock()
+                if expired {
+                    NotificationCenter.default.post(name: FullGramExtras.didChangeNotification, object: "screenCapture")
+                }
+            }
+        }
+
+        var isActive: Bool {
+            let now = CFAbsoluteTimeGetCurrent()
+            self.lock.lock()
+            let active = self.captured || now < self.screenshotActiveUntil
+            self.lock.unlock()
+            return active
+        }
+    }
+
+    public var isScreenCaptureActive: Bool {
+        return ScreenCaptureMonitor.shared.isActive
+    }
+
+    public var shouldHidePhoneNumberNow: Bool {
+        guard self.isScreenCaptureActive else { return false }
+        return self.hidePhoneNumber || self.privateMode
+    }
+
+    public var shouldHidePreviewsNow: Bool {
+        guard self.isScreenCaptureActive else { return false }
+        return self.privateMode && self.privateModeHidePreviews
+    }
+
+    public var shouldHideUsernameNow: Bool {
+        guard self.isScreenCaptureActive else { return false }
+        return self.privateMode && self.privateModeHideUsername
     }
 
     // MARK: - Helpers for 1.4 (Удаление метаданных) and 1.5 (Случайные имена файлов)

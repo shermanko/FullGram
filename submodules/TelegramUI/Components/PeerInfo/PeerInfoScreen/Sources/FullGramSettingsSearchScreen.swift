@@ -528,7 +528,8 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
 
 func fullGramSettingsSearchController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
-    let catalog = buildFullGramSearchCatalog()
+    let canOpenAdmin = fullGramCanOpenAdmin(context: context)
+    let catalog = buildFullGramSearchCatalog().filter { $0.id != 51 || canOpenAdmin }
     let queryPromise = ValuePromise<String>("", ignoreRepeated: true)
     let tickPromise = ValuePromise<Int>(0, ignoreRepeated: false)
     var tick = 0

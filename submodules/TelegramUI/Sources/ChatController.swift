@@ -7332,6 +7332,9 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
         self.updateMessageTodoDisposables?.dispose()
         self.preloadNextChatPeerIdDisposable.dispose()
         self.globalControlPanelsContextStateDisposable?.dispose()
+        if let peerId = self.chatLocation.peerId {
+            FullGramChatPrivacy.relock(peerId: peerId.toInt64())
+        }
     }
     
     public func updatePresentationMode(_ mode: ChatControllerPresentationMode) {
@@ -8475,6 +8478,12 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
     override public func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         self.forwardSideListAppearance(.didDisappear, animated: animated)
+        let isStillInStack = self.navigationController?.viewControllers.contains(where: { $0 === self }) ?? false
+        if self.isBeingDismissed || self.isMovingFromParent || !isStillInStack {
+            if let peerId = self.chatLocation.peerId {
+                FullGramChatPrivacy.relock(peerId: peerId.toInt64())
+            }
+        }
     }
     
     override public func viewWillDisappear(_ animated: Bool) {
