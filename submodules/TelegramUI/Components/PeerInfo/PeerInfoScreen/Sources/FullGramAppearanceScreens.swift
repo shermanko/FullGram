@@ -14,6 +14,8 @@ import TelegramPresentationData
 private final class FullGramFontDownloadState: @unchecked Sendable {
     var downloadingId: String?
     var lastError: String?
+    var presentNative: ((UIViewController) -> Void)?
+    var onChanged: (() -> Void)?
 }
 
 private struct FullGramFontsArguments {
@@ -119,7 +121,6 @@ private enum FullGramFontsEntry: ItemListNodeEntry {
 }
 
 func fullGramFontsController(context: AccountContext) -> ViewController {
-    var presentNativeImpl: ((UIViewController) -> Void)?
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
     let dlState = FullGramFontDownloadState()
@@ -127,6 +128,7 @@ func fullGramFontsController(context: AccountContext) -> ViewController {
     let bump: () -> Void = {
         changed.set(version.modify { $0 + 1 })
     }
+    dlState.onChanged = bump
 
     let observer = NotificationCenter.default.addObserver(forName: FullGramFonts.didChangeNotification, object: nil, queue: .main) { _ in
         bump()
@@ -144,17 +146,19 @@ func fullGramFontsController(context: AccountContext) -> ViewController {
             dlState.lastError = nil
             bump()
             FullGramFonts.downloadAndSelect(option: option) { result in
-                dlState.downloadingId = nil
-                switch result {
-                case .success:
-                    dlState.lastError = nil
-                    bump()
-                case let .failure(error):
-                    dlState.lastError = error.localizedDescription
-                    bump()
-                    let alert = UIAlertController(title: "Ошибка загрузки шрифта", message: error.localizedDescription, preferredStyle: .alert)
-                    alert.addAction(UIAlertAction(title: "OK", style: .default))
-                    presentNativeImpl?(alert)
+                Task { @MainActor in
+                    dlState.downloadingId = nil
+                    switch result {
+                    case .success:
+                        dlState.lastError = nil
+                        dlState.onChanged?()
+                    case let .failure(error):
+                        dlState.lastError = error.localizedDescription
+                        dlState.onChanged?()
+                        let alert = UIAlertController(title: "Ошибка загрузки шрифта", message: error.localizedDescription, preferredStyle: .alert)
+                        alert.addAction(UIAlertAction(title: "OK", style: .default))
+                        dlState.presentNative?(alert)
+                    }
                 }
             }
         },
@@ -213,7 +217,7 @@ func fullGramFontsController(context: AccountContext) -> ViewController {
     }
 
     let controller = ItemListController(context: context, state: signal)
-    presentNativeImpl = { vc in
+    dlState.presentNative = { vc in
         context.sharedContext.applicationBindings.presentNativeController(vc)
     }
     return controller
@@ -966,10 +970,9 @@ private enum FullGramIconsEntry: ItemListNodeEntry {
 func fullGramAppIconsController(context: AccountContext) -> ViewController {
     let tabPromise = ValuePromise<Int>(0, ignoreRepeated: true)
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
-    var version = 0
+    let version = Atomic<Int>(value: 0)
     let observer = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { _ in
-        version += 1
-        changed.set(version)
+        changed.set(version.modify { $0 + 1 })
     }
 
     let args = FullGramIconsArguments(
@@ -980,8 +983,7 @@ func fullGramAppIconsController(context: AccountContext) -> ViewController {
                 if fullGramStandardIcons.first(where: { $0.iconName == current })?.isMonochrome != true {
                     UIApplication.shared.setAlternateIconName("BlackIcon") { _ in
                         DispatchQueue.main.async {
-                            version += 1
-                            changed.set(version)
+                            changed.set(version.modify { $0 + 1 })
                         }
                     }
                 }
@@ -994,8 +996,7 @@ func fullGramAppIconsController(context: AccountContext) -> ViewController {
             guard UIApplication.shared.supportsAlternateIcons else { return }
             UIApplication.shared.setAlternateIconName(name) { _ in
                 DispatchQueue.main.async {
-                    version += 1
-                    changed.set(version)
+                    changed.set(version.modify { $0 + 1 })
                 }
             }
         }

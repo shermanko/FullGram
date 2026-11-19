@@ -14,6 +14,7 @@ import TelegramStringFormatting
 import StorageUsageScreen
 import SettingsUI
 import OverlayStatusController
+import ChatMessageItemView
 
 fileprivate struct InitialBannedRights {
     var value: TelegramChatBannedRights?

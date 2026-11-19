@@ -1329,7 +1329,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
 
             titleStringText = title
             if let nickPreset = FullGramNicknameStyle.activePreset,
-               (peer?.id == self.context.account.peerId || FullGramNicknameStyle.applyToChatTitles) {
+               (peer.id == self.context.account.peerId || FullGramNicknameStyle.applyToChatTitles) {
                 let nickFont: UIFont = nickPreset.isMono
                     ? UIFont.monospacedSystemFont(ofSize: 28.0, weight: nickPreset.isBold ? .bold : .medium)
                     : (nickPreset.isBold ? Font.bold(28.0) : Font.medium(28.0))
