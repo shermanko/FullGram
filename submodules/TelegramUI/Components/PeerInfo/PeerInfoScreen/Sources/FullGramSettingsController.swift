@@ -501,7 +501,7 @@ private final class FullGramHeaderItemNode: ListViewItemNode {
 
             let (versionLayout, versionApply) = makeVersionLayout(TextNodeLayoutArguments(
                 attributedString: NSAttributedString(
-                    string: "1.0.0",
+                    string: "1.5.0",
                     font: Font.regular(15.0),
                     textColor: item.theme.list.itemSecondaryTextColor
                 ),
