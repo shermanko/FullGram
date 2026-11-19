@@ -44,7 +44,7 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForRequest = 10.0
         cfg.timeoutIntervalForResource = 15.0
-        cfg.cachePolicy = .reloadIgnoringLocalCacheData
+        cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
         return URLSession(configuration: cfg)
     }()
 
