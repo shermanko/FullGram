@@ -376,7 +376,7 @@ func fullGramBadgeDeskController(
                             text: draft.enabled
                                 ? (ru ? "Бейдж обновлён" : "Badge updated")
                                 : (ru ? "Бейдж снят" : "Badge removed"),
-                            timeout: nil,
+                            timeout: 4.0,
                             customUndoText: nil
                         ),
                         elevatedLayout: false,
@@ -519,7 +519,13 @@ func fullGramBadgeDeskController(
             presentNativeImpl?(alert)
         },
         openNFTCatalog: {
-            pushImpl?(fullGramNFTCatalogController(context: context, targetPeerId: peerId, targetDisplayName: peer.compactDisplayTitle))
+            let cleanId = peer.id.id._internalGetInt64Value()
+            pushImpl?(fullGramNFTCatalogController(
+                context: context,
+                targetPeerId: cleanId,
+                targetDisplayName: peer.compactDisplayTitle,
+                targetEnginePeerId: peer.id
+            ))
         },
         revokeNFT: { item in
             let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
@@ -531,9 +537,11 @@ func fullGramBadgeDeskController(
                 preferredStyle: .alert
             )
             alert.addAction(UIAlertAction(title: ru ? "Удалить NFT" : "Remove NFT", style: .destructive, handler: { _ in
-                FullGramAdmin.shared.revokeNFT(peerId: peerId, entryId: item.id) { res in
+                let cleanId = peer.id.id._internalGetInt64Value()
+                FullGramAdmin.shared.revokeNFT(peerId: cleanId, entryId: item.id) { res in
                     switch res {
                     case .success:
+                        FullGramGrantedNFTStore.shared.removeLocal(peerId: cleanId, entryId: item.id)
                         FullGramGrantedNFTStore.shared.refreshNow { _ in }
                     case let .failure(err):
                         let errAlert = UIAlertController(title: ru ? "Ошибка" : "Error", message: err.localizedDescription, preferredStyle: .alert)

@@ -1361,10 +1361,36 @@ async function applyCosmeticChange(env, body) {
       frameId = null;
     } else {
       const candidate = String(body.frameId).trim();
-      if (!/^[a-z0-9_]{1,48}$/i.test(candidate)) {
+      if (!/^[a-z0-9_-]{1,96}$/i.test(candidate)) {
         throw new Error("Invalid frameId");
       }
       frameId = candidate;
+    }
+  }
+
+  let customFrameUrl = existing.customFrameUrl || null;
+  if ("customFrameUrl" in body) {
+    if (body.customFrameUrl == null || String(body.customFrameUrl).trim() === "") {
+      customFrameUrl = null;
+    } else {
+      const candidate = String(body.customFrameUrl).trim();
+      if (candidate.length > 400 || !/^https:\/\/[^\s]+$/i.test(candidate)) {
+        throw new Error("Invalid customFrameUrl");
+      }
+      customFrameUrl = candidate;
+    }
+  }
+
+  let profileEffectId = existing.profileEffectId || null;
+  if ("profileEffectId" in body) {
+    if (body.profileEffectId == null || String(body.profileEffectId).trim() === "") {
+      profileEffectId = null;
+    } else {
+      const candidate = String(body.profileEffectId).trim();
+      if (!/^[a-z0-9_-]{1,96}$/i.test(candidate)) {
+        throw new Error("Invalid profileEffectId");
+      }
+      profileEffectId = candidate;
     }
   }
 
@@ -1386,11 +1412,13 @@ async function applyCosmeticChange(env, body) {
     nickGlow = Boolean(body.nickGlow);
   }
 
-  if (!frameId && !nickColor) {
+  if (!frameId && !customFrameUrl && !profileEffectId && !nickColor) {
     delete cosmetics.users[peerId];
   } else {
     cosmetics.users[peerId] = {
       frameId: frameId || null,
+      customFrameUrl: customFrameUrl || null,
+      profileEffectId: profileEffectId || null,
       nickColor: nickColor || null,
       nickGlow: Boolean(nickColor ? nickGlow : false)
     };
@@ -1835,6 +1863,39 @@ export default {
 
     if (request.method === "GET" && path === "/cosmetics.json") {
       return jsonResponse(await loadCosmetics(env));
+    }
+
+    if (request.method === "GET" && path === "/discord-cosmetics.json") {
+      if (env.FULLGRAM_KV) {
+        const cached = await env.FULLGRAM_KV.get("discord_cosmetics.json");
+        if (cached) {
+          return new Response(cached, {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json; charset=utf-8",
+              "Cache-Control": "public, max-age=3600",
+              "Access-Control-Allow-Origin": "*"
+            }
+          });
+        }
+      }
+      try {
+        const upstream = await fetch("https://raw.githubusercontent.com/shermanko/FullGram/master/assets/discord_cosmetics.json");
+        if (upstream.ok) {
+          const text = await upstream.text();
+          return new Response(text, {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json; charset=utf-8",
+              "Cache-Control": "public, max-age=1800",
+              "Access-Control-Allow-Origin": "*"
+            }
+          });
+        }
+      } catch {
+        // fall through
+      }
+      return jsonResponse({ version: 1, frames: [], profileEffects: [] });
     }
 
     if (request.method === "GET" && path === "/nfts.json") {

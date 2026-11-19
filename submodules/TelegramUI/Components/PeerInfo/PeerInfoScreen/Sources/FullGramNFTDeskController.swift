@@ -10,17 +10,20 @@ import AccountContext
 import GiftItemComponent
 import UndoUI
 
-// MARK: - 1. Каталог коллекций NFT (нажал на Plush Pepe -> открылись все Plush Pepe)
+// MARK: - 1. Каталог коллекций NFT (компактная сетка 4 колонки)
 
 public func fullGramNFTCatalogController(
     context: AccountContext,
     targetPeerId: Int64,
-    targetDisplayName: String
+    targetDisplayName: String,
+    targetEnginePeerId: EnginePeer.Id? = nil
 ) -> ViewController {
+    let cleanId = FullGramGrantedNFTStore.normalizedTelegramId(for: targetPeerId)
     return FullGramNFTCatalogViewController(
         context: context,
-        targetPeerId: targetPeerId,
-        targetDisplayName: targetDisplayName
+        targetPeerId: cleanId,
+        targetDisplayName: targetDisplayName,
+        targetEnginePeerId: targetEnginePeerId
     )
 }
 
@@ -28,6 +31,7 @@ private final class FullGramNFTCatalogViewController: ViewController, UICollecti
     private let context: AccountContext
     private let targetPeerId: Int64
     private let targetDisplayName: String
+    private let targetEnginePeerId: EnginePeer.Id?
     private var presentationData: PresentationData
 
     private let searchBar = UISearchBar()
@@ -41,10 +45,16 @@ private final class FullGramNFTCatalogViewController: ViewController, UICollecti
     private var searchQuery: String = ""
     private var loadDisposable: Disposable?
 
-    init(context: AccountContext, targetPeerId: Int64, targetDisplayName: String) {
+    init(
+        context: AccountContext,
+        targetPeerId: Int64,
+        targetDisplayName: String,
+        targetEnginePeerId: EnginePeer.Id?
+    ) {
         self.context = context
         self.targetPeerId = targetPeerId
         self.targetDisplayName = targetDisplayName
+        self.targetEnginePeerId = targetEnginePeerId
         self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
         super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: self.presentationData))
         self.isOpaqueWhenInOverlay = true
@@ -74,7 +84,7 @@ private final class FullGramNFTCatalogViewController: ViewController, UICollecti
     override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
         super.containerLayoutUpdated(layout, transition: transition)
         let topInset = self.navigationLayout(layout: layout).navigationFrame.maxY
-        self.topConstraint?.constant = topInset + 4.0
+        self.topConstraint?.constant = topInset + 2.0
         if let navView = self.navigationBar?.view, navView.superview === self.displayNode.view {
             self.displayNode.view.bringSubviewToFront(navView)
         }
@@ -88,24 +98,24 @@ private final class FullGramNFTCatalogViewController: ViewController, UICollecti
 
         self.searchBar.translatesAutoresizingMaskIntoConstraints = false
         self.searchBar.searchBarStyle = .minimal
-        self.searchBar.placeholder = ru ? "Поиск NFT (Plush Pepe, Durov's Cap…)" : "Search NFT (Plush Pepe, Durov's Cap…)"
+        self.searchBar.placeholder = ru ? "Поиск NFT (Plush Pepe, Durov's Cap…)" : "Search NFT…"
         self.searchBar.delegate = self
         self.searchBar.overrideUserInterfaceStyle = theme.overallDarkAppearance ? .dark : .light
 
         self.statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        self.statusLabel.font = UIFont.systemFont(ofSize: 13.0)
+        self.statusLabel.font = UIFont.systemFont(ofSize: 12.0)
         self.statusLabel.textColor = theme.list.itemSecondaryTextColor
         self.statusLabel.textAlignment = .center
-        self.statusLabel.numberOfLines = 2
-        self.statusLabel.text = ru ? "Получатель: \(self.targetDisplayName) (ID \(self.targetPeerId))" : "Recipient: \(self.targetDisplayName) (ID \(self.targetPeerId))"
+        self.statusLabel.numberOfLines = 1
+        self.statusLabel.text = ru ? "Кому: \(self.targetDisplayName) (ID \(self.targetPeerId))" : "To: \(self.targetDisplayName) (ID \(self.targetPeerId))"
 
         self.spinner.translatesAutoresizingMaskIntoConstraints = false
         self.spinner.hidesWhenStopped = true
 
         let layout = UICollectionViewFlowLayout()
-        layout.minimumInteritemSpacing = 10.0
-        layout.minimumLineSpacing = 10.0
-        layout.sectionInset = UIEdgeInsets(top: 8.0, left: 12.0, bottom: 24.0, right: 12.0)
+        layout.minimumInteritemSpacing = 6.0
+        layout.minimumLineSpacing = 6.0
+        layout.sectionInset = UIEdgeInsets(top: 6.0, left: 10.0, bottom: 20.0, right: 10.0)
 
         self.collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
         self.collectionView.translatesAutoresizingMaskIntoConstraints = false
@@ -127,19 +137,20 @@ private final class FullGramNFTCatalogViewController: ViewController, UICollecti
         insertBelowNav(self.searchBar)
         insertBelowNav(self.spinner)
 
-        let topC = self.searchBar.topAnchor.constraint(equalTo: root.topAnchor, constant: 92.0)
+        let topC = self.searchBar.topAnchor.constraint(equalTo: root.topAnchor, constant: 90.0)
         self.topConstraint = topC
 
         NSLayoutConstraint.activate([
             topC,
-            self.searchBar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 8.0),
-            self.searchBar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -8.0),
+            self.searchBar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 6.0),
+            self.searchBar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -6.0),
+            self.searchBar.heightAnchor.constraint(equalToConstant: 44.0),
 
-            self.statusLabel.topAnchor.constraint(equalTo: self.searchBar.bottomAnchor, constant: 2.0),
-            self.statusLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16.0),
-            self.statusLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16.0),
+            self.statusLabel.topAnchor.constraint(equalTo: self.searchBar.bottomAnchor, constant: 1.0),
+            self.statusLabel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12.0),
+            self.statusLabel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12.0),
 
-            self.collectionView.topAnchor.constraint(equalTo: self.statusLabel.bottomAnchor, constant: 6.0),
+            self.collectionView.topAnchor.constraint(equalTo: self.statusLabel.bottomAnchor, constant: 4.0),
             self.collectionView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             self.collectionView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             self.collectionView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
@@ -174,7 +185,7 @@ private final class FullGramNFTCatalogViewController: ViewController, UICollecti
             self.applyFilter()
             if self.allGifts.isEmpty {
                 let ru = self.presentationData.strings.baseLanguageCode.hasPrefix("ru")
-                self.statusLabel.text = ru ? "Telegram не вернул каталог подарков. Попробуйте позже." : "Telegram returned no gift catalog. Try again later."
+                self.statusLabel.text = ru ? "Telegram не вернул каталог подарков." : "Telegram returned no gift catalog."
             }
         })
     }
@@ -229,19 +240,21 @@ private final class FullGramNFTCatalogViewController: ViewController, UICollecti
             context: self.context,
             targetPeerId: self.targetPeerId,
             targetDisplayName: self.targetDisplayName,
+            targetEnginePeerId: self.targetEnginePeerId,
             gift: gift
         )
         self.push(studio)
     }
 
     func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> CGSize {
-        let totalSpacing: CGFloat = 24.0 + 20.0
-        let side = floor(max(92.0, (collectionView.bounds.width - totalSpacing) / 3.0))
-        return CGSize(width: side, height: side + 26.0)
+        let cols: CGFloat = 4.0
+        let totalSpacing: CGFloat = 20.0 + (cols - 1.0) * 6.0
+        let side = floor(max(72.0, (collectionView.bounds.width - totalSpacing) / cols))
+        return CGSize(width: side, height: side + 18.0)
     }
 }
 
-// MARK: - 2. Студия NFT: выбор модели (все варианты), фона, узора и номера + живое превью
+// MARK: - 2. Компактная студия NFT (без перекрытий, 4 колонки, отправка в чат)
 
 private final class FullGramNFTStudioViewController: ViewController, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
     private enum PickerTab: Int {
@@ -253,6 +266,7 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
     private let context: AccountContext
     private let targetPeerId: Int64
     private let targetDisplayName: String
+    private let targetEnginePeerId: EnginePeer.Id?
     private let gift: StarGift.Gift
     private var presentationData: PresentationData
 
@@ -265,6 +279,7 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
     private var selectedPatternIndex: Int = 0
     private var collectionNumber: Int32 = Int32.random(in: 1 ... 9999)
     private var activeTab: PickerTab = .models
+    private var notifyInChat: Bool = true
     private var isGranting = false
 
     private let previewCardContainer = UIView()
@@ -273,6 +288,7 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
     private let previewDetailsLabel = UILabel()
     private let numberButton = UIButton(type: .system)
     private let randomButton = UIButton(type: .system)
+    private let chatToggleButton = UIButton(type: .system)
     private let grantButton = UIButton(type: .system)
     private let segmentedControl = UISegmentedControl(items: ["Модели", "Фоны", "Узоры"])
     private let spinner = UIActivityIndicatorView(style: .medium)
@@ -286,10 +302,17 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
         return raw.isEmpty ? "NFT" : raw
     }
 
-    init(context: AccountContext, targetPeerId: Int64, targetDisplayName: String, gift: StarGift.Gift) {
+    init(
+        context: AccountContext,
+        targetPeerId: Int64,
+        targetDisplayName: String,
+        targetEnginePeerId: EnginePeer.Id?,
+        gift: StarGift.Gift
+    ) {
         self.context = context
         self.targetPeerId = targetPeerId
         self.targetDisplayName = targetDisplayName
+        self.targetEnginePeerId = targetEnginePeerId
         self.gift = gift
         self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
         super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: self.presentationData))
@@ -319,7 +342,7 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
     override func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
         super.containerLayoutUpdated(layout, transition: transition)
         let topInset = self.navigationLayout(layout: layout).navigationFrame.maxY
-        self.headerTopConstraint?.constant = topInset + 10.0
+        self.headerTopConstraint?.constant = topInset + 6.0
         if let navView = self.navigationBar?.view, navView.superview === self.displayNode.view {
             self.displayNode.view.bringSubviewToFront(navView)
         }
@@ -334,57 +357,77 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
         let headerCard = UIView()
         headerCard.translatesAutoresizingMaskIntoConstraints = false
         headerCard.backgroundColor = theme.list.itemBlocksBackgroundColor
-        headerCard.layer.cornerRadius = 18.0
+        headerCard.layer.cornerRadius = 14.0
         headerCard.layer.cornerCurve = .continuous
 
         self.previewCardContainer.translatesAutoresizingMaskIntoConstraints = false
         self.previewCardContainer.backgroundColor = .clear
-        headerCard.addSubview(self.previewCardContainer)
+        self.previewCardContainer.clipsToBounds = true
+        self.previewCardContainer.layer.cornerRadius = 12.0
 
-        self.previewTitleLabel.translatesAutoresizingMaskIntoConstraints = false
-        self.previewTitleLabel.font = UIFont.systemFont(ofSize: 16.0, weight: .bold)
+        self.previewTitleLabel.font = UIFont.systemFont(ofSize: 14.5, weight: .bold)
         self.previewTitleLabel.textColor = theme.list.itemPrimaryTextColor
         self.previewTitleLabel.numberOfLines = 1
-        headerCard.addSubview(self.previewTitleLabel)
+        self.previewTitleLabel.lineBreakMode = .byTruncatingTail
 
-        self.previewDetailsLabel.translatesAutoresizingMaskIntoConstraints = false
-        self.previewDetailsLabel.font = UIFont.systemFont(ofSize: 12.5)
+        self.previewDetailsLabel.font = UIFont.systemFont(ofSize: 11.5, weight: .regular)
         self.previewDetailsLabel.textColor = theme.list.itemSecondaryTextColor
-        self.previewDetailsLabel.numberOfLines = 3
-        headerCard.addSubview(self.previewDetailsLabel)
+        self.previewDetailsLabel.numberOfLines = 2
+        self.previewDetailsLabel.lineBreakMode = .byTruncatingTail
 
         var numCfg = UIButton.Configuration.tinted()
-        numCfg.title = "#\(self.collectionNumber)"
+        var numTitle = AttributedString("#\(self.collectionNumber)")
+        numTitle.font = UIFont.systemFont(ofSize: 12.0, weight: .semibold)
+        numCfg.attributedTitle = numTitle
         numCfg.cornerStyle = .capsule
         numCfg.baseBackgroundColor = theme.list.itemAccentColor
         numCfg.baseForegroundColor = theme.list.itemAccentColor
-        numCfg.contentInsets = NSDirectionalEdgeInsets(top: 6.0, leading: 10.0, bottom: 6.0, trailing: 10.0)
+        numCfg.contentInsets = NSDirectionalEdgeInsets(top: 4.0, leading: 8.0, bottom: 4.0, trailing: 8.0)
         self.numberButton.configuration = numCfg
-        self.numberButton.translatesAutoresizingMaskIntoConstraints = false
+        self.numberButton.setContentHuggingPriority(.required, for: .horizontal)
         self.numberButton.addTarget(self, action: #selector(self.editNumberTapped), for: .touchUpInside)
-        headerCard.addSubview(self.numberButton)
 
         var randCfg = UIButton.Configuration.tinted()
-        randCfg.title = "🎲"
+        var randTitle = AttributedString("🎲")
+        randTitle.font = UIFont.systemFont(ofSize: 12.5)
+        randCfg.attributedTitle = randTitle
         randCfg.cornerStyle = .capsule
         randCfg.baseBackgroundColor = theme.list.itemSecondaryTextColor
         randCfg.baseForegroundColor = theme.list.itemPrimaryTextColor
-        randCfg.contentInsets = NSDirectionalEdgeInsets(top: 6.0, leading: 10.0, bottom: 6.0, trailing: 10.0)
+        randCfg.contentInsets = NSDirectionalEdgeInsets(top: 4.0, leading: 8.0, bottom: 4.0, trailing: 8.0)
         self.randomButton.configuration = randCfg
-        self.randomButton.translatesAutoresizingMaskIntoConstraints = false
+        self.randomButton.setContentHuggingPriority(.required, for: .horizontal)
         self.randomButton.addTarget(self, action: #selector(self.randomizeTapped), for: .touchUpInside)
-        headerCard.addSubview(self.randomButton)
+
+        self.chatToggleButton.setContentHuggingPriority(.required, for: .horizontal)
+        self.chatToggleButton.addTarget(self, action: #selector(self.toggleNotifyInChat), for: .touchUpInside)
+        self.updateChatToggleAppearance()
 
         var grantCfg = UIButton.Configuration.filled()
-        grantCfg.title = ru ? "Выдать NFT" : "Grant NFT"
+        var grantTitle = AttributedString(ru ? "Выдать" : "Grant")
+        grantTitle.font = UIFont.systemFont(ofSize: 12.5, weight: .bold)
+        grantCfg.attributedTitle = grantTitle
         grantCfg.cornerStyle = .capsule
         grantCfg.baseBackgroundColor = theme.list.itemAccentColor
         grantCfg.baseForegroundColor = .white
-        grantCfg.contentInsets = NSDirectionalEdgeInsets(top: 8.0, leading: 14.0, bottom: 8.0, trailing: 14.0)
+        grantCfg.contentInsets = NSDirectionalEdgeInsets(top: 5.0, leading: 10.0, bottom: 5.0, trailing: 10.0)
         self.grantButton.configuration = grantCfg
-        self.grantButton.translatesAutoresizingMaskIntoConstraints = false
         self.grantButton.addTarget(self, action: #selector(self.grantTapped), for: .touchUpInside)
-        headerCard.addSubview(self.grantButton)
+
+        let controlsRow = UIStackView(arrangedSubviews: [self.numberButton, self.randomButton, self.chatToggleButton, self.grantButton])
+        controlsRow.axis = .horizontal
+        controlsRow.spacing = 5.0
+        controlsRow.alignment = .center
+        controlsRow.distribution = .fill
+
+        let rightStack = UIStackView(arrangedSubviews: [self.previewTitleLabel, self.previewDetailsLabel, controlsRow])
+        rightStack.axis = .vertical
+        rightStack.spacing = 5.0
+        rightStack.alignment = .fill
+        rightStack.translatesAutoresizingMaskIntoConstraints = false
+
+        headerCard.addSubview(self.previewCardContainer)
+        headerCard.addSubview(rightStack)
 
         self.segmentedControl.translatesAutoresizingMaskIntoConstraints = false
         self.segmentedControl.setTitle(ru ? "Модели" : "Models", forSegmentAt: 0)
@@ -395,9 +438,9 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
         self.segmentedControl.addTarget(self, action: #selector(self.tabChanged), for: .valueChanged)
 
         let layout = UICollectionViewFlowLayout()
-        layout.minimumInteritemSpacing = 10.0
-        layout.minimumLineSpacing = 10.0
-        layout.sectionInset = UIEdgeInsets(top: 10.0, left: 12.0, bottom: 24.0, right: 12.0)
+        layout.minimumInteritemSpacing = 6.0
+        layout.minimumLineSpacing = 6.0
+        layout.sectionInset = UIEdgeInsets(top: 6.0, left: 10.0, bottom: 20.0, right: 10.0)
 
         self.collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
         self.collectionView.translatesAutoresizingMaskIntoConstraints = false
@@ -422,41 +465,29 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
         insertBelowNav(headerCard)
         insertBelowNav(self.spinner)
 
-        let topC = headerCard.topAnchor.constraint(equalTo: root.topAnchor, constant: 96.0)
+        let topC = headerCard.topAnchor.constraint(equalTo: root.topAnchor, constant: 92.0)
         self.headerTopConstraint = topC
 
         NSLayoutConstraint.activate([
             topC,
-            headerCard.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12.0),
-            headerCard.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12.0),
+            headerCard.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10.0),
+            headerCard.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10.0),
 
-            self.previewCardContainer.topAnchor.constraint(equalTo: headerCard.topAnchor, constant: 12.0),
-            self.previewCardContainer.leadingAnchor.constraint(equalTo: headerCard.leadingAnchor, constant: 12.0),
-            self.previewCardContainer.bottomAnchor.constraint(equalTo: headerCard.bottomAnchor, constant: -12.0),
-            self.previewCardContainer.widthAnchor.constraint(equalToConstant: 124.0),
-            self.previewCardContainer.heightAnchor.constraint(equalToConstant: 124.0),
+            self.previewCardContainer.topAnchor.constraint(equalTo: headerCard.topAnchor, constant: 8.0),
+            self.previewCardContainer.leadingAnchor.constraint(equalTo: headerCard.leadingAnchor, constant: 8.0),
+            self.previewCardContainer.bottomAnchor.constraint(lessThanOrEqualTo: headerCard.bottomAnchor, constant: -8.0),
+            self.previewCardContainer.widthAnchor.constraint(equalToConstant: 86.0),
+            self.previewCardContainer.heightAnchor.constraint(equalToConstant: 86.0),
 
-            self.previewTitleLabel.topAnchor.constraint(equalTo: headerCard.topAnchor, constant: 14.0),
-            self.previewTitleLabel.leadingAnchor.constraint(equalTo: self.previewCardContainer.trailingAnchor, constant: 12.0),
-            self.previewTitleLabel.trailingAnchor.constraint(equalTo: headerCard.trailingAnchor, constant: -12.0),
+            rightStack.topAnchor.constraint(equalTo: headerCard.topAnchor, constant: 8.0),
+            rightStack.leadingAnchor.constraint(equalTo: self.previewCardContainer.trailingAnchor, constant: 10.0),
+            rightStack.trailingAnchor.constraint(equalTo: headerCard.trailingAnchor, constant: -8.0),
+            rightStack.bottomAnchor.constraint(equalTo: headerCard.bottomAnchor, constant: -8.0),
 
-            self.previewDetailsLabel.topAnchor.constraint(equalTo: self.previewTitleLabel.bottomAnchor, constant: 4.0),
-            self.previewDetailsLabel.leadingAnchor.constraint(equalTo: self.previewTitleLabel.leadingAnchor),
-            self.previewDetailsLabel.trailingAnchor.constraint(equalTo: headerCard.trailingAnchor, constant: -12.0),
-
-            self.numberButton.leadingAnchor.constraint(equalTo: self.previewTitleLabel.leadingAnchor),
-            self.numberButton.bottomAnchor.constraint(equalTo: self.grantButton.topAnchor, constant: -6.0),
-
-            self.randomButton.leadingAnchor.constraint(equalTo: self.numberButton.trailingAnchor, constant: 6.0),
-            self.randomButton.centerYAnchor.constraint(equalTo: self.numberButton.centerYAnchor),
-
-            self.grantButton.leadingAnchor.constraint(equalTo: self.previewTitleLabel.leadingAnchor),
-            self.grantButton.trailingAnchor.constraint(equalTo: headerCard.trailingAnchor, constant: -12.0),
-            self.grantButton.bottomAnchor.constraint(equalTo: headerCard.bottomAnchor, constant: -12.0),
-
-            self.segmentedControl.topAnchor.constraint(equalTo: headerCard.bottomAnchor, constant: 10.0),
-            self.segmentedControl.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12.0),
-            self.segmentedControl.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12.0),
+            self.segmentedControl.topAnchor.constraint(equalTo: headerCard.bottomAnchor, constant: 6.0),
+            self.segmentedControl.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10.0),
+            self.segmentedControl.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -10.0),
+            self.segmentedControl.heightAnchor.constraint(equalToConstant: 30.0),
 
             self.collectionView.topAnchor.constraint(equalTo: self.segmentedControl.bottomAnchor, constant: 4.0),
             self.collectionView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
@@ -468,6 +499,24 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
         ])
 
         self.refreshPreview()
+    }
+
+    private func updateChatToggleAppearance() {
+        let theme = self.presentationData.theme
+        var cfg = UIButton.Configuration.tinted()
+        var title = AttributedString(self.notifyInChat ? "💬✓" : "💬")
+        title.font = UIFont.systemFont(ofSize: 12.0, weight: .semibold)
+        cfg.attributedTitle = title
+        cfg.cornerStyle = .capsule
+        cfg.baseBackgroundColor = self.notifyInChat ? UIColor.systemGreen : theme.list.itemSecondaryTextColor
+        cfg.baseForegroundColor = self.notifyInChat ? UIColor.systemGreen : theme.list.itemSecondaryTextColor
+        cfg.contentInsets = NSDirectionalEdgeInsets(top: 4.0, leading: 7.0, bottom: 4.0, trailing: 7.0)
+        self.chatToggleButton.configuration = cfg
+    }
+
+    @objc private func toggleNotifyInChat() {
+        self.notifyInChat.toggle()
+        self.updateChatToggleAppearance()
     }
 
     private func loadAttributes() {
@@ -488,9 +537,9 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
             self.selectedPatternIndex = 0
 
             let ru = self.presentationData.strings.baseLanguageCode.hasPrefix("ru")
-            self.segmentedControl.setTitle("\(ru ? "Модели" : "Models") (\(self.models.count))", forSegmentAt: 0)
-            self.segmentedControl.setTitle("\(ru ? "Фоны" : "Backdrops") (\(self.backdrops.count))", forSegmentAt: 1)
-            self.segmentedControl.setTitle("\(ru ? "Узоры" : "Patterns") (\(self.patterns.count))", forSegmentAt: 2)
+            self.segmentedControl.setTitle("\(ru ? "Модели" : "Models") \(self.models.count)", forSegmentAt: 0)
+            self.segmentedControl.setTitle("\(ru ? "Фоны" : "Backdrops") \(self.backdrops.count)", forSegmentAt: 1)
+            self.segmentedControl.setTitle("\(ru ? "Узоры" : "Patterns") \(self.patterns.count)", forSegmentAt: 2)
 
             self.grantButton.isEnabled = !self.models.isEmpty && !self.backdrops.isEmpty && !self.patterns.isEmpty
             self.refreshPreview()
@@ -518,13 +567,15 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
         self.previewTitleLabel.text = "\(self.collectionTitle) #\(self.collectionNumber)"
 
         var numCfg = self.numberButton.configuration ?? UIButton.Configuration.tinted()
-        numCfg.title = "#\(self.collectionNumber)"
+        var numAttr = AttributedString("#\(self.collectionNumber)")
+        numAttr.font = UIFont.systemFont(ofSize: 12.0, weight: .semibold)
+        numCfg.attributedTitle = numAttr
         self.numberButton.configuration = numCfg
 
         guard let model = self.selectedModel,
               let backdrop = self.selectedBackdrop,
               let pattern = self.selectedPattern else {
-            self.previewDetailsLabel.text = ru ? "Загрузка моделей, фонов и узоров…" : "Loading models, backdrops and patterns…"
+            self.previewDetailsLabel.text = ru ? "Загрузка моделей, фонов и узоров…" : "Loading…"
             return
         }
 
@@ -541,7 +592,7 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
         let patternName: String
         if case let .pattern(name, _, _) = pattern { patternName = name } else { patternName = "—" }
 
-        self.previewDetailsLabel.text = "\(ru ? "Модель" : "Model"): \(modelName)\n\(ru ? "Фон" : "Backdrop"): \(backdropName)\n\(ru ? "Узор" : "Pattern"): \(patternName)"
+        self.previewDetailsLabel.text = "\(modelName) • \(backdropName) • \(patternName)"
 
         let unique = StarGift.UniqueGift(
             id: self.gift.id &+ Int64(self.collectionNumber),
@@ -567,7 +618,7 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
             craftChancePermille: nil
         )
 
-        let previewSize = CGSize(width: 124.0, height: 124.0)
+        let previewSize = CGSize(width: 86.0, height: 86.0)
         let _ = self.previewHost.update(
             transition: .immediate,
             component: AnyComponent(GiftItemComponent(
@@ -662,18 +713,26 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
         self.isGranting = true
         self.grantButton.isEnabled = false
         var cfg = self.grantButton.configuration ?? UIButton.Configuration.filled()
-        cfg.title = ru ? "Выдача…" : "Granting…"
+        var waitTitle = AttributedString("…")
+        waitTitle.font = UIFont.systemFont(ofSize: 12.5, weight: .bold)
+        cfg.attributedTitle = waitTitle
         self.grantButton.configuration = cfg
 
+        let cleanPeerId = FullGramGrantedNFTStore.normalizedTelegramId(for: self.targetPeerId)
+        let giftId = self.gift.id
+        let title = self.collectionTitle
+        let number = self.collectionNumber
+        let shouldNotifyChat = self.notifyInChat
+
         FullGramAdmin.shared.grantNFT(
-            peerId: self.targetPeerId,
-            giftId: self.gift.id,
-            title: self.collectionTitle,
+            peerId: cleanPeerId,
+            giftId: giftId,
+            title: title,
             modelName: modelName,
             backdropName: backdropName,
             backdropId: backdropId,
             patternName: patternName,
-            number: self.collectionNumber,
+            number: number,
             note: "",
             pinned: true
         ) { [weak self] result in
@@ -681,19 +740,59 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
             self.isGranting = false
             self.grantButton.isEnabled = true
             var resetCfg = self.grantButton.configuration ?? UIButton.Configuration.filled()
-            resetCfg.title = ru ? "Выдать NFT" : "Grant NFT"
+            var resetTitle = AttributedString(ru ? "Выдать" : "Grant")
+            resetTitle.font = UIFont.systemFont(ofSize: 12.5, weight: .bold)
+            resetCfg.attributedTitle = resetTitle
             self.grantButton.configuration = resetCfg
 
             switch result {
-            case .success:
+            case let .success(entryId):
+                let localNFT = FullGramGrantedNFT(
+                    id: entryId,
+                    giftId: String(giftId),
+                    title: title,
+                    modelName: modelName,
+                    backdropName: backdropName,
+                    backdropId: backdropId,
+                    patternName: patternName,
+                    number: number,
+                    note: "",
+                    pinned: true
+                )
+                FullGramGrantedNFTStore.shared.appendLocal(peerId: cleanPeerId, nft: localNFT)
                 FullGramGrantedNFTStore.shared.refreshNow { _ in }
+
+                if shouldNotifyChat, let chatPeerId = self.targetEnginePeerId {
+                    let chatMsg = ru
+                        ? "🎁 Подарок NFT FullGram!\n✨ \(title) #\(number)\nМодель: \(modelName) · Фон: \(backdropName) · Узор: \(patternName)\nПодарок уже отображается в вашем профиле FullGram!"
+                        : "🎁 FullGram NFT Gift!\n✨ \(title) #\(number)\nModel: \(modelName) · Backdrop: \(backdropName) · Pattern: \(patternName)\nVisible now in your FullGram profile!"
+                    let _ = enqueueMessages(
+                        account: self.context.account,
+                        peerId: chatPeerId,
+                        messages: [
+                            .message(
+                                text: chatMsg,
+                                attributes: [],
+                                inlineStickers: [:],
+                                mediaReference: nil,
+                                threadId: nil,
+                                replyToMessageId: nil,
+                                replyToStoryId: nil,
+                                localGroupingKey: nil,
+                                correlationId: nil,
+                                bubbleUpEmojiOrStickersets: []
+                            )
+                        ]
+                    ).startStandalone()
+                }
+
                 let banner = UndoOverlayController(
                     presentationData: self.presentationData,
                     content: .succeed(
                         text: ru
-                            ? "NFT «\(self.collectionTitle) #\(self.collectionNumber)» выдан пользователю \(self.targetDisplayName) и виден всем в FullGram."
-                            : "NFT \"\(self.collectionTitle) #\(self.collectionNumber)\" granted to \(self.targetDisplayName) and visible to all FullGram users.",
-                        timeout: nil,
+                            ? "NFT «\(title) #\(number)» выдан пользователю \(self.targetDisplayName)!"
+                            : "NFT \"\(title) #\(number)\" granted to \(self.targetDisplayName)!",
+                        timeout: 4.0,
                         customUndoText: nil
                     ),
                     elevatedLayout: false,
@@ -803,13 +902,14 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
     }
 
     func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> CGSize {
-        let totalSpacing: CGFloat = 24.0 + 20.0
-        let side = floor(max(92.0, (collectionView.bounds.width - totalSpacing) / 3.0))
-        return CGSize(width: side, height: side + 26.0)
+        let cols: CGFloat = 4.0
+        let totalSpacing: CGFloat = 20.0 + (cols - 1.0) * 6.0
+        let side = floor(max(72.0, (collectionView.bounds.width - totalSpacing) / cols))
+        return CGSize(width: side, height: side + 18.0)
     }
 }
 
-// MARK: - 3. Ячейки сетки превью
+// MARK: - 3. Компактные ячейки сетки превью (4 колонки)
 
 private final class FullGramNFTComponentCell: UICollectionViewCell {
     private let host = ComponentView<Empty>()
@@ -818,32 +918,32 @@ private final class FullGramNFTComponentCell: UICollectionViewCell {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        self.contentView.layer.cornerRadius = 14.0
+        self.contentView.layer.cornerRadius = 11.0
         self.contentView.layer.cornerCurve = .continuous
         self.contentView.clipsToBounds = true
 
         self.cardContainer.translatesAutoresizingMaskIntoConstraints = false
         self.cardContainer.clipsToBounds = true
-        self.cardContainer.layer.cornerRadius = 12.0
+        self.cardContainer.layer.cornerRadius = 9.0
         self.cardContainer.layer.cornerCurve = .continuous
         self.contentView.addSubview(self.cardContainer)
 
         self.titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        self.titleLabel.font = UIFont.systemFont(ofSize: 11.5, weight: .semibold)
+        self.titleLabel.font = UIFont.systemFont(ofSize: 10.0, weight: .semibold)
         self.titleLabel.textAlignment = .center
         self.titleLabel.lineBreakMode = .byTruncatingTail
         self.contentView.addSubview(self.titleLabel)
 
         NSLayoutConstraint.activate([
-            self.cardContainer.topAnchor.constraint(equalTo: self.contentView.topAnchor, constant: 4.0),
-            self.cardContainer.leadingAnchor.constraint(equalTo: self.contentView.leadingAnchor, constant: 4.0),
-            self.cardContainer.trailingAnchor.constraint(equalTo: self.contentView.trailingAnchor, constant: -4.0),
+            self.cardContainer.topAnchor.constraint(equalTo: self.contentView.topAnchor, constant: 3.0),
+            self.cardContainer.leadingAnchor.constraint(equalTo: self.contentView.leadingAnchor, constant: 3.0),
+            self.cardContainer.trailingAnchor.constraint(equalTo: self.contentView.trailingAnchor, constant: -3.0),
             self.cardContainer.heightAnchor.constraint(equalTo: self.cardContainer.widthAnchor),
 
-            self.titleLabel.topAnchor.constraint(equalTo: self.cardContainer.bottomAnchor, constant: 3.0),
-            self.titleLabel.leadingAnchor.constraint(equalTo: self.contentView.leadingAnchor, constant: 4.0),
-            self.titleLabel.trailingAnchor.constraint(equalTo: self.contentView.trailingAnchor, constant: -4.0),
-            self.titleLabel.bottomAnchor.constraint(lessThanOrEqualTo: self.contentView.bottomAnchor, constant: -3.0)
+            self.titleLabel.topAnchor.constraint(equalTo: self.cardContainer.bottomAnchor, constant: 2.0),
+            self.titleLabel.leadingAnchor.constraint(equalTo: self.contentView.leadingAnchor, constant: 2.0),
+            self.titleLabel.trailingAnchor.constraint(equalTo: self.contentView.trailingAnchor, constant: -2.0),
+            self.titleLabel.bottomAnchor.constraint(lessThanOrEqualTo: self.contentView.bottomAnchor, constant: -2.0)
         ])
     }
 
@@ -874,7 +974,7 @@ private final class FullGramNFTComponentCell: UICollectionViewCell {
         self.titleLabel.text = title
         self.titleLabel.textColor = selected ? theme.list.itemAccentColor : theme.list.itemPrimaryTextColor
 
-        let side = max(84.0, self.bounds.width - 8.0)
+        let side = max(64.0, self.bounds.width - 6.0)
         let size = CGSize(width: side, height: side)
         let _ = self.host.update(
             transition: .immediate,
@@ -907,12 +1007,12 @@ private final class FullGramNFTBackdropCell: UICollectionViewCell {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        self.contentView.layer.cornerRadius = 14.0
+        self.contentView.layer.cornerRadius = 11.0
         self.contentView.layer.cornerCurve = .continuous
         self.contentView.clipsToBounds = true
 
         self.swatchView.translatesAutoresizingMaskIntoConstraints = false
-        self.swatchView.layer.cornerRadius = 12.0
+        self.swatchView.layer.cornerRadius = 9.0
         self.swatchView.layer.cornerCurve = .continuous
         self.swatchView.clipsToBounds = true
         self.gradientLayer.type = .radial
@@ -922,21 +1022,21 @@ private final class FullGramNFTBackdropCell: UICollectionViewCell {
         self.contentView.addSubview(self.swatchView)
 
         self.titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        self.titleLabel.font = UIFont.systemFont(ofSize: 11.5, weight: .semibold)
+        self.titleLabel.font = UIFont.systemFont(ofSize: 10.0, weight: .semibold)
         self.titleLabel.textAlignment = .center
         self.titleLabel.lineBreakMode = .byTruncatingTail
         self.contentView.addSubview(self.titleLabel)
 
         NSLayoutConstraint.activate([
-            self.swatchView.topAnchor.constraint(equalTo: self.contentView.topAnchor, constant: 4.0),
-            self.swatchView.leadingAnchor.constraint(equalTo: self.contentView.leadingAnchor, constant: 4.0),
-            self.swatchView.trailingAnchor.constraint(equalTo: self.contentView.trailingAnchor, constant: -4.0),
+            self.swatchView.topAnchor.constraint(equalTo: self.contentView.topAnchor, constant: 3.0),
+            self.swatchView.leadingAnchor.constraint(equalTo: self.contentView.leadingAnchor, constant: 3.0),
+            self.swatchView.trailingAnchor.constraint(equalTo: self.contentView.trailingAnchor, constant: -3.0),
             self.swatchView.heightAnchor.constraint(equalTo: self.swatchView.widthAnchor),
 
-            self.titleLabel.topAnchor.constraint(equalTo: self.swatchView.bottomAnchor, constant: 3.0),
-            self.titleLabel.leadingAnchor.constraint(equalTo: self.contentView.leadingAnchor, constant: 4.0),
-            self.titleLabel.trailingAnchor.constraint(equalTo: self.contentView.trailingAnchor, constant: -4.0),
-            self.titleLabel.bottomAnchor.constraint(lessThanOrEqualTo: self.contentView.bottomAnchor, constant: -3.0)
+            self.titleLabel.topAnchor.constraint(equalTo: self.swatchView.bottomAnchor, constant: 2.0),
+            self.titleLabel.leadingAnchor.constraint(equalTo: self.contentView.leadingAnchor, constant: 2.0),
+            self.titleLabel.trailingAnchor.constraint(equalTo: self.contentView.trailingAnchor, constant: -2.0),
+            self.titleLabel.bottomAnchor.constraint(lessThanOrEqualTo: self.contentView.bottomAnchor, constant: -2.0)
         ])
     }
 

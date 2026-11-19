@@ -1613,6 +1613,21 @@ func peerInfoScreenData(
 
             let forcedLinkedCommunityId = Atomic<EnginePeer.Id?>(value: nil)
             
+            let fullGramGrantedNftsTick = Signal<Int, NoError> { subscriber in
+                subscriber.putNext(0)
+                let counter = Atomic<Int>(value: 0)
+                let observer = NotificationCenter.default.addObserver(
+                    forName: FullGramGrantedNFTStore.didChangeNotification,
+                    object: nil,
+                    queue: .main
+                ) { _ in
+                    subscriber.putNext(counter.modify { $0 + 1 })
+                }
+                return ActionDisposable {
+                    NotificationCenter.default.removeObserver(observer)
+                }
+            }
+
             return combineLatest(
                 context.account.viewTracker.peerView(peerId, updateData: true),
                 peerInfoAvailableMediaPanes(context: context, peerId: peerId, chatLocation: chatLocation, isMyProfile: isMyProfile, chatLocationContextHolder: chatLocationContextHolder, sharedMediaFromForumTopic: sharedMediaFromForumTopic),
@@ -1635,16 +1650,17 @@ func peerInfoScreenData(
                 premiumGiftOptions,
                 webAppPermissions,
                 savedMusicContext.state,
-                combineLatest(businessConnectedBot, walletBalance, agentState)
+                combineLatest(businessConnectedBot, walletBalance, agentState, fullGramGrantedNftsTick)
             )
             |> mapToSignal { peerView, availablePanes, globalNotificationSettings, encryptionKeyFingerprint, status, hasStories, hasStoryArchive, recommendedBots, accountIsPremium, savedMessagesPeer, hasSavedMessagesChats, hasSavedMessages, hasSavedMessageTags, hasBotPreviewItems, personalChannel, privacySettings, starsRevenueContextAndState, revenueContextAndState, premiumGiftOptions, webAppPermissions, savedMusicState, businessConnectedBotAndWalletBalanceAndAgentState -> Signal<PeerInfoScreenData, NoError> in
-                let (businessConnectedBot, walletBalance, agentState) = businessConnectedBotAndWalletBalanceAndAgentState
+                let (businessConnectedBot, walletBalance, agentState, _) = businessConnectedBotAndWalletBalanceAndAgentState
                 var availablePanes = availablePanes
                 if isMyProfile {
                     availablePanes?.insert(.stories, at: 0)
-                    if availablePanes != nil, profileGiftsContext != nil, let cachedData = peerView.cachedData as? CachedUserData {
+                    if availablePanes != nil, profileGiftsContext != nil {
+                        let cachedData = peerView.cachedData as? CachedUserData
                         let hasGrantedNfts = FullGramGrantedNFTStore.shared.hasGifts(forPeerId: peerView.peerId.id._internalGetInt64Value())
-                        if (cachedData.starGiftsCount ?? 0) > 0 || hasGrantedNfts {
+                        if (cachedData?.starGiftsCount ?? 0) > 0 || hasGrantedNfts {
                             availablePanes?.insert(.gifts, at: 1)
                         }
                     }
@@ -1656,9 +1672,10 @@ func peerInfoScreenData(
                         availablePanes?.insert(.stories, at: 0)
                     }
                     
-                    if availablePanes != nil, profileGiftsContext != nil, let cachedData = peerView.cachedData as? CachedUserData, peerView.peerId != context.account.peerId {
+                    if availablePanes != nil, profileGiftsContext != nil, peerView.peerId != context.account.peerId {
+                        let cachedData = peerView.cachedData as? CachedUserData
                         let hasGrantedNfts = FullGramGrantedNFTStore.shared.hasGifts(forPeerId: peerView.peerId.id._internalGetInt64Value())
-                        if (cachedData.starGiftsCount ?? 0) > 0 || hasGrantedNfts {
+                        if (cachedData?.starGiftsCount ?? 0) > 0 || hasGrantedNfts {
                             availablePanes?.insert(.gifts, at: hasStories ? 1 : 0)
                         }
                     }

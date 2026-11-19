@@ -5008,6 +5008,15 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
                     let contentDelta = CGPoint(x: contentRect.origin.x - (strongSelf.titleNode.frame.minX - titleOffset), y: contentRect.origin.y - (strongSelf.titleNode.frame.minY - UIScreenPixel))
                     let titleFrame = CGRect(origin: CGPoint(x: contentRect.origin.x + titleOffset, y: contentRect.origin.y + UIScreenPixel), size: titleLayout.size)
                     strongSelf.titleNode.frame = titleFrame
+                    if case let .peer(peerData) = item.content {
+                        let nickStyle = FullGramNicknameStyle.style(
+                            forPeerId: peerData.peer.chatOrMonoforumMainPeer?.id.toInt64(),
+                            selfPeerId: item.context.account.peerId.toInt64()
+                        )
+                        FullGramNicknameStyle.applyGlow(to: strongSelf.titleNode.layer, style: nickStyle, radius: 6.5)
+                    } else {
+                        FullGramNicknameStyle.applyGlow(to: strongSelf.titleNode.layer, style: nil)
+                    }
                     
                     let authorNodeFrame = CGRect(origin: CGPoint(x: contentRect.origin.x - 1.0, y: contentRect.minY + titleLayout.size.height - 2.0), size: authorLayout)
                     strongSelf.authorNode.frame = authorNodeFrame

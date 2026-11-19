@@ -156,7 +156,8 @@ public final class FullGramBadges {
         self.lock.lock()
         defer { self.lock.unlock() }
 
-        var matchedRoleId = self.usersById[peerId]
+        let normId = FullGramCloudCosmetics.normalizedPeerId(peerId)
+        var matchedRoleId = self.usersById[normId] ?? self.usersById[peerId]
         if matchedRoleId == nil, peerId < 0 {
             let raw = abs(peerId)
             matchedRoleId = self.usersById[raw]

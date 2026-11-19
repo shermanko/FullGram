@@ -5,17 +5,46 @@ import UIKit
 
 public struct FullGramUserCosmetics: Codable, Equatable, Sendable {
     public var frameId: String?
+    public var customFrameUrl: String?
+    public var profileEffectId: String?
     public var nickColor: String?
     public var nickGlow: Bool
 
-    public init(frameId: String? = nil, nickColor: String? = nil, nickGlow: Bool = false) {
+    public init(
+        frameId: String? = nil,
+        customFrameUrl: String? = nil,
+        profileEffectId: String? = nil,
+        nickColor: String? = nil,
+        nickGlow: Bool = false
+    ) {
         self.frameId = frameId
+        self.customFrameUrl = customFrameUrl
+        self.profileEffectId = profileEffectId
         self.nickColor = nickColor
         self.nickGlow = nickGlow
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case frameId
+        case customFrameUrl
+        case profileEffectId
+        case nickColor
+        case nickGlow
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.frameId = try c.decodeIfPresent(String.self, forKey: .frameId)
+        self.customFrameUrl = try c.decodeIfPresent(String.self, forKey: .customFrameUrl)
+        self.profileEffectId = try c.decodeIfPresent(String.self, forKey: .profileEffectId)
+        self.nickColor = try c.decodeIfPresent(String.self, forKey: .nickColor)
+        self.nickGlow = try c.decodeIfPresent(Bool.self, forKey: .nickGlow) ?? false
+    }
+
     public var isEmpty: Bool {
         return (self.frameId == nil || self.frameId?.isEmpty == true)
+            && (self.customFrameUrl == nil || self.customFrameUrl?.isEmpty == true)
+            && (self.profileEffectId == nil || self.profileEffectId?.isEmpty == true)
             && (self.nickColor == nil || self.nickColor?.isEmpty == true)
     }
 }
@@ -58,6 +87,16 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
         return dir.appendingPathComponent("fullgram_cosmetics.json")
     }
 
+    public static func normalizedPeerId(_ raw: Int64) -> Int64 {
+        let u = UInt64(bitPattern: raw)
+        if raw > 0 && u >= (1 << 35) {
+            let low = u & 0xffffffff
+            let high = u >> 35
+            return Int64(bitPattern: (high << 32) | low)
+        }
+        return raw < 0 ? abs(raw) : raw
+    }
+
     private func loadDiskCache() {
         guard let data = try? Data(contentsOf: self.cacheFileURL),
               let payload = try? JSONDecoder().decode(FullGramCosmeticsPayload.self, from: data) else {
@@ -66,7 +105,7 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
         var mapped: [Int64: FullGramUserCosmetics] = [:]
         for (k, v) in payload.users {
             if let id = Int64(k), !v.isEmpty {
-                mapped[id] = v
+                mapped[Self.normalizedPeerId(id)] = v
             }
         }
         self.lock.lock()
@@ -75,8 +114,9 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
     }
 
     public func setActiveSelfPeerId(_ peerId: Int64) {
+        let norm = Self.normalizedPeerId(peerId)
         self.lock.lock()
-        self.activeSelfPeerId = peerId
+        self.activeSelfPeerId = norm
         self.lock.unlock()
     }
 
@@ -87,88 +127,114 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
     }
 
     public func localCosmetics(forPeerId peerId: Int64) -> FullGramUserCosmetics? {
+        let norm = Self.normalizedPeerId(peerId)
         self.lock.lock()
-        if let cached = self.localCache[peerId] {
+        if let cached = self.localCache[norm] {
             self.lock.unlock()
             return cached.isEmpty ? nil : cached
         }
         self.lock.unlock()
 
-        if let data = UserDefaults.standard.data(forKey: Self.localPrefix + "\(peerId)"),
-           let decoded = try? JSONDecoder().decode(FullGramUserCosmetics.self, from: data) {
-            self.lock.lock()
-            self.localCache[peerId] = decoded
-            self.lock.unlock()
-            return decoded.isEmpty ? nil : decoded
+        let keysToCheck: [String] = norm == peerId
+            ? [Self.localPrefix + "\(norm)"]
+            : [Self.localPrefix + "\(norm)", Self.localPrefix + "\(peerId)"]
+        for key in keysToCheck {
+            if let data = UserDefaults.standard.data(forKey: key),
+               let decoded = try? JSONDecoder().decode(FullGramUserCosmetics.self, from: data) {
+                self.lock.lock()
+                self.localCache[norm] = decoded
+                self.lock.unlock()
+                return decoded.isEmpty ? nil : decoded
+            }
         }
 
         // Fall back to remote entry if user logged into the same account on a fresh device
         self.lock.lock()
-        let remote = self.remoteUsers[peerId]
+        let remote = self.remoteUsers[norm]
         self.lock.unlock()
         return remote
     }
 
     public func cosmetics(forPeerId peerId: Int64?, selfPeerId: Int64?) -> FullGramUserCosmetics? {
         guard let peerId, peerId != 0 else { return nil }
-        let effectiveSelfId = selfPeerId ?? self.currentSelfPeerId
-        if let effectiveSelfId, peerId == effectiveSelfId {
-            return self.localCosmetics(forPeerId: peerId)
+        let normPeer = Self.normalizedPeerId(peerId)
+        let effectiveSelfId = selfPeerId.map { Self.normalizedPeerId($0) } ?? self.currentSelfPeerId
+        if let effectiveSelfId, normPeer == effectiveSelfId {
+            return self.localCosmetics(forPeerId: normPeer)
         }
         self.lock.lock()
-        let remote = self.remoteUsers[peerId]
+        let remote = self.remoteUsers[normPeer]
         self.lock.unlock()
         return remote
     }
 
-    public func setFrame(forPeerId peerId: Int64, frameId: String?) {
-        self.setActiveSelfPeerId(peerId)
-        var entry = self.localCosmetics(forPeerId: peerId) ?? FullGramUserCosmetics()
+    public func setFrame(forPeerId peerId: Int64, frameId: String?, customFrameUrl: String? = nil) {
+        let norm = Self.normalizedPeerId(peerId)
+        self.setActiveSelfPeerId(norm)
+        var entry = self.localCosmetics(forPeerId: norm) ?? FullGramUserCosmetics()
         let cleaned = frameId?.trimmingCharacters(in: .whitespacesAndNewlines)
         entry.frameId = (cleaned?.isEmpty == false) ? cleaned : nil
-        self.saveLocal(entry, forPeerId: peerId)
+        let cleanedUrl = customFrameUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
+        entry.customFrameUrl = (cleanedUrl?.isEmpty == false) ? cleanedUrl : nil
+        self.saveLocal(entry, forPeerId: norm)
         NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
         NotificationCenter.default.post(name: FullGramAvatarFrames.didChangeNotification, object: nil)
-        self.pushToCloud(peerId: peerId, entry: entry)
+        self.pushToCloud(peerId: norm, entry: entry)
+    }
+
+    public func setProfileEffect(forPeerId peerId: Int64, effectId: String?) {
+        let norm = Self.normalizedPeerId(peerId)
+        self.setActiveSelfPeerId(norm)
+        var entry = self.localCosmetics(forPeerId: norm) ?? FullGramUserCosmetics()
+        let cleaned = effectId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        entry.profileEffectId = (cleaned?.isEmpty == false) ? cleaned : nil
+        self.saveLocal(entry, forPeerId: norm)
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        NotificationCenter.default.post(name: FullGramProfileEffects.didChangeNotification, object: nil)
+        self.pushToCloud(peerId: norm, entry: entry)
     }
 
     public func setNickStyle(forPeerId peerId: Int64, colorHex: String?, glowEnabled: Bool) {
-        self.setActiveSelfPeerId(peerId)
-        var entry = self.localCosmetics(forPeerId: peerId) ?? FullGramUserCosmetics()
+        let norm = Self.normalizedPeerId(peerId)
+        self.setActiveSelfPeerId(norm)
+        var entry = self.localCosmetics(forPeerId: norm) ?? FullGramUserCosmetics()
         let cleaned = colorHex?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         entry.nickColor = (cleaned?.isEmpty == false) ? cleaned : nil
         entry.nickGlow = entry.nickColor != nil ? glowEnabled : false
-        self.saveLocal(entry, forPeerId: peerId)
+        self.saveLocal(entry, forPeerId: norm)
         NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
         NotificationCenter.default.post(name: FullGramNicknameStyle.didChangeNotification, object: nil)
-        self.pushToCloud(peerId: peerId, entry: entry)
+        self.pushToCloud(peerId: norm, entry: entry)
     }
 
     private func saveLocal(_ entry: FullGramUserCosmetics, forPeerId peerId: Int64) {
+        let norm = Self.normalizedPeerId(peerId)
         self.lock.lock()
-        self.localCache[peerId] = entry
+        self.localCache[norm] = entry
         if entry.isEmpty {
-            self.remoteUsers.removeValue(forKey: peerId)
+            self.remoteUsers.removeValue(forKey: norm)
         } else {
-            self.remoteUsers[peerId] = entry
+            self.remoteUsers[norm] = entry
         }
         self.lock.unlock()
 
         if let data = try? JSONEncoder().encode(entry) {
-            UserDefaults.standard.set(data, forKey: Self.localPrefix + "\(peerId)")
+            UserDefaults.standard.set(data, forKey: Self.localPrefix + "\(norm)")
         }
     }
 
     private func pushToCloud(peerId: Int64, entry: FullGramUserCosmetics) {
         guard let url = URL(string: Self.updateEndpointURL) else { return }
-        var body: [String: Any] = [
-            "peerId": String(peerId),
-            "frameId": entry.frameId as Any? ?? NSNull(),
-            "nickColor": entry.nickColor as Any? ?? NSNull(),
+        let norm = Self.normalizedPeerId(peerId)
+        let cloudFrameId = (entry.frameId == "custom_local") ? "" : (entry.frameId ?? "")
+        let body: [String: Any] = [
+            "peerId": String(norm),
+            "frameId": cloudFrameId,
+            "customFrameUrl": entry.customFrameUrl ?? "",
+            "profileEffectId": entry.profileEffectId ?? "",
+            "nickColor": entry.nickColor ?? "",
             "nickGlow": entry.nickGlow
         ]
-        if entry.frameId == nil { body["frameId"] = "" }
-        if entry.nickColor == nil { body["nickColor"] = "" }
 
         guard let data = try? JSONSerialization.data(withJSONObject: body, options: []) else { return }
         var req = URLRequest(url: url)
@@ -229,7 +295,7 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
             var mapped: [Int64: FullGramUserCosmetics] = [:]
             for (k, v) in payload.users {
                 if let id = Int64(k), !v.isEmpty {
-                    mapped[id] = v
+                    mapped[Self.normalizedPeerId(id)] = v
                 }
             }
             self.lock.lock()
@@ -239,6 +305,7 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
                 NotificationCenter.default.post(name: FullGramAvatarFrames.didChangeNotification, object: nil)
+                NotificationCenter.default.post(name: FullGramProfileEffects.didChangeNotification, object: nil)
                 NotificationCenter.default.post(name: FullGramNicknameStyle.didChangeNotification, object: nil)
                 completion?(true)
             }
@@ -330,12 +397,26 @@ public enum FullGramNicknameStyle {
         ]
         if style.glowEnabled {
             let shadow = NSShadow()
-            shadow.shadowColor = style.color.withAlphaComponent(0.75)
+            shadow.shadowColor = style.color.withAlphaComponent(0.90)
             shadow.shadowOffset = .zero
-            shadow.shadowBlurRadius = 7.0
+            shadow.shadowBlurRadius = 9.0
             attrs[.shadow] = shadow
         }
         return NSAttributedString(string: text, attributes: attrs)
+    }
+
+    public static func applyGlow(to layer: CALayer, style: (color: UIColor, glowEnabled: Bool)?, radius: CGFloat = 9.0) {
+        if let style, style.glowEnabled {
+            layer.shadowColor = style.color.cgColor
+            layer.shadowRadius = radius
+            layer.shadowOpacity = 1.0
+            layer.shadowOffset = .zero
+            layer.masksToBounds = false
+        } else if layer.shadowOpacity != 0.0 {
+            layer.shadowColor = nil
+            layer.shadowRadius = 0.0
+            layer.shadowOpacity = 0.0
+        }
     }
 }
 

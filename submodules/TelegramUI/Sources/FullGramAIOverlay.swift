@@ -100,7 +100,7 @@ private enum FullGramAITelegramContextBuilder {
                 anchor: .upperBound,
                 ignoreMessagesInTimestampRange: nil,
                 ignoreMessageIds: Set(),
-                count: 45,
+                count: 200,
                 fixedCombinedReadStates: nil,
                 topTaggedMessageIdNamespaces: [Namespaces.Message.Cloud],
                 tag: nil,
@@ -143,6 +143,47 @@ private enum FullGramAITelegramContextBuilder {
                 var lines: [String] = []
                 lines.append("[ТЕКУЩИЙ ЧАТ: peer_id=\(peerId.toInt64()), title=\"\(Self.sanitize(peerTitle, maxLen: 60))\"]")
 
+                let recentMessages = historyTuple.0.entries.map { $0.message }
+                let cal = Calendar.current
+                let startOfToday = Int32(cal.startOfDay(for: Date()).timeIntervalSince1970)
+                let startOfWeek = Int32((cal.date(byAdding: .day, value: -7, to: Date()) ?? Date()).timeIntervalSince1970)
+
+                var todayCount = 0
+                var weekCount = 0
+                var voiceCount = 0
+                var roundCount = 0
+                var mediaCount = 0
+                var authorTotals: [String: Int] = [:]
+                for msg in recentMessages {
+                    if msg.timestamp >= startOfToday { todayCount += 1 }
+                    if msg.timestamp >= startOfWeek { weekCount += 1 }
+                    let author = Self.sanitize(msg.author.map { EnginePeer($0).debugDisplayTitle } ?? "Участник", maxLen: 28)
+                    authorTotals[author, default: 0] += 1
+                    for media in msg.media {
+                        mediaCount += 1
+                        if let file = media as? TelegramMediaFile {
+                            if file.isVoice { voiceCount += 1 }
+                            else if file.isInstantVideo { roundCount += 1 }
+                        }
+                    }
+                }
+                let topAuthors = authorTotals
+                    .sorted { $0.value > $1.value }
+                    .prefix(5)
+                    .map { "\($0.key): \($0.value)" }
+                    .joined(separator: ", ")
+
+                lines.append("[VERIFIED_LOCAL_STATS — ТЕКУЩИЙ ЧАТ]")
+                lines.append("Проанализировано последних сообщений в локальной истории: \(recentMessages.count)")
+                lines.append("Сообщений сегодня (в загруженной истории): \(todayCount); за последние 7 дней: \(weekCount)")
+                lines.append("Медиафайлов: \(mediaCount) (голосовых: \(voiceCount), кружков: \(roundCount))")
+                if !topAuthors.isEmpty {
+                    lines.append("Активность участников: \(topAuthors)")
+                }
+                if let firstTs = recentMessages.first?.timestamp, let lastTs = recentMessages.last?.timestamp {
+                    lines.append("Диапазон загруженных сообщений: с \(df.string(from: Date(timeIntervalSince1970: TimeInterval(firstTs)))) по \(df.string(from: Date(timeIntervalSince1970: TimeInterval(lastTs))))")
+                }
+
                 if let dq = dateQuery, let dateSearch {
                     let countInDay = dateSearch.totalCount > 0 ? Int(dateSearch.totalCount) : dateSearch.messages.count
                     var authorCounts: [String: Int] = [:]
@@ -156,11 +197,11 @@ private enum FullGramAITelegramContextBuilder {
                         .map { "\($0.key): \($0.value)" }
                         .joined(separator: ", ")
 
-                    lines.append("[VERIFIED_LOCAL_STATS]")
+                    lines.append("[VERIFIED_LOCAL_STATS — ПОИСК ЗА ДАТУ]")
                     lines.append("Дата запроса: \(dq.label)")
                     lines.append("Точное количество сообщений за \(dq.label) в Telegram: \(countInDay) (загружено примеров: \(dateSearch.messages.count))")
                     if !authorBreakdown.isEmpty {
-                        lines.append("Активность участников (среди загруженных): \(authorBreakdown)")
+                        lines.append("Активность участников за \(dq.label): \(authorBreakdown)")
                     }
                     if !dateSearch.messages.isEmpty {
                         lines.append("[UNTRUSTED_CHAT_DATA — сообщения за \(dq.label)]")
@@ -173,7 +214,6 @@ private enum FullGramAITelegramContextBuilder {
                     }
                 }
 
-                let recentMessages = historyTuple.0.entries.map { $0.message }
                 if !recentMessages.isEmpty {
                     lines.append("[UNTRUSTED_CHAT_DATA — последние \(min(30, recentMessages.count)) сообщений]")
                     for msg in recentMessages.suffix(30) {
@@ -192,20 +232,69 @@ private enum FullGramAITelegramContextBuilder {
             let chatListSignal = context.account.viewTracker.tailChatListView(
                 groupId: .root,
                 filterPredicate: nil,
-                count: 14,
+                count: 45,
                 shouldLoadCanMessagePeer: false
             )
             |> take(1)
             |> map { view, _ -> String in
-                var listLines: [String] = ["[UNTRUSTED_CHAT_DATA — последние диалоги (для поиска/открытия)]"]
+                let startOfToday = Int32(Calendar.current.startOfDay(for: Date()).timeIntervalSince1970)
+                var totalChats = 0
+                var privateChats = 0
+                var groupChats = 0
+                var channelChats = 0
+                var totalUnreadMessages = 0
+                var unreadDialogsCount = 0
+                var activeTodayDialogs = 0
+                var unreadTop: [(title: String, unread: Int32)] = []
+                var recentLines: [String] = []
+
                 for entry in view.entries.reversed() {
                     if case let .MessageEntry(data) = entry, let mainPeer = data.renderedPeer.chatMainPeer {
-                        let title = Self.sanitize(EnginePeer(mainPeer).debugDisplayTitle, maxLen: 42)
+                        totalChats += 1
+                        if mainPeer is TelegramUser {
+                            privateChats += 1
+                        } else if let ch = mainPeer as? TelegramChannel {
+                            if case .broadcast = ch.info { channelChats += 1 } else { groupChats += 1 }
+                        } else {
+                            groupChats += 1
+                        }
                         let unread = data.readState?.state.count ?? 0
-                        listLines.append("peer_id=\(mainPeer.id.toInt64()) | \(title) | непрочит: \(unread)")
+                        if unread > 0 {
+                            unreadDialogsCount += 1
+                            totalUnreadMessages += Int(unread)
+                            let title = Self.sanitize(EnginePeer(mainPeer).debugDisplayTitle, maxLen: 36)
+                            unreadTop.append((title, unread))
+                        }
+                        if let lastMsg = data.messages.last, lastMsg.timestamp >= startOfToday {
+                            activeTodayDialogs += 1
+                        }
+                        if recentLines.count < 16 {
+                            let title = Self.sanitize(EnginePeer(mainPeer).debugDisplayTitle, maxLen: 42)
+                            recentLines.append("peer_id=\(mainPeer.id.toInt64()) | \(title) | непрочит: \(unread)")
+                        }
                     }
                 }
-                return listLines.joined(separator: "\n")
+
+                var out: [String] = [
+                    "[VERIFIED_LOCAL_STATS — ОБЩАЯ СТАТИСТИКА АККАУНТА]",
+                    "Проанализировано последних диалогов: \(totalChats) (личных: \(privateChats), групп: \(groupChats), каналов: \(channelChats))",
+                    "Активных диалогов сегодня: \(activeTodayDialogs)",
+                    "Непрочитанных диалогов: \(unreadDialogsCount), всего непрочитанных сообщений в них: \(totalUnreadMessages)"
+                ]
+                let topUnreadStr = unreadTop
+                    .sorted { $0.unread > $1.unread }
+                    .prefix(5)
+                    .map { "\($0.title) (\($0.unread))" }
+                    .joined(separator: ", ")
+                if !topUnreadStr.isEmpty {
+                    out.append("Топ чатов с непрочитанными: \(topUnreadStr)")
+                }
+                if !recentLines.isEmpty {
+                    out.append("")
+                    out.append("[UNTRUSTED_CHAT_DATA — последние диалоги (для поиска/открытия)]")
+                    out.append(contentsOf: recentLines)
+                }
+                return out.joined(separator: "\n")
             }
             signals.append(chatListSignal)
         }
@@ -727,7 +816,8 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
         self.chipsScroll.subviews.forEach { $0.removeFromSuperview() }
         let items: [(title: String, prompt: String)] = [
             ("✨ Сводка чата", "Сделай краткую сводку этого чата"),
-            ("📊 Сегодня", "Сколько сообщений было сегодня?"),
+            ("📊 Статистика", "Дай общую статистику по аккаунту и чату"),
+            ("📅 Сегодня", "Сколько сообщений было сегодня?"),
             ("✍️ Черновик", "Подготовь вежливый черновик ответа"),
             ("💬 Чаты", "Покажи последние чаты")
         ]
@@ -1349,7 +1439,10 @@ final class FullGramAIOverlayCoordinator {
         }
 
         let vc: UIViewController
-        if kind.contains("deadline") || kind.contains("dl") {
+        if kind.contains("betking") || kind.contains("casino") {
+            let game = spec["game"] as? String
+            vc = FullGramCasinoBetKingViewController(initialGame: game, onSendToChat: sendToChat)
+        } else if kind.contains("deadline") || kind.contains("dl") {
             vc = FullGramDeadlinesGUIViewController(onSendToChat: sendToChat)
         } else {
             vc = FullGramCustomPluginGUIViewController(spec: spec, onSendToChat: sendToChat)
@@ -1369,6 +1462,9 @@ final class FullGramAIOverlayCoordinator {
                 explicitPeerId: peerId,
                 autoSend: true
             )
+        })
+        sheet.addAction(UIAlertAction(title: "👑 BetKing Казино (Анимированный UI)", style: .default) { [weak self] _ in
+            self?.presentPluginGUI(spec: ["kind": "betking_casino", "pluginId": "fg_casino", "game": "zeus"])
         })
         sheet.addAction(UIAlertAction(title: "⏰ Открыть Дедлайны (Графический UI)", style: .default) { [weak self] _ in
             self?.presentPluginGUI(spec: ["kind": "deadlines", "pluginId": "fg_deadlines"])

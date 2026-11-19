@@ -2576,6 +2576,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
         }
 
         FullGramCloudCosmetics.shared.refreshIfNeeded()
+        FullGramDiscordCosmeticsCatalog.shared.refreshIfNeeded()
         let fullGramExtrasTick = Signal<Int, NoError> { subscriber in
             let tick = Atomic<Int>(value: 0)
             subscriber.putNext(0)
@@ -2591,10 +2592,18 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
             let cosmeticsObserver = NotificationCenter.default.addObserver(forName: FullGramCloudCosmetics.didChangeNotification, object: nil, queue: .main) { _ in
                 bump()
             }
+            let effectsObserver = NotificationCenter.default.addObserver(forName: FullGramProfileEffects.didChangeNotification, object: nil, queue: .main) { _ in
+                bump()
+            }
+            let nickObserver = NotificationCenter.default.addObserver(forName: FullGramNicknameStyle.didChangeNotification, object: nil, queue: .main) { _ in
+                bump()
+            }
             return ActionDisposable {
                 NotificationCenter.default.removeObserver(extrasObserver)
                 NotificationCenter.default.removeObserver(badgesObserver)
                 NotificationCenter.default.removeObserver(cosmeticsObserver)
+                NotificationCenter.default.removeObserver(effectsObserver)
+                NotificationCenter.default.removeObserver(nickObserver)
             }
         }
         self.dataDisposable = combineLatest(

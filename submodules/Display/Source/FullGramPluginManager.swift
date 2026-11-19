@@ -1171,11 +1171,11 @@ def on_command(ctx):
             ),
             FullGramPluginDescriptor(
                 id: "fg_casino",
-                name: "Казино (.casino / .zeus / .crash)",
+                name: "BetKing Казино (.casino / .zeus / .crash)",
                 language: .lua,
-                version: "4.0",
+                version: "5.0",
                 author: "FullGram",
-                description: "Реальные шансы и RTP (96.2–98%): Зевс, Собаки, Слоты 777, Краш, Рулетка, Монетка, Ante Bet, Buy Bonus и выдача любого баланса (.setbal).",
+                description: "Анимированный BetKing GUI (Зевс, Собаки, Слоты 777, Live Краш с ракетой, Рулетка, 3D Монетка, Ante Bet, Buy Bonus). Без спама в чат!",
                 code: Self.casinoPluginCode(),
                 isEnabled: true,
                 isBuiltIn: true
@@ -1266,11 +1266,11 @@ def on_command(ctx):
 
     private static func casinoPluginCode() -> String {
         return """
--- @name Казино (.casino / .zeus / .crash)
+-- @name BetKing Казино (.casino / .zeus / .crash)
 -- @id fg_casino
--- @version 4.0
+-- @version 5.0
 -- @author FullGram
--- @description Реальные шансы и RTP (96.2–98%): Зевс, Собаки, Слоты 777, Краш, Рулетка, Монетка, Ante Bet, Buy Bonus и выдача любого баланса (.setbal)
+-- @description Анимированный BetKing GUI (Зевс, Собаки, Слоты 777, Live Краш с ракетой, Рулетка, 3D Монетка, Ante Bet, Buy Bonus). Без спама в чат!
 
 function get_num(key, def)
     local v = tonumber(fullgram.storage_get(key, def))
@@ -1795,39 +1795,11 @@ function handle_set_balance(raw)
     return "🎁 Начислено +10000 🪙!\\nБаланс: " .. tostring(nb) .. " 🪙\\n(введите любое число в поле для точной выдачи)"
 end
 
-function open_casino_ui()
+function open_casino_ui(game_id)
     fullgram.open_ui({
-        kind = "custom",
-        title = "🎰 Казино FullGram",
-        subtitle = "Реальные шансы и RTP (96.2–98.0%). Введите ставку (по ум. 100) или сумму баланса:\\n\\n" .. status_header(),
-        placeholder = "Ставка (100), цель Crash (2.5 100) или баланс (50000)",
-        default_input = "100",
-        buttons = {
-            { items = {
-                { title = "⚡ Зевс (96.5%)", id = "spin_zeus", color = "orange" },
-                { title = "🐶 Собаки (96.5%)", id = "spin_dogs", color = "indigo" }
-            } },
-            { items = {
-                { title = "🎰 3 Барабана", id = "spin_classic", color = "purple" },
-                { title = "🚀 Краш (x2.0)", id = "spin_crash", color = "teal" }
-            } },
-            { items = {
-                { title = "🔴 Красное x2", id = "spin_red", color = "red" },
-                { title = "⚫️ Чёрное x2", id = "spin_black", color = "gray" }
-            } },
-            { items = {
-                { title = "🟢 Зеро x36", id = "spin_green", color = "green" },
-                { title = "🪙 Монетка x2", id = "spin_coin", color = "blue" }
-            } },
-            { items = {
-                { title = "⚡ Ante +25%", id = "toggle_ante", color = "orange" },
-                { title = "🎁 Бонус x100", id = "buy_bonus", color = "purple" }
-            } },
-            { items = {
-                { title = "💰 Выдать баланс", id = "set_balance", color = "green" },
-                { title = "📊 RTP и шансы", id = "rtp_info", color = "gray" }
-            } }
-        }
+        kind = "betking_casino",
+        game = game_id or "zeus",
+        title = "👑 BETKING CASINO"
     })
 end
 
@@ -1889,27 +1861,26 @@ function on_command(ctx)
     local args = tostring(ctx.args or "")
 
     if cmd == "casino" then
-        if args == "" or args == "ui" then
-            open_casino_ui()
-            return { cancel = true }
-        end
-        return { cancel = true, toast = "Откройте UI командой .casino или используйте .zeus, .dogs, .slots, .crash, .roulette, .coin, .setbal <сумма>" }
+        open_casino_ui(args ~= "" and args or "zeus")
+        return { cancel = true }
     elseif cmd == "zeus" then
-        return play_zeus(args)
+        open_casino_ui("zeus")
+        return { cancel = true }
     elseif cmd == "dogs" then
-        return play_dogs(args)
+        open_casino_ui("dogs")
+        return { cancel = true }
     elseif cmd == "slots" then
-        return play_classic(args)
+        open_casino_ui("slots777")
+        return { cancel = true }
     elseif cmd == "crash" then
-        return play_crash(args, 2.0)
+        open_casino_ui("crash")
+        return { cancel = true }
     elseif cmd == "roulette" then
-        local choice = string.lower(ctx.subcommand or "red")
-        local bet_str = string.match(args, "%s+(%d+)$") or "100"
-        return play_roulette(choice, bet_str)
+        open_casino_ui("roulette")
+        return { cancel = true }
     elseif cmd == "coin" then
-        local side = string.lower(ctx.subcommand or "eagle")
-        local bet_str = string.match(args, "(%d+)") or "100"
-        return play_coin(side, bet_str)
+        open_casino_ui("coin")
+        return { cancel = true }
     elseif cmd == "setbal" then
         local exact = tonumber(string.match(args, "(%d+)"))
         if exact == nil then

@@ -221,6 +221,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
     var music: ComponentView<Empty>?
     var walletBalance: ComponentView<Empty>?
     private var walletBalanceCutoutIcon: (color: UIColor, image: UIImage)?
+    private let fullGramProfileEffectView = FullGramProfileEffectOverlayView()
     var hasBottomStrip: Bool {
         return self.music != nil
     }
@@ -404,6 +405,8 @@ final class PeerInfoHeaderNode: ASDisplayNode {
         self.regularContentNode.addSubnode(self.usernameNodeRawContainer)
         
         self.addSubnode(self.regularContentNode)
+        self.fullGramProfileEffectView.isHidden = true
+        self.regularContentNode.view.addSubview(self.fullGramProfileEffectView)
         
         if !isMediaOnly {
             self.regularContentNode.addSubnode(self.buttonsContainerNode)
@@ -1251,7 +1254,11 @@ final class PeerInfoHeaderNode: ASDisplayNode {
         self.expansionGlassTint = navigationContentsCanBeExpanded ? nil : headerButtonBackgroundColor
         self.updateNavigationGlass?(navigationContentsCanBeExpanded ? .plain : .tinted(headerButtonBackgroundColor), navigationTransition)
         
-        self.titleNode.updateTintColor(color: navigationContentsPrimaryColor, transition: navigationTransition)
+        let activeFullGramNickStyle = peer.flatMap {
+            FullGramNicknameStyle.style(forPeerId: $0.id.toInt64(), selfPeerId: self.context.account.peerId.toInt64())
+        }
+        self.titleNode.updateTintColor(color: activeFullGramNickStyle?.color ?? navigationContentsPrimaryColor, transition: navigationTransition)
+        FullGramNicknameStyle.applyGlow(to: self.titleNode.layer, style: activeFullGramNickStyle, radius: 10.0)
         self.subtitleNode.updateTintColor(color: navigationContentsSecondaryColor, transition: navigationTransition)
         self.panelSubtitleNode.updateTintColor(color: navigationContentsSecondaryColor, transition: navigationTransition)
         var titleBrightness: CGFloat = 0.0
@@ -2256,6 +2263,14 @@ final class PeerInfoHeaderNode: ASDisplayNode {
         }
         
         let buttonsTransitionDistance: CGFloat = -min(0.0, apparentBackgroundHeight - backgroundHeight)
+        let activeProfileEffect = (!isSearching && !state.isEditing)
+            ? peer.flatMap { FullGramProfileEffects.effect(forPeerId: $0.id.toInt64(), selfPeerId: self.context.account.peerId.toInt64()) }
+            : nil
+        self.fullGramProfileEffectView.frame = CGRect(x: 0.0, y: 0.0, width: width, height: max(280.0, backgroundHeight))
+        self.fullGramProfileEffectView.configure(with: activeProfileEffect)
+        if activeProfileEffect != nil {
+            self.regularContentNode.view.bringSubviewToFront(self.fullGramProfileEffectView)
+        }
         let buttonsTransitionDistanceNorm: CGFloat = 40.0
         
         let innerContentOffset = max(0.0, contentOffset - 140.0)
@@ -3071,7 +3086,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
         }
 
         Task { @MainActor [weak banner] in
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
             banner?.dismiss()
         }
     }

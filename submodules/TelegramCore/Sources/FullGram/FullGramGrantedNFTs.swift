@@ -96,6 +96,46 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
     private let lock = NSRecursiveLock()
     private var usersById: [Int64: [FullGramGrantedNFT]] = [:]
     private var isRefreshing = false
+    private var needsFollowUpRefresh = false
+
+    public static func candidatePeerIds(for raw: Int64) -> [Int64] {
+        var ids: [Int64] = [raw]
+        let u = UInt64(bitPattern: raw)
+        if raw < 0 {
+            let pos = abs(raw)
+            if !ids.contains(pos) { ids.append(pos) }
+        }
+        // If `raw` is a Postbox PeerId.toInt64() encoded value (high bits shifted left by 35), decode the real Telegram ID.
+        if raw > 0 && u >= (1 << 35) {
+            let low = u & 0xffffffff
+            let high = u >> 35
+            let decoded = Int64(bitPattern: (high << 32) | low)
+            if decoded > 0 && !ids.contains(decoded) {
+                ids.append(decoded)
+            }
+        } else if raw > 0 {
+            // Also compute the Postbox CloudUser PeerId.toInt64() form so legacy server keys match.
+            let low = u & 0xffffffff
+            let high = (u >> 32) & 0xffffffff
+            if high > 0 {
+                let encoded = Int64(bitPattern: (high << 35) | low)
+                if !ids.contains(encoded) {
+                    ids.append(encoded)
+                }
+            }
+        }
+        return ids
+    }
+
+    public static func normalizedTelegramId(for raw: Int64) -> Int64 {
+        let u = UInt64(bitPattern: raw)
+        if raw > 0 && u >= (1 << 35) {
+            let low = u & 0xffffffff
+            let high = u >> 35
+            return Int64(bitPattern: (high << 32) | low)
+        }
+        return raw < 0 ? abs(raw) : raw
+    }
 
     private static let session: URLSession = {
         let cfg = URLSessionConfiguration.default
@@ -129,7 +169,13 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
             if let id = Int64(k) {
                 let valid = list.filter { $0.numericGiftId != nil }
                 if !valid.isEmpty {
-                    mapped[id] = valid
+                    let norm = Self.normalizedTelegramId(for: id)
+                    var existing = mapped[norm] ?? []
+                    let existingIds = Set(existing.map { $0.id })
+                    for item in valid where !existingIds.contains(item.id) {
+                        existing.append(item)
+                    }
+                    mapped[norm] = existing
                 }
             }
         }
@@ -141,13 +187,47 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
     public func gifts(forPeerId peerId: Int64) -> [FullGramGrantedNFT] {
         self.lock.lock()
         defer { self.lock.unlock() }
-        if let direct = self.usersById[peerId] {
-            return direct
+        var seen = Set<String>()
+        var combined: [FullGramGrantedNFT] = []
+        for key in Self.candidatePeerIds(for: peerId) {
+            if let list = self.usersById[key] {
+                for item in list where seen.insert(item.id).inserted {
+                    combined.append(item)
+                }
+            }
         }
-        if peerId < 0, let positive = self.usersById[abs(peerId)] {
-            return positive
+        return combined
+    }
+
+    public func appendLocal(peerId: Int64, nft: FullGramGrantedNFT) {
+        let norm = Self.normalizedTelegramId(for: peerId)
+        self.lock.lock()
+        var list = self.usersById[norm] ?? []
+        list.removeAll { $0.id == nft.id }
+        list.insert(nft, at: 0)
+        self.usersById[norm] = list
+        self.lock.unlock()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
         }
-        return []
+    }
+
+    public func removeLocal(peerId: Int64, entryId: String) {
+        self.lock.lock()
+        for key in Self.candidatePeerIds(for: peerId) {
+            if var list = self.usersById[key] {
+                list.removeAll { $0.id == entryId }
+                if list.isEmpty {
+                    self.usersById.removeValue(forKey: key)
+                } else {
+                    self.usersById[key] = list
+                }
+            }
+        }
+        self.lock.unlock()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        }
     }
 
     public func hasGifts(forPeerId peerId: Int64) -> Bool {
@@ -169,20 +249,28 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
         }
         self.lock.lock()
         if self.isRefreshing {
+            self.needsFollowUpRefresh = true
             self.lock.unlock()
             return
         }
         self.isRefreshing = true
+        self.needsFollowUpRefresh = false
         self.lock.unlock()
 
         var req = URLRequest(url: url)
         req.cachePolicy = .reloadIgnoringLocalCacheData
         Self.session.dataTask(with: req) { [weak self] data, response, _ in
             guard let self else { return }
+            var shouldRetry = false
             defer {
                 self.lock.lock()
                 self.isRefreshing = false
+                shouldRetry = self.needsFollowUpRefresh
+                self.needsFollowUpRefresh = false
                 self.lock.unlock()
+                if shouldRetry {
+                    self.refreshNow(completion: nil)
+                }
             }
             guard let http = response as? HTTPURLResponse,
                   (200 ..< 300).contains(http.statusCode),
