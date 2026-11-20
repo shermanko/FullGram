@@ -399,6 +399,42 @@ class ThemeSettingsAppIconItemNode: ListViewItemNode, ItemListItemNode {
                                 case "FullGramOrange":
                                     name = "FullGram Orange"
                                     bordered = false
+                                case "FullGramCyan":
+                                    name = "Cyan Neon"
+                                    bordered = false
+                                case "FullGramPurple":
+                                    name = "Violet Plasma"
+                                    bordered = false
+                                case "FullGramGold":
+                                    name = "Royal Gold"
+                                    bordered = false
+                                case "FullGramEmerald":
+                                    name = "Toxic Matrix"
+                                    bordered = false
+                                case "FullGramSakura":
+                                    name = "Sakura Pink"
+                                    bordered = false
+                                case "FullGramArctic":
+                                    name = "Arctic Ice"
+                                    bordered = false
+                                case "FullGramVapor":
+                                    name = "Vaporwave"
+                                    bordered = false
+                                case "FullGramMidnight":
+                                    name = "Stealth Carbon"
+                                    bordered = false
+                                case "FullGramSunset":
+                                    name = "Sunset Glow"
+                                    bordered = false
+                                case "FullGramHolo":
+                                    name = "Holographic"
+                                    bordered = false
+                                case "FullGramMascotNeon":
+                                    name = "Mascot Cyber"
+                                    bordered = false
+                                case "FullGramMascotGold":
+                                    name = "Mascot Royal"
+                                    bordered = false
                                 case "BlueIcon":
                                     name = item.strings.Appearance_AppIconDefault
                                 case "BlackIcon":

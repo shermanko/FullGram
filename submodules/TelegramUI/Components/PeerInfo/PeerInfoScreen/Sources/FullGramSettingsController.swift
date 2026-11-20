@@ -1808,10 +1808,10 @@ func fullGramChatsCategoryController(context: AccountContext) -> ViewController 
 private enum FullGramMediaToggle: Int32 {
     case saveMedia = 1
     case privateChats = 2
-    case publicChannels = 3
-    case privateChannels = 4
-    case publicGroups = 5
-    case privateGroups = 6
+    case privateGroups = 3
+    case publicGroups = 4
+    case privateChannels = 5
+    case publicChannels = 6
 }
 
 private struct FullGramMessageHistoryArguments {
@@ -2257,6 +2257,7 @@ private final class FullGramQuickLookItem: NSObject, QLPreviewItem {
 
 private final class FullGramSingleFilePreviewController: ViewController, QLPreviewControllerDataSource, QLPreviewControllerDelegate {
     private let item: FullGramQuickLookItem
+    private var didPresentPreview: Bool = false
 
     init(url: URL, title: String) {
         self.item = FullGramQuickLookItem(url: url, title: title)
@@ -2269,10 +2270,20 @@ private final class FullGramSingleFilePreviewController: ViewController, QLPrevi
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        guard !self.didPresentPreview else { return }
+        self.didPresentPreview = true
         let ql = QLPreviewController()
         ql.dataSource = self
         ql.delegate = self
-        self.view.window?.rootViewController?.present(ql, animated: true)
+        var presenter = self.view.window?.rootViewController
+        while let presented = presenter?.presentedViewController {
+            presenter = presented
+        }
+        if let presenter {
+            presenter.present(ql, animated: true)
+        } else {
+            self.dismiss()
+        }
     }
 
     func numberOfPreviewItems(in controller: QLPreviewController) -> Int {
@@ -2631,9 +2642,9 @@ public func fullGramRestrictionBypassController(context: AccountContext) -> View
 // MARK: - 3. Вкладка «Сообщение» (бывшее «Отправка»)
 
 private enum FullGramSendingToggle: Int32 {
-    case antiCaps = 1
-    case translateBeforeSend = 2
-    case quickFormattingBar = 3
+    case quickFormattingBar = 1
+    case antiCaps = 2
+    case translateBeforeSend = 3
 }
 
 private struct FullGramSendingArguments {

@@ -469,11 +469,17 @@ public enum FullGramSpeechBleep {
         bundledSamplesLock.unlock()
 
         guard let url = Bundle.main.url(forResource: resourceName, withExtension: "mp3") else {
+            bundledSamplesLock.lock()
+            bundledSamplesCache[resourceName] = []
+            bundledSamplesLock.unlock()
             return []
         }
         let asset = AVURLAsset(url: url)
         guard let track = asset.tracks(withMediaType: .audio).first,
               let reader = try? AVAssetReader(asset: asset) else {
+            bundledSamplesLock.lock()
+            bundledSamplesCache[resourceName] = []
+            bundledSamplesLock.unlock()
             return []
         }
         let settings: [String: Any] = [
@@ -526,6 +532,19 @@ public enum FullGramSpeechBleep {
     }
 
     public static func sample(sound: FullGramBleepSound, index: Int, totalSamples: Int, sampleRate: Double) -> Float {
+        let clip: [Float]?
+        switch sound {
+        case .dolphin:
+            clip = bundledAudioSamples48k(resourceName: "fullgram_dolphin")
+        case .duck:
+            clip = bundledAudioSamples48k(resourceName: "fullgram_duck")
+        default:
+            clip = nil
+        }
+        return sampleFast(sound: sound, index: index, totalSamples: totalSamples, sampleRate: sampleRate, preloadedClip: clip)
+    }
+
+    private static func sampleFast(sound: FullGramBleepSound, index: Int, totalSamples: Int, sampleRate: Double, preloadedClip: [Float]?) -> Float {
         guard totalSamples > 0, sampleRate > 0.0 else { return 0.0 }
         let t = Double(index) / sampleRate
         let progress = Double(index) / Double(totalSamples)
@@ -541,7 +560,7 @@ public enum FullGramSpeechBleep {
             let tone = 0.65 * sin(2.0 * .pi * 1046.5 * t) + 0.35 * sin(2.0 * .pi * 2093.0 * t)
             return Float(tone * decay * env * 0.52)
         case .dolphin:
-            let clip = bundledAudioSamples48k(resourceName: "fullgram_dolphin")
+            let clip = preloadedClip ?? []
             if !clip.isEmpty {
                 let pos = Int((Double(index) / max(1.0, sampleRate)) * 48000.0) % clip.count
                 return clip[pos] * Float(env)
@@ -550,7 +569,7 @@ public enum FullGramSpeechBleep {
             let carrierFreq = 2900.0 + 1250.0 * sin(2.0 * .pi * 26.0 * t)
             return Float(sin(2.0 * .pi * carrierFreq * t) * burstEnv * env * 0.44)
         case .duck:
-            let clip = bundledAudioSamples48k(resourceName: "fullgram_duck")
+            let clip = preloadedClip ?? []
             if !clip.isEmpty {
                 let pos = Int((Double(index) / max(1.0, sampleRate)) * 48000.0) % clip.count
                 return clip[pos] * Float(env)
@@ -571,6 +590,15 @@ public enum FullGramSpeechBleep {
 
     public static func applyBleep(to samples: UnsafeMutablePointer<Int16>, count: Int, sampleRate: Double, ranges: [ClosedRange<TimeInterval>], sound: FullGramBleepSound) {
         guard sound != .off, !ranges.isEmpty else { return }
+        let preloadedClip: [Float]?
+        switch sound {
+        case .dolphin:
+            preloadedClip = bundledAudioSamples48k(resourceName: "fullgram_dolphin")
+        case .duck:
+            preloadedClip = bundledAudioSamples48k(resourceName: "fullgram_duck")
+        default:
+            preloadedClip = nil
+        }
         let crossfadeSamples = max(1, Int(sampleRate * 0.010))
         for range in ranges {
             let startIdx = max(0, Int(range.lowerBound * sampleRate))
@@ -579,7 +607,7 @@ public enum FullGramSpeechBleep {
             let total = endIdx - startIdx
             for i in startIdx ..< endIdx {
                 let localIdx = i - startIdx
-                let bleepVal = Double(sample(sound: sound, index: localIdx, totalSamples: total, sampleRate: sampleRate)) * 32767.0
+                let bleepVal = Double(sampleFast(sound: sound, index: localIdx, totalSamples: total, sampleRate: sampleRate, preloadedClip: preloadedClip)) * 32767.0
                 let dryVal = Double(samples[i])
 
                 // Smooth 10ms crossfade at edges so cutting the voice never clicks
@@ -612,8 +640,28 @@ public enum FullGramSpeechBleep {
                 completion(false)
                 return
             }
+            let built = try? buildBleepComposition(asset: asset, audioTrack: audioTrack, ranges: ranges, sound: sound)
+            guard let built,
+                  let exporter = AVAssetExportSession(asset: built.composition, presetName: AVAssetExportPresetHighestQuality) else {
+                if let tempURL = built?.tempBleepURL {
+                    try? FileManager.default.removeItem(at: tempURL)
+                }
+                let fallbackMix = AVMutableAudioMix()
+                let fallbackParams = AVMutableAudioMixInputParameters(track: audioTrack)
+                for range in ranges {
+                    let start = CMTime(seconds: range.lowerBound, preferredTimescale: 600)
+                    let end = CMTime(seconds: range.upperBound, preferredTimescale: 600)
+                    fallbackParams.setVolumeRamp(fromStartVolume: 1.0, toEndVolume: 0.0, timeRange: CMTimeRange(start: start, duration: CMTime(seconds: 0.02, preferredTimescale: 600)))
+                    fallbackParams.setVolume(0.0, at: CMTimeAdd(start, CMTime(seconds: 0.02, preferredTimescale: 600)))
+                    fallbackParams.setVolumeRamp(fromStartVolume: 0.0, toEndVolume: 1.0, timeRange: CMTimeRange(start: end, duration: CMTime(seconds: 0.02, preferredTimescale: 600)))
+                }
+                fallbackMix.inputParameters = [fallbackParams]
+                exportWithMixOnly(asset: asset, mix: fallbackMix, outputURL: outputURL, completion: completion)
+                return
+            }
+
             let mix = AVMutableAudioMix()
-            let params = AVMutableAudioMixInputParameters(track: audioTrack)
+            let params = AVMutableAudioMixInputParameters(track: built.originalAudioTrack)
             for range in ranges {
                 let start = CMTime(seconds: range.lowerBound, preferredTimescale: 600)
                 let end = CMTime(seconds: range.upperBound, preferredTimescale: 600)
@@ -623,16 +671,15 @@ public enum FullGramSpeechBleep {
             }
             mix.inputParameters = [params]
 
-            guard let composition = try? buildBleepComposition(asset: asset, audioTrack: audioTrack, ranges: ranges, sound: sound),
-                  let exporter = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough) else {
-                exportWithMixOnly(asset: asset, mix: mix, outputURL: outputURL, completion: completion)
-                return
-            }
+            let tempBleepURL = built.tempBleepURL
             try? FileManager.default.removeItem(at: outputURL)
             exporter.outputURL = outputURL
             exporter.outputFileType = .mp4
             exporter.audioMix = mix
             exporter.exportAsynchronously {
+                if let tempBleepURL {
+                    try? FileManager.default.removeItem(at: tempBleepURL)
+                }
                 completion(exporter.status == .completed)
             }
         }
@@ -652,7 +699,12 @@ public enum FullGramSpeechBleep {
         }
     }
 
-    private static func buildBleepComposition(asset: AVAsset, audioTrack: AVAssetTrack, ranges: [ClosedRange<TimeInterval>], sound: FullGramBleepSound) throws -> AVMutableComposition {
+    private static func buildBleepComposition(
+        asset: AVAsset,
+        audioTrack: AVAssetTrack,
+        ranges: [ClosedRange<TimeInterval>],
+        sound: FullGramBleepSound
+    ) throws -> (composition: AVMutableComposition, originalAudioTrack: AVMutableCompositionTrack, tempBleepURL: URL?) {
         let composition = AVMutableComposition()
         let duration = asset.duration
         if let videoTrack = asset.tracks(withMediaType: .video).first,
@@ -660,10 +712,14 @@ public enum FullGramSpeechBleep {
             try compVideo.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: videoTrack, at: .zero)
             compVideo.preferredTransform = videoTrack.preferredTransform
         }
-        if let compAudio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) {
-            try compAudio.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: audioTrack, at: .zero)
+        guard let compAudio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+            throw NSError(domain: "FullGramSpeechBleep", code: -1, userInfo: nil)
         }
+        try compAudio.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: audioTrack, at: .zero)
+
+        var tempBleepURL: URL?
         if sound != .silence, let bleepFile = generateBleepWav(sound: sound, duration: 1.0) {
+            tempBleepURL = bleepFile
             let bleepAsset = AVURLAsset(url: bleepFile)
             if let bleepTrack = bleepAsset.tracks(withMediaType: .audio).first,
                let compBleep = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) {
@@ -675,17 +731,26 @@ public enum FullGramSpeechBleep {
                 }
             }
         }
-        return composition
+        return (composition, compAudio, tempBleepURL)
     }
 
     private static func generateBleepWav(sound: FullGramBleepSound, duration: TimeInterval) -> URL? {
         let sampleRate = 44100.0
         let totalSamples = Int(duration * sampleRate)
         guard totalSamples > 0 else { return nil }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("fullgram_bleep_\(sound.rawValue).wav")
+        let preloadedClip: [Float]?
+        switch sound {
+        case .dolphin:
+            preloadedClip = bundledAudioSamples48k(resourceName: "fullgram_dolphin")
+        case .duck:
+            preloadedClip = bundledAudioSamples48k(resourceName: "fullgram_duck")
+        default:
+            preloadedClip = nil
+        }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("fullgram_bleep_\(sound.rawValue)_\(UUID().uuidString).wav")
         var pcm = [Int16](repeating: 0, count: totalSamples)
         for i in 0 ..< totalSamples {
-            let v = Double(sample(sound: sound, index: i, totalSamples: totalSamples, sampleRate: sampleRate))
+            let v = Double(sampleFast(sound: sound, index: i, totalSamples: totalSamples, sampleRate: sampleRate, preloadedClip: preloadedClip))
             pcm[i] = Int16(max(-32767.0, min(32767.0, v * 32767.0)))
         }
         guard FullGramVoiceDSP.writeWAV16Mono(samples: pcm, sampleRate: Int(sampleRate), to: url) else {

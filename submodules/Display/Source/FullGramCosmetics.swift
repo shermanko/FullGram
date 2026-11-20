@@ -68,6 +68,7 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
     private var localCache: [Int64: FullGramUserCosmetics] = [:]
     private var remoteUsers: [Int64: FullGramUserCosmetics] = [:]
     private var isRefreshing = false
+    private var pendingCompletions: [(Bool) -> Void] = []
     private var pushWorkItem: DispatchWorkItem?
     private var pushGeneration: Int = 0
 
@@ -282,6 +283,9 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
             return
         }
         self.lock.lock()
+        if let completion {
+            self.pendingCompletions.append(completion)
+        }
         if self.isRefreshing {
             self.lock.unlock()
             return
@@ -293,17 +297,28 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
         req.cachePolicy = .reloadIgnoringLocalCacheData
         Self.session.dataTask(with: req) { [weak self] data, response, _ in
             guard let self else { return }
-            defer {
+            let drainCompletions: (Bool) -> Void = { ok in
                 self.lock.lock()
                 self.isRefreshing = false
+                let completions = self.pendingCompletions
+                self.pendingCompletions.removeAll()
                 self.lock.unlock()
+                DispatchQueue.main.async {
+                    if ok {
+                        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+                        NotificationCenter.default.post(name: FullGramAvatarFrames.didChangeNotification, object: nil)
+                        NotificationCenter.default.post(name: FullGramProfileEffects.didChangeNotification, object: nil)
+                        NotificationCenter.default.post(name: FullGramNicknameStyle.didChangeNotification, object: nil)
+                    }
+                    for cb in completions { cb(ok) }
+                }
             }
             guard let http = response as? HTTPURLResponse,
                   (200 ..< 300).contains(http.statusCode),
                   let data,
                   data.count <= 1_000_000,
                   let payload = try? JSONDecoder().decode(FullGramCosmeticsPayload.self, from: data) else {
-                DispatchQueue.main.async { completion?(false) }
+                drainCompletions(false)
                 return
             }
 
@@ -320,13 +335,7 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
             self.remoteUsers = mapped
             self.lock.unlock()
 
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
-                NotificationCenter.default.post(name: FullGramAvatarFrames.didChangeNotification, object: nil)
-                NotificationCenter.default.post(name: FullGramProfileEffects.didChangeNotification, object: nil)
-                NotificationCenter.default.post(name: FullGramNicknameStyle.didChangeNotification, object: nil)
-                completion?(true)
-            }
+            drainCompletions(true)
         }.resume()
     }
 }

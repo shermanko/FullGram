@@ -97,6 +97,7 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
     private var usersById: [Int64: [FullGramGrantedNFT]] = [:]
     private var isRefreshing = false
     private var needsFollowUpRefresh = false
+    private var pendingCompletions: [(Bool) -> Void] = []
 
     public static func candidatePeerIds(for raw: Int64) -> [Int64] {
         var ids: [Int64] = [raw]
@@ -263,6 +264,9 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
             return
         }
         self.lock.lock()
+        if let completion {
+            self.pendingCompletions.append(completion)
+        }
         if self.isRefreshing {
             self.needsFollowUpRefresh = true
             self.lock.unlock()
@@ -276,13 +280,20 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
         req.cachePolicy = .reloadIgnoringLocalCacheData
         Self.session.dataTask(with: req) { [weak self] data, response, _ in
             guard let self else { return }
-            var shouldRetry = false
-            defer {
+            let finish: (Bool) -> Void = { ok in
                 self.lock.lock()
                 self.isRefreshing = false
-                shouldRetry = self.needsFollowUpRefresh
+                let shouldRetry = self.needsFollowUpRefresh
                 self.needsFollowUpRefresh = false
+                let completions = self.pendingCompletions
+                self.pendingCompletions.removeAll()
                 self.lock.unlock()
+                DispatchQueue.main.async {
+                    if ok {
+                        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+                    }
+                    for cb in completions { cb(ok) }
+                }
                 if shouldRetry {
                     self.refreshNow(completion: nil)
                 }
@@ -292,7 +303,7 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
                   let data,
                   data.count <= 2_000_000,
                   let payload = try? JSONDecoder().decode(FullGramGrantedNFTsPayload.self, from: data) else {
-                DispatchQueue.main.async { completion?(false) }
+                finish(false)
                 return
             }
 
@@ -300,10 +311,7 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
             UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastSyncKey)
             self.applyPayload(payload)
 
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
-                completion?(true)
-            }
+            finish(true)
         }.resume()
     }
 }

@@ -14,7 +14,7 @@ public func fullGramAvatarFramesController(context: AccountContext) -> ViewContr
     return FullGramAvatarFramesViewController(context: context)
 }
 
-private final class FullGramAvatarFramesViewController: ViewController, UISearchBarDelegate, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+private final class FullGramAvatarFramesViewController: ViewController, UITextFieldDelegate, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
     private enum CosmeticsTab: Int {
         case frames = 0
         case profileEffects = 1
@@ -35,15 +35,24 @@ private final class FullGramAvatarFramesViewController: ViewController, UISearch
     private let resetButton = UIButton(type: .system)
     private let chatSwitch = UISwitch()
     private let segmentedControl = UISegmentedControl(items: ["Рамки", "Эффекты профиля"])
-    private let searchBar = UISearchBar()
+    private let searchContainer = UIView()
+    private let searchIconView = UIImageView()
+    private let searchField = UITextField()
+    private let categoryScrollView = UIScrollView()
+    private let categoryStackView = UIStackView()
     private var collectionView: UICollectionView!
     private var headerTopConstraint: NSLayoutConstraint?
 
     private var activeTab: CosmeticsTab = .frames
+    private var selectedCategory: String = "Все"
     private var searchQuery: String = ""
+    private var searchWorkItem: DispatchWorkItem?
     private var filteredFrames: [FullGramAvatarFramePreset] = []
     private var filteredEffects: [FullGramProfileEffectPreset] = []
+    private var categoryButtons: [(category: String, button: UIButton)] = []
     private nonisolated(unsafe) var catalogObserver: NSObjectProtocol?
+
+    private static let customFrameIds: Set<String> = Set(FullGramAvatarFrames.customFullGramFrames.map(\.id))
 
     public init(context: AccountContext) {
         self.context = context
@@ -52,9 +61,9 @@ private final class FullGramAvatarFramesViewController: ViewController, UISearch
         super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: self.presentationData))
         self.isOpaqueWhenInOverlay = true
         self.blocksBackgroundWhenInOverlay = true
-        self.title = "Косметика Discord"
+        self.title = "Косметика и рамки"
         FullGramCloudCosmetics.shared.setActiveSelfPeerId(self.selfPeerId)
-        FullGramCloudCosmetics.shared.refreshIfNeeded(maxAge: 15.0)
+        FullGramCloudCosmetics.shared.refreshIfNeeded(maxAge: 30.0)
         FullGramDiscordCosmeticsCatalog.shared.refreshIfNeeded(maxAge: 600.0)
     }
 
@@ -64,6 +73,7 @@ private final class FullGramAvatarFramesViewController: ViewController, UISearch
     }
 
     deinit {
+        self.searchWorkItem?.cancel()
         if let obs = self.catalogObserver {
             NotificationCenter.default.removeObserver(obs)
         }
@@ -76,6 +86,7 @@ private final class FullGramAvatarFramesViewController: ViewController, UISearch
         self.displayNodeDidLoad()
 
         self.setupUI()
+        self.rebuildCategoryBar()
         self.applyFilter()
         self.catalogObserver = NotificationCenter.default.addObserver(
             forName: FullGramDiscordCosmeticsCatalog.didUpdateNotification,
@@ -83,6 +94,7 @@ private final class FullGramAvatarFramesViewController: ViewController, UISearch
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
+                self?.rebuildCategoryBar()
                 self?.applyFilter()
                 self?.refreshPreview()
             }
@@ -114,13 +126,13 @@ private final class FullGramAvatarFramesViewController: ViewController, UISearch
 
         self.previewAvatarCircle.translatesAutoresizingMaskIntoConstraints = false
         self.previewAvatarCircle.backgroundColor = theme.list.itemAccentColor.withAlphaComponent(0.25)
-        self.previewAvatarCircle.layer.cornerRadius = 30.0
+        self.previewAvatarCircle.layer.cornerRadius = 28.0
         self.previewAvatarCircle.clipsToBounds = false
         self.headerCard.addSubview(self.previewAvatarCircle)
 
         self.previewInitialLabel.translatesAutoresizingMaskIntoConstraints = false
         self.previewInitialLabel.text = "FG"
-        self.previewInitialLabel.font = UIFont.systemFont(ofSize: 18.0, weight: .bold)
+        self.previewInitialLabel.font = UIFont.systemFont(ofSize: 17.0, weight: .bold)
         self.previewInitialLabel.textColor = theme.list.itemPrimaryTextColor
         self.previewInitialLabel.textAlignment = .center
         self.previewAvatarCircle.addSubview(self.previewInitialLabel)
@@ -185,11 +197,48 @@ private final class FullGramAvatarFramesViewController: ViewController, UISearch
         self.segmentedControl.overrideUserInterfaceStyle = theme.overallDarkAppearance ? .dark : .light
         self.segmentedControl.addTarget(self, action: #selector(self.tabChanged), for: .valueChanged)
 
-        self.searchBar.translatesAutoresizingMaskIntoConstraints = false
-        self.searchBar.searchBarStyle = .minimal
-        self.searchBar.placeholder = "Поиск среди всей косметики Discord…"
-        self.searchBar.delegate = self
-        self.searchBar.overrideUserInterfaceStyle = theme.overallDarkAppearance ? .dark : .light
+        // Clean custom search bar container (fixes UISearchBar vertical overflow overlapping adjacent views)
+        self.searchContainer.translatesAutoresizingMaskIntoConstraints = false
+        self.searchContainer.backgroundColor = theme.list.itemBlocksBackgroundColor
+        self.searchContainer.layer.cornerRadius = 10.0
+        self.searchContainer.layer.cornerCurve = .continuous
+        self.searchContainer.layer.borderWidth = 0.5
+        self.searchContainer.layer.borderColor = theme.list.itemBlocksSeparatorColor.withAlphaComponent(0.35).cgColor
+        self.searchContainer.clipsToBounds = true
+
+        self.searchIconView.translatesAutoresizingMaskIntoConstraints = false
+        self.searchIconView.image = UIImage(systemName: "magnifyingglass")
+        self.searchIconView.tintColor = theme.list.itemSecondaryTextColor
+        self.searchIconView.contentMode = .scaleAspectFit
+        self.searchContainer.addSubview(self.searchIconView)
+
+        self.searchField.translatesAutoresizingMaskIntoConstraints = false
+        self.searchField.font = UIFont.systemFont(ofSize: 14.0)
+        self.searchField.textColor = theme.list.itemPrimaryTextColor
+        self.searchField.attributedPlaceholder = NSAttributedString(
+            string: "Поиск по названию или категории…",
+            attributes: [.foregroundColor: theme.list.itemSecondaryTextColor]
+        )
+        self.searchField.clearButtonMode = .whileEditing
+        self.searchField.returnKeyType = .search
+        self.searchField.autocorrectionType = .no
+        self.searchField.delegate = self
+        self.searchField.overrideUserInterfaceStyle = theme.overallDarkAppearance ? .dark : .light
+        self.searchField.addTarget(self, action: #selector(self.searchTextChanged), for: .editingChanged)
+        self.searchContainer.addSubview(self.searchField)
+
+        // Horizontal category chip bar
+        self.categoryScrollView.translatesAutoresizingMaskIntoConstraints = false
+        self.categoryScrollView.showsHorizontalScrollIndicator = false
+        self.categoryScrollView.alwaysBounceHorizontal = true
+        self.categoryScrollView.clipsToBounds = true
+        self.categoryScrollView.contentInset = UIEdgeInsets(top: 0.0, left: 12.0, bottom: 0.0, right: 12.0)
+
+        self.categoryStackView.translatesAutoresizingMaskIntoConstraints = false
+        self.categoryStackView.axis = .horizontal
+        self.categoryStackView.alignment = .center
+        self.categoryStackView.spacing = 6.0
+        self.categoryScrollView.addSubview(self.categoryStackView)
 
         let layout = UICollectionViewFlowLayout()
         layout.minimumInteritemSpacing = 8.0
@@ -198,6 +247,7 @@ private final class FullGramAvatarFramesViewController: ViewController, UISearch
         self.collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
         self.collectionView.translatesAutoresizingMaskIntoConstraints = false
         self.collectionView.backgroundColor = .clear
+        self.collectionView.clipsToBounds = true
         self.collectionView.keyboardDismissMode = .onDrag
         self.collectionView.dataSource = self
         self.collectionView.delegate = self
@@ -212,7 +262,8 @@ private final class FullGramAvatarFramesViewController: ViewController, UISearch
             }
         }
         insertBelowNav(self.collectionView)
-        insertBelowNav(self.searchBar)
+        insertBelowNav(self.categoryScrollView)
+        insertBelowNav(self.searchContainer)
         insertBelowNav(self.segmentedControl)
         insertBelowNav(self.headerCard)
 
@@ -231,8 +282,8 @@ private final class FullGramAvatarFramesViewController: ViewController, UISearch
 
             self.previewAvatarCircle.topAnchor.constraint(equalTo: self.headerCard.topAnchor, constant: 14.0),
             self.previewAvatarCircle.leadingAnchor.constraint(equalTo: self.headerCard.leadingAnchor, constant: 14.0),
-            self.previewAvatarCircle.widthAnchor.constraint(equalToConstant: 60.0),
-            self.previewAvatarCircle.heightAnchor.constraint(equalToConstant: 60.0),
+            self.previewAvatarCircle.widthAnchor.constraint(equalToConstant: 56.0),
+            self.previewAvatarCircle.heightAnchor.constraint(equalToConstant: 56.0),
 
             self.previewInitialLabel.centerXAnchor.constraint(equalTo: self.previewAvatarCircle.centerXAnchor),
             self.previewInitialLabel.centerYAnchor.constraint(equalTo: self.previewAvatarCircle.centerYAnchor),
@@ -267,18 +318,138 @@ private final class FullGramAvatarFramesViewController: ViewController, UISearch
             self.segmentedControl.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12.0),
             self.segmentedControl.heightAnchor.constraint(equalToConstant: 30.0),
 
-            self.searchBar.topAnchor.constraint(equalTo: self.segmentedControl.bottomAnchor, constant: 2.0),
-            self.searchBar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 6.0),
-            self.searchBar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -6.0),
-            self.searchBar.heightAnchor.constraint(equalToConstant: 42.0),
+            self.searchContainer.topAnchor.constraint(equalTo: self.segmentedControl.bottomAnchor, constant: 8.0),
+            self.searchContainer.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12.0),
+            self.searchContainer.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12.0),
+            self.searchContainer.heightAnchor.constraint(equalToConstant: 36.0),
 
-            self.collectionView.topAnchor.constraint(equalTo: self.searchBar.bottomAnchor, constant: 2.0),
+            self.searchIconView.leadingAnchor.constraint(equalTo: self.searchContainer.leadingAnchor, constant: 10.0),
+            self.searchIconView.centerYAnchor.constraint(equalTo: self.searchContainer.centerYAnchor),
+            self.searchIconView.widthAnchor.constraint(equalToConstant: 16.0),
+            self.searchIconView.heightAnchor.constraint(equalToConstant: 16.0),
+
+            self.searchField.leadingAnchor.constraint(equalTo: self.searchIconView.trailingAnchor, constant: 8.0),
+            self.searchField.trailingAnchor.constraint(equalTo: self.searchContainer.trailingAnchor, constant: -8.0),
+            self.searchField.topAnchor.constraint(equalTo: self.searchContainer.topAnchor),
+            self.searchField.bottomAnchor.constraint(equalTo: self.searchContainer.bottomAnchor),
+
+            self.categoryScrollView.topAnchor.constraint(equalTo: self.searchContainer.bottomAnchor, constant: 8.0),
+            self.categoryScrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            self.categoryScrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            self.categoryScrollView.heightAnchor.constraint(equalToConstant: 32.0),
+
+            self.categoryStackView.topAnchor.constraint(equalTo: self.categoryScrollView.contentLayoutGuide.topAnchor),
+            self.categoryStackView.bottomAnchor.constraint(equalTo: self.categoryScrollView.contentLayoutGuide.bottomAnchor),
+            self.categoryStackView.leadingAnchor.constraint(equalTo: self.categoryScrollView.contentLayoutGuide.leadingAnchor),
+            self.categoryStackView.trailingAnchor.constraint(equalTo: self.categoryScrollView.contentLayoutGuide.trailingAnchor),
+            self.categoryStackView.heightAnchor.constraint(equalTo: self.categoryScrollView.frameLayoutGuide.heightAnchor),
+
+            self.collectionView.topAnchor.constraint(equalTo: self.categoryScrollView.bottomAnchor, constant: 6.0),
             self.collectionView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             self.collectionView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             self.collectionView.bottomAnchor.constraint(equalTo: root.bottomAnchor)
         ])
 
         self.refreshPreview()
+    }
+
+    private func availableCategories() -> [(name: String, count: Int)] {
+        if self.activeTab == .frames {
+            let allF = FullGramAvatarFrames.allFrames
+            var counts: [String: Int] = [:]
+            for item in allF {
+                counts[item.category, default: 0] += 1
+            }
+            let preferredOrder = ["FullGram", "Кибер", "Неон", "Аниме", "Милые", "Стихия", "Космос", "Природа", "Игры", "Эмоции", "Эффект", "Флаги", "Discord"]
+            var result: [(String, Int)] = [
+                ("Все", allF.count),
+                ("⭐ Свои", FullGramAvatarFrames.customFullGramFrames.count)
+            ]
+            var seen: Set<String> = ["Все", "⭐ Свои"]
+            for cat in preferredOrder {
+                if let c = counts[cat], c > 0 {
+                    result.append((cat, c))
+                    seen.insert(cat)
+                }
+            }
+            for (cat, c) in counts.sorted(by: { $0.key < $1.key }) where !seen.contains(cat) && c > 0 {
+                result.append((cat, c))
+            }
+            return result
+        } else {
+            let allE = FullGramProfileEffects.allEffects
+            var counts: [String: Int] = [:]
+            for item in allE {
+                counts[item.category, default: 0] += 1
+            }
+            let preferredOrder = ["Кибер", "Аниме", "Милые", "Стихия", "Космос", "Природа", "Игры", "Discord"]
+            var result: [(String, Int)] = [("Все", allE.count)]
+            var seen: Set<String> = ["Все"]
+            for cat in preferredOrder {
+                if let c = counts[cat], c > 0 {
+                    result.append((cat, c))
+                    seen.insert(cat)
+                }
+            }
+            for (cat, c) in counts.sorted(by: { $0.key < $1.key }) where !seen.contains(cat) && c > 0 {
+                result.append((cat, c))
+            }
+            return result
+        }
+    }
+
+    private func rebuildCategoryBar() {
+        let categories = self.availableCategories()
+        if !categories.contains(where: { $0.name == self.selectedCategory }) {
+            self.selectedCategory = "Все"
+        }
+        for sub in self.categoryStackView.arrangedSubviews {
+            self.categoryStackView.removeArrangedSubview(sub)
+            sub.removeFromSuperview()
+        }
+        self.categoryButtons.removeAll()
+
+        for (index, item) in categories.enumerated() {
+            let btn = UIButton(type: .system)
+            btn.tag = index
+            btn.accessibilityIdentifier = item.name
+            btn.addTarget(self, action: #selector(self.categoryChipTapped(_:)), for: .touchUpInside)
+            self.styleCategoryButton(btn, title: "\(item.name) (\(item.count))", active: item.name == self.selectedCategory)
+            self.categoryStackView.addArrangedSubview(btn)
+            self.categoryButtons.append((item.name, btn))
+        }
+    }
+
+    private func styleCategoryButton(_ btn: UIButton, title: String, active: Bool) {
+        let theme = self.presentationData.theme
+        var cfg = active ? UIButton.Configuration.filled() : UIButton.Configuration.plain()
+        var attr = AttributedString(title)
+        attr.font = UIFont.systemFont(ofSize: 12.0, weight: active ? .bold : .medium)
+        cfg.attributedTitle = attr
+        cfg.cornerStyle = .capsule
+        cfg.contentInsets = NSDirectionalEdgeInsets(top: 5.0, leading: 11.0, bottom: 5.0, trailing: 11.0)
+        if active {
+            cfg.baseBackgroundColor = theme.list.itemAccentColor
+            cfg.baseForegroundColor = .white
+        } else {
+            cfg.baseBackgroundColor = theme.list.itemBlocksBackgroundColor
+            cfg.baseForegroundColor = theme.list.itemPrimaryTextColor
+            cfg.background.backgroundColor = theme.list.itemBlocksBackgroundColor
+            cfg.background.strokeColor = theme.list.itemBlocksSeparatorColor.withAlphaComponent(0.35)
+            cfg.background.strokeWidth = 0.5
+        }
+        btn.configuration = cfg
+    }
+
+    @objc private func categoryChipTapped(_ sender: UIButton) {
+        guard let cat = sender.accessibilityIdentifier, cat != self.selectedCategory else { return }
+        self.selectedCategory = cat
+        for entry in self.categoryButtons {
+            let currentTitle = entry.button.configuration?.attributedTitle.map { String($0.characters) } ?? entry.category
+            self.styleCategoryButton(entry.button, title: currentTitle, active: entry.category == self.selectedCategory)
+        }
+        self.applyFilter()
+        self.collectionView.setContentOffset(.zero, animated: false)
     }
 
     private func applyFilter() {
@@ -288,23 +459,42 @@ private final class FullGramAvatarFramesViewController: ViewController, UISearch
         self.segmentedControl.setTitle("Эффекты (\(allE.count))", forSegmentAt: 1)
 
         let q = self.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if q.isEmpty {
-            self.filteredFrames = allF
-            self.filteredEffects = allE
-        } else {
-            self.filteredFrames = allF.filter {
-                $0.title.lowercased().contains(q) || $0.category.lowercased().contains(q)
+        let cat = self.selectedCategory
+
+        var frames = allF
+        if self.activeTab == .frames && cat != "Все" {
+            if cat == "⭐ Свои" {
+                frames = frames.filter { Self.customFrameIds.contains($0.id) }
+            } else {
+                frames = frames.filter { $0.category == cat }
             }
-            self.filteredEffects = allE.filter {
+        }
+        if !q.isEmpty {
+            frames = frames.filter {
                 $0.title.lowercased().contains(q) || $0.category.lowercased().contains(q)
             }
         }
+        self.filteredFrames = frames
+
+        var effects = allE
+        if self.activeTab == .profileEffects && cat != "Все" {
+            effects = effects.filter { $0.category == cat }
+        }
+        if !q.isEmpty {
+            effects = effects.filter {
+                $0.title.lowercased().contains(q) || $0.category.lowercased().contains(q)
+            }
+        }
+        self.filteredEffects = effects
+
         self.collectionView.reloadData()
     }
 
     @objc private func tabChanged() {
         self.activeTab = CosmeticsTab(rawValue: self.segmentedControl.selectedSegmentIndex) ?? .frames
-        self.collectionView.reloadData()
+        self.selectedCategory = "Все"
+        self.rebuildCategoryBar()
+        self.applyFilter()
         self.collectionView.setContentOffset(.zero, animated: false)
     }
 
@@ -319,7 +509,7 @@ private final class FullGramAvatarFramesViewController: ViewController, UISearch
             FullGramProfileEffects.setSelectedEffect(forPeerId: self.selfPeerId, effectId: nil)
         }
         self.refreshPreview()
-        self.collectionView.reloadData()
+        self.updateVisibleCellSelectionStates()
     }
 
     @objc private func addCustomFrameTapped() {
@@ -356,7 +546,7 @@ private final class FullGramAvatarFramesViewController: ViewController, UISearch
                 let raw = alert.textFields?.first?.text ?? ""
                 FullGramAvatarFrames.setCustomURLFrame(urlString: raw, forPeerId: self.selfPeerId)
                 self.refreshPreview()
-                self.collectionView.reloadData()
+                self.updateVisibleCellSelectionStates()
             }))
             alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
             self.context.sharedContext.applicationBindings.presentNativeController(alert)
@@ -376,20 +566,28 @@ private final class FullGramAvatarFramesViewController: ViewController, UISearch
             FullGramAvatarFrames.saveCustomLocalFrame(data: png, forPeerId: self.selfPeerId)
         }
         self.refreshPreview()
-        self.collectionView.reloadData()
+        self.updateVisibleCellSelectionStates()
     }
 
     func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
         picker.dismiss(animated: true)
     }
 
-    func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
-        self.searchQuery = searchText
-        self.applyFilter()
+    @objc private func searchTextChanged() {
+        self.searchWorkItem?.cancel()
+        let query = self.searchField.text ?? ""
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.searchQuery = query
+            self.applyFilter()
+        }
+        self.searchWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
     }
 
-    func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
-        searchBar.resignFirstResponder()
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        textField.resignFirstResponder()
+        return true
     }
 
     private func refreshPreview() {
@@ -398,9 +596,35 @@ private final class FullGramAvatarFramesViewController: ViewController, UISearch
 
         self.previewFrameView.configure(with: activeFrame)
         self.headerEffectView.configure(with: activeEffect, forceReplay: true)
+        self.headerCard.sendSubviewToBack(self.headerEffectView)
 
         self.previewTitleLabel.text = activeFrame.map { "Рамка: \($0.title)" } ?? "Рамка: не выбрана"
         self.previewSubLabel.text = activeEffect.map { "Эффект профиля: \($0.title)" } ?? "Эффект профиля: нет"
+    }
+
+    private func updateVisibleCellSelectionStates() {
+        let theme = self.presentationData.theme
+        if self.activeTab == .frames {
+            let activeId = FullGramAvatarFrames.selectedFrameId(forPeerId: self.selfPeerId)
+            for cell in self.collectionView.visibleCells {
+                if let frameCell = cell as? FullGramFrameGridCell,
+                   let idx = self.collectionView.indexPath(for: frameCell),
+                   idx.item < self.filteredFrames.count {
+                    let preset = self.filteredFrames[idx.item]
+                    frameCell.updateSelection(selected: activeId == preset.id, preset: preset, theme: theme)
+                }
+            }
+        } else {
+            let activeId = FullGramProfileEffects.selectedEffectId(forPeerId: self.selfPeerId)
+            for cell in self.collectionView.visibleCells {
+                if let effectCell = cell as? FullGramProfileEffectGridCell,
+                   let idx = self.collectionView.indexPath(for: effectCell),
+                   idx.item < self.filteredEffects.count {
+                    let preset = self.filteredEffects[idx.item]
+                    effectCell.updateSelection(selected: activeId == preset.id, preset: preset, theme: theme)
+                }
+            }
+        }
     }
 }
 
@@ -425,19 +649,29 @@ extension FullGramAvatarFramesViewController: UICollectionViewDataSource, UIColl
         }
     }
 
+    public func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        if let frameCell = cell as? FullGramFrameGridCell {
+            frameCell.cancelLoads()
+        } else if let effectCell = cell as? FullGramProfileEffectGridCell {
+            effectCell.cancelLoads()
+        }
+    }
+
     public func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        self.searchBar.resignFirstResponder()
+        self.searchField.resignFirstResponder()
         if self.activeTab == .frames {
+            guard indexPath.item < self.filteredFrames.count else { return }
             let preset = self.filteredFrames[indexPath.item]
             let current = FullGramAvatarFrames.selectedFrameId(forPeerId: self.selfPeerId)
             FullGramAvatarFrames.setSelectedFrame(forPeerId: self.selfPeerId, frameId: current == preset.id ? nil : preset.id)
         } else {
+            guard indexPath.item < self.filteredEffects.count else { return }
             let preset = self.filteredEffects[indexPath.item]
             let current = FullGramProfileEffects.selectedEffectId(forPeerId: self.selfPeerId)
             FullGramProfileEffects.setSelectedEffect(forPeerId: self.selfPeerId, effectId: current == preset.id ? nil : preset.id)
         }
         self.refreshPreview()
-        collectionView.reloadData()
+        self.updateVisibleCellSelectionStates()
     }
 
     public func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> CGSize {
@@ -504,15 +738,28 @@ private final class FullGramFrameGridCell: UICollectionViewCell {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        self.frameView.cancelPendingLoad()
+    }
+
+    func cancelLoads() {
+        self.frameView.cancelPendingLoad()
+    }
+
     func configure(preset: FullGramAvatarFramePreset, selected: Bool, theme: PresentationTheme) {
+        self.titleLabel.text = preset.title
+        self.titleLabel.textColor = theme.list.itemPrimaryTextColor
+        self.updateSelection(selected: selected, preset: preset, theme: theme)
+        self.frameView.configureThumbnail(with: preset)
+    }
+
+    func updateSelection(selected: Bool, preset: FullGramAvatarFramePreset, theme: PresentationTheme) {
         self.contentView.backgroundColor = theme.list.itemBlocksBackgroundColor
         self.contentView.layer.borderWidth = selected ? 2.0 : 0.5
         self.contentView.layer.borderColor = (selected ? UIColor(rgb: preset.accentHex) : theme.list.itemBlocksSeparatorColor.withAlphaComponent(0.35)).cgColor
-        self.titleLabel.text = preset.title
-        self.titleLabel.textColor = theme.list.itemPrimaryTextColor
         self.catLabel.text = selected ? "✓ Активна" : preset.category
         self.catLabel.textColor = selected ? UIColor(rgb: preset.accentHex) : theme.list.itemSecondaryTextColor
-        self.frameView.configure(with: preset)
     }
 }
 
@@ -575,15 +822,28 @@ private final class FullGramProfileEffectGridCell: UICollectionViewCell {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        self.effectView.cancelPendingLoad()
+    }
+
+    func cancelLoads() {
+        self.effectView.cancelPendingLoad()
+    }
+
     func configure(preset: FullGramProfileEffectPreset, selected: Bool, theme: PresentationTheme) {
+        self.titleLabel.text = preset.title
+        self.titleLabel.textColor = theme.list.itemPrimaryTextColor
+        self.updateSelection(selected: selected, preset: preset, theme: theme)
+        self.effectView.configureThumbnail(with: preset)
+    }
+
+    func updateSelection(selected: Bool, preset: FullGramProfileEffectPreset, theme: PresentationTheme) {
         self.contentView.backgroundColor = theme.list.itemBlocksBackgroundColor
         self.contentView.layer.borderWidth = selected ? 2.0 : 0.5
         self.contentView.layer.borderColor = (selected ? UIColor(rgb: preset.accentHex) : theme.list.itemBlocksSeparatorColor.withAlphaComponent(0.35)).cgColor
-        self.titleLabel.text = preset.title
-        self.titleLabel.textColor = theme.list.itemPrimaryTextColor
         self.catLabel.text = selected ? "✓ В профиле" : preset.category
         self.catLabel.textColor = selected ? UIColor(rgb: preset.accentHex) : theme.list.itemSecondaryTextColor
-        self.effectView.configure(with: preset)
     }
 }
 
@@ -651,11 +911,21 @@ private final class FullGramNicknameArguments {
     }
 }
 
+private let fullGramColorSwatchCache: NSCache<NSString, UIImage> = {
+    let cache = NSCache<NSString, UIImage>()
+    cache.countLimit = 64
+    return cache
+}()
+
 private func fullGramColorSwatchIcon(_ hex: String) -> UIImage? {
+    let key = hex.uppercased() as NSString
+    if let cached = fullGramColorSwatchCache.object(forKey: key) {
+        return cached
+    }
     guard let rgb = FullGramThemeColors.parse(hex) else { return nil }
     let color = UIColor(rgb: rgb)
     let size = CGSize(width: 26.0, height: 26.0)
-    return UIGraphicsImageRenderer(size: size).image { _ in
+    let rendered = UIGraphicsImageRenderer(size: size).image { _ in
         let rect = CGRect(origin: .zero, size: size).insetBy(dx: 1.5, dy: 1.5)
         let path = UIBezierPath(ovalIn: rect)
         color.setFill()
@@ -664,6 +934,8 @@ private func fullGramColorSwatchIcon(_ hex: String) -> UIImage? {
         path.lineWidth = 1.0
         path.stroke()
     }
+    fullGramColorSwatchCache.setObject(rendered, forKey: key)
+    return rendered
 }
 
 private enum FullGramNicknameEntry: ItemListNodeEntry {

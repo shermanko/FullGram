@@ -343,6 +343,18 @@ alternate_icon_folders = [
     "FullGramRed",
     "FullGramMascot",
     "FullGramOrange",
+    "FullGramCyan",
+    "FullGramPurple",
+    "FullGramGold",
+    "FullGramEmerald",
+    "FullGramSakura",
+    "FullGramArctic",
+    "FullGramVapor",
+    "FullGramMidnight",
+    "FullGramSunset",
+    "FullGramHolo",
+    "FullGramMascotNeon",
+    "FullGramMascotGold",
 ]
 
 composer_icon_folders = ["Telegram"]

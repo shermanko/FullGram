@@ -94,6 +94,8 @@ public final class FullGramDiscordCosmeticsCatalog: @unchecked Sendable {
     private var discordEffects: [FullGramProfileEffectPreset] = []
     private var discordEffectsById: [String: FullGramProfileEffectPreset] = [:]
     private var isFetching = false
+    private var lastSyncTimestamp: TimeInterval = UserDefaults.standard.double(forKey: "fullgram.discordCatalog.lastSync")
+    private var pendingCompletions: [(Bool) -> Void] = []
 
     private static let session: URLSession = {
         let cfg = URLSessionConfiguration.default
@@ -197,9 +199,12 @@ public final class FullGramDiscordCosmeticsCatalog: @unchecked Sendable {
     }
 
     public func refreshIfNeeded(maxAge: TimeInterval = 3600.0) {
-        let last = UserDefaults.standard.double(forKey: Self.lastSyncKey)
-        let empty = self.frames.isEmpty || self.profileEffects.isEmpty
-        if !empty && Date().timeIntervalSince1970 - last < maxAge {
+        self.lock.lock()
+        let empty = self.discordFrames.isEmpty || self.discordEffects.isEmpty
+        let last = self.lastSyncTimestamp
+        let fetching = self.isFetching
+        self.lock.unlock()
+        if fetching || (!empty && Date().timeIntervalSince1970 - last < maxAge) {
             return
         }
         self.refreshNow(completion: nil)
@@ -207,6 +212,9 @@ public final class FullGramDiscordCosmeticsCatalog: @unchecked Sendable {
 
     public func refreshNow(completion: ((Bool) -> Void)? = nil) {
         self.lock.lock()
+        if let completion {
+            self.pendingCompletions.append(completion)
+        }
         if self.isFetching {
             self.lock.unlock()
             return
@@ -215,15 +223,19 @@ public final class FullGramDiscordCosmeticsCatalog: @unchecked Sendable {
         self.lock.unlock()
 
         let urls = Self.catalogURLs.compactMap { URL(string: $0) }
-        self.fetchMirror(urls: urls, index: 0, completion: completion)
+        self.fetchMirror(urls: urls, index: 0)
     }
 
-    private func fetchMirror(urls: [URL], index: Int, completion: ((Bool) -> Void)?) {
+    private func fetchMirror(urls: [URL], index: Int) {
         guard index < urls.count else {
             self.lock.lock()
             self.isFetching = false
+            let completions = self.pendingCompletions
+            self.pendingCompletions.removeAll()
             self.lock.unlock()
-            DispatchQueue.main.async { completion?(false) }
+            DispatchQueue.main.async {
+                for cb in completions { cb(false) }
+            }
             return
         }
         var req = URLRequest(url: urls[index])
@@ -237,20 +249,24 @@ public final class FullGramDiscordCosmeticsCatalog: @unchecked Sendable {
                let payload = try? JSONDecoder().decode(FullGramDiscordCatalogPayload.self, from: data),
                !payload.frames.isEmpty {
                 try? data.write(to: self.cacheFileURL, options: .atomic)
-                UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastSyncKey)
+                let now = Date().timeIntervalSince1970
+                UserDefaults.standard.set(now, forKey: Self.lastSyncKey)
                 self.apply(payload)
                 self.lock.lock()
+                self.lastSyncTimestamp = now
                 self.isFetching = false
+                let completions = self.pendingCompletions
+                self.pendingCompletions.removeAll()
                 self.lock.unlock()
                 DispatchQueue.main.async {
                     NotificationCenter.default.post(name: Self.didUpdateNotification, object: nil)
                     NotificationCenter.default.post(name: FullGramAvatarFrames.didChangeNotification, object: nil)
                     NotificationCenter.default.post(name: FullGramProfileEffects.didChangeNotification, object: nil)
-                    completion?(true)
+                    for cb in completions { cb(true) }
                 }
                 return
             }
-            self.fetchMirror(urls: urls, index: index + 1, completion: completion)
+            self.fetchMirror(urls: urls, index: index + 1)
         }.resume()
     }
 }
@@ -340,7 +356,12 @@ public enum FullGramAvatarFrames {
             return nil
         }
         if let customUrl = cosmetics.customFrameUrl, !customUrl.isEmpty, customUrl.lowercased().hasPrefix("https://") {
-            let safeHash = String(abs(customUrl.hashValue))
+            var fnv: UInt64 = 14695981039346656037
+            for byte in customUrl.utf8 {
+                fnv ^= UInt64(byte)
+                fnv = fnv &* 1099511628211
+            }
+            let safeHash = String(fnv, radix: 16)
             return FullGramAvatarFramePreset(
                 id: "custom_url_\(safeHash)",
                 title: "Своя рамка (URL)",
@@ -1185,6 +1206,7 @@ public final class FullGramAnimatedImageDecoder {
             keyTimes.append(NSNumber(value: elapsed / totalDuration))
             elapsed += d
         }
+        keyTimes.append(NSNumber(value: 1.0))
 
         let seq = FullGramAnimatedFrameSequence(frames: images, keyTimes: keyTimes, totalDuration: totalDuration)
         self.sequenceCache.setObject(seq, forKey: cacheKey as NSString, cost: images.count * maxPixelSize)
@@ -1308,7 +1330,7 @@ public final class FullGramAvatarFrameView: UIView {
             return
         }
         self.isHidden = false
-        if self.currentFrameId == preset.id && self.frameLayer.contents != nil {
+        if self.currentFrameId == preset.id && self.frameLayer.contents != nil && self.frameLayer.animation(forKey: "fg_frame_anim") != nil {
             return
         }
         self.currentFrameId = nil

@@ -351,7 +351,7 @@ fn on_outgoing_message(ctx: Context) -> Option<String> {
 private final class FullGramPluginEditorViewController: UIViewController {
     private let theme: PresentationTheme
     private var descriptor: FullGramPluginDescriptor
-    private let isNew: Bool
+    private var isNew: Bool
     private let onChanged: () -> Void
     var onClose: (() -> Void)?
 
@@ -576,6 +576,7 @@ private final class FullGramPluginEditorViewController: UIViewController {
             enabled: self.enableSwitch.isOn
         )
         self.descriptor = saved
+        self.isNew = false
         self.refreshMetaLabel()
         self.refreshLogsView()
         self.onChanged()
@@ -622,6 +623,7 @@ private final class FullGramPluginEditorViewController: UIViewController {
             code: code,
             enabled: self.enableSwitch.isOn
         )
+        self.isNew = false
         self.onChanged()
     }
 

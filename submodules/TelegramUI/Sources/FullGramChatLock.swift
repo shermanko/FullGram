@@ -45,7 +45,7 @@ final class FullGramChatLockView: UIView {
     }
 }
 
-private var fullGramLockObserverKey: UInt8 = 0
+@MainActor private var fullGramLockObserverKey: UInt8 = 0
 
 private final class FullGramChatLockObserverToken {
     private var tokens: [NSObjectProtocol] = []
@@ -97,6 +97,8 @@ extension ChatControllerImpl {
         guard FullGramChatPrivacy.isLocked(value), !FullGramChatPrivacy.isUnlocked(value) else { return }
 
         if let existing = self.view.subviews.first(where: { $0 is FullGramChatLockView }) as? FullGramChatLockView {
+            existing.layer.removeAllAnimations()
+            existing.alpha = 1.0
             existing.frame = self.view.bounds
             self.view.bringSubviewToFront(existing)
             if promptImmediately, !existing.isAuthenticating, self.view.window != nil, UIApplication.shared.applicationState == .active {
@@ -128,7 +130,13 @@ extension ChatControllerImpl {
                     lockView.isAuthenticating = false
                     if success {
                         FullGramChatPrivacy.markUnlocked(value)
-                        UIView.animate(withDuration: 0.2, animations: { lockView.alpha = 0.0 }, completion: { _ in lockView.removeFromSuperview() })
+                        UIView.animate(withDuration: 0.2, animations: { lockView.alpha = 0.0 }, completion: { finished in
+                            if finished && FullGramChatPrivacy.isUnlocked(value) {
+                                lockView.removeFromSuperview()
+                            } else {
+                                lockView.alpha = 1.0
+                            }
+                        })
                     } else {
                         let nav = self.effectiveNavigationController ?? (self.navigationController as? NavigationController)
                         if let nav {

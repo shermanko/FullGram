@@ -406,7 +406,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
         
         self.addSubnode(self.regularContentNode)
         self.fullGramProfileEffectView.isHidden = true
-        self.regularContentNode.view.addSubview(self.fullGramProfileEffectView)
+        self.regularContentNode.view.insertSubview(self.fullGramProfileEffectView, at: 0)
         
         if !isMediaOnly {
             self.regularContentNode.addSubnode(self.buttonsContainerNode)
@@ -2268,8 +2268,8 @@ final class PeerInfoHeaderNode: ASDisplayNode {
             : nil
         self.fullGramProfileEffectView.frame = CGRect(x: 0.0, y: 0.0, width: width, height: max(280.0, backgroundHeight))
         self.fullGramProfileEffectView.configure(with: activeProfileEffect)
-        if activeProfileEffect != nil {
-            self.regularContentNode.view.bringSubviewToFront(self.fullGramProfileEffectView)
+        if activeProfileEffect != nil && self.regularContentNode.view.subviews.first !== self.fullGramProfileEffectView {
+            self.regularContentNode.view.sendSubviewToBack(self.fullGramProfileEffectView)
         }
         let buttonsTransitionDistanceNorm: CGFloat = 40.0
         

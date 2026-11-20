@@ -288,8 +288,18 @@ private final class FullGramScreenshotBannerButton: UIButton {
     }
 }
 
+private final class FullGramScreenshotObserverBox {
+    let token: NSObjectProtocol
+    init(_ token: NSObjectProtocol) {
+        self.token = token
+    }
+    deinit {
+        NotificationCenter.default.removeObserver(self.token)
+    }
+}
+
 enum FullGramScreenshotPrompt {
-    private static var observerKey: UInt8 = 0
+    @MainActor private static var observerKey: UInt8 = 0
 
     @MainActor
     static func attach(to controller: UIViewController) {
@@ -313,13 +323,12 @@ enum FullGramScreenshotPrompt {
                 self.showBanner(in: hostView, screenshot: snap, presentOn: controller)
             }
         }
-        objc_setAssociatedObject(controller, &self.observerKey, obs, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        objc_setAssociatedObject(controller, &self.observerKey, FullGramScreenshotObserverBox(obs), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
 
     @MainActor
     static func detach(from controller: UIViewController) {
-        if let obs = objc_getAssociatedObject(controller, &self.observerKey) as? NSObjectProtocol {
-            NotificationCenter.default.removeObserver(obs)
+        if objc_getAssociatedObject(controller, &self.observerKey) != nil {
             objc_setAssociatedObject(controller, &self.observerKey, nil, .OBJC_ASSOCIATION_ASSIGN)
         }
     }

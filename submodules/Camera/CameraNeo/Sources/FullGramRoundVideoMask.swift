@@ -47,11 +47,13 @@ final class FullGramRoundVideoMask {
     }
 
     private func emojiOverlay(size: CGFloat) -> CIImage? {
-        if let cached = self.cachedEmojiImage, abs(cached.extent.width - size) < 1.0 {
+        let side = max(24.0, (size / 4.0).rounded() * 4.0)
+        if let cached = self.cachedEmojiImage, abs(cached.extent.width - side) < 2.0 {
             return cached
         }
-        let side = max(24.0, size)
-        let image = UIGraphicsImageRenderer(size: CGSize(width: side, height: side)).image { _ in
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1.0
+        let image = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { _ in
             ("😎" as NSString).draw(
                 in: CGRect(x: 0.0, y: 0.0, width: side, height: side),
                 withAttributes: [.font: UIFont.systemFont(ofSize: side * 0.85)]

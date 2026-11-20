@@ -122,32 +122,37 @@ public enum FullGramBackup {
 
         var count = 0
         let defaults = UserDefaults.standard
-        for (k, v) in payload.boolDefaults where !Self.excludedPrivacyKeys.contains(k) {
+        let isAllowedKey: (String) -> Bool = { key in
+            Self.trackedPrefixes.contains(where: { key.hasPrefix($0) }) && !Self.excludedPrivacyKeys.contains(key)
+        }
+        for (k, v) in payload.boolDefaults where isAllowedKey(k) {
             defaults.set(v, forKey: k)
             count += 1
         }
-        for (k, v) in payload.intDefaults where !Self.excludedPrivacyKeys.contains(k) {
+        for (k, v) in payload.intDefaults where isAllowedKey(k) {
             defaults.set(v, forKey: k)
             count += 1
         }
-        for (k, v) in payload.doubleDefaults where !Self.excludedPrivacyKeys.contains(k) {
+        for (k, v) in payload.doubleDefaults where isAllowedKey(k) {
             defaults.set(v, forKey: k)
             count += 1
         }
-        for (k, v) in payload.stringDefaults where !Self.excludedPrivacyKeys.contains(k) {
+        for (k, v) in payload.stringDefaults where isAllowedKey(k) {
             defaults.set(v, forKey: k)
             count += 1
         }
         for (k, v) in payload.stringArrayDefaults {
-            if Self.excludedPrivacyKeys.contains(k) { continue }
+            if !isAllowedKey(k) { continue }
             if k == Self.antiScamWhitelistKey && !allowAntiScamWhitelist { continue }
             defaults.set(v, forKey: k)
             count += 1
         }
-        for (k, v) in payload.floatArrayDefaults where !Self.excludedPrivacyKeys.contains(k) {
+        for (k, v) in payload.floatArrayDefaults where isAllowedKey(k) {
             defaults.set(v.map { NSNumber(value: $0) }, forKey: k)
             count += 1
         }
+
+        FullGramThemeColors.invalidateCache()
 
         var importedPlugins = 0
         for plugin in payload.plugins {
@@ -161,10 +166,18 @@ public enum FullGramBackup {
             importedPlugins += 1
         }
 
-        NotificationCenter.default.post(name: FullGramMixer.didChangeNotification, object: nil)
-        NotificationCenter.default.post(name: FullGramAntiScam.didChangeNotification, object: nil)
-        NotificationCenter.default.post(name: FullGramPluginNotifications.pluginsDidChange, object: nil)
-        NotificationCenter.default.post(name: Self.didRestoreNotification, object: nil)
+        let notify = {
+            NotificationCenter.default.post(name: FullGramThemeColors.didChangeNotification, object: nil)
+            NotificationCenter.default.post(name: FullGramMixer.didChangeNotification, object: nil)
+            NotificationCenter.default.post(name: FullGramAntiScam.didChangeNotification, object: nil)
+            NotificationCenter.default.post(name: FullGramPluginNotifications.pluginsDidChange, object: nil)
+            NotificationCenter.default.post(name: Self.didRestoreNotification, object: nil)
+        }
+        if Thread.isMainThread {
+            notify()
+        } else {
+            DispatchQueue.main.async(execute: notify)
+        }
 
         return (count, importedPlugins)
     }

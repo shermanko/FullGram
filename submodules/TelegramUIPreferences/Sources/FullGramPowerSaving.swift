@@ -8,18 +8,29 @@ public enum FullGramPowerSaving {
         case tablet
         case laptop
 
-        public static var current: DeviceKind {
+        public static let current: DeviceKind = {
             if ProcessInfo.processInfo.isiOSAppOnMac || ProcessInfo.processInfo.isMacCatalystApp {
                 return .laptop
             }
-            let isPad: Bool
-            if Thread.isMainThread {
-                isPad = MainActor.assumeIsolated { UIDevice.current.userInterfaceIdiom == .pad }
-            } else {
-                isPad = DispatchQueue.main.sync { UIDevice.current.userInterfaceIdiom == .pad }
+            var size = 0
+            sysctlbyname("hw.machine", nil, &size, nil, 0)
+            if size > 0 {
+                var machine = [CChar](repeating: 0, count: size)
+                if sysctlbyname("hw.machine", &machine, &size, nil, 0) == 0 {
+                    let model = String(cString: machine)
+                    if model.hasPrefix("iPad") {
+                        return .tablet
+                    }
+                    if model.hasPrefix("iPhone") || model.hasPrefix("iPod") {
+                        return .phone
+                    }
+                }
             }
-            return isPad ? .tablet : .phone
-        }
+            if Thread.isMainThread {
+                return MainActor.assumeIsolated { UIDevice.current.userInterfaceIdiom == .pad ? .tablet : .phone }
+            }
+            return .phone
+        }()
 
         public var title: String {
             switch self {
@@ -212,7 +223,7 @@ public enum FullGramPowerSaving {
             return isSystemLowPowerMode ? EnergyUsageSettings.powerSavingDefault : base
         }
         guard active else {
-            return EnergyUsageSettings.default
+            return base
         }
         var result = EnergyUsageSettings.default
         result.fullTranslucency = !p.limits.contains(.translucency)

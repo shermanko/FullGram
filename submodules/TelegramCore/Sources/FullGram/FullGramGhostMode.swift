@@ -231,7 +231,7 @@ private enum FullGramCoreKeychain {
             UserDefaults.standard.set(data, forKey: fallbackKey(service: service, account: account))
             return
         }
-        UserDefaults.standard.set(data, forKey: fallbackKey(service: service, account: account))
+        UserDefaults.standard.removeObject(forKey: fallbackKey(service: service, account: account))
     }
 
     static func delete(service: String, account: String) {
@@ -1940,6 +1940,7 @@ public final class FullGramFeatureFlags: @unchecked Sendable {
     private var remoteFlags: [String: Bool] = [:]
     private var localOverrides: [String: Bool] = [:]
     private var isRefreshing = false
+    private var pendingCompletions: [(Bool) -> Void] = []
 
     private static let session: URLSession = {
         let cfg = URLSessionConfiguration.ephemeral
@@ -2018,6 +2019,9 @@ public final class FullGramFeatureFlags: @unchecked Sendable {
             return
         }
         self.lock.lock()
+        if let completion {
+            self.pendingCompletions.append(completion)
+        }
         if self.isRefreshing {
             self.lock.unlock()
             return
@@ -2029,17 +2033,26 @@ public final class FullGramFeatureFlags: @unchecked Sendable {
         req.cachePolicy = .reloadIgnoringLocalCacheData
         Self.session.dataTask(with: req) { [weak self] data, response, _ in
             guard let self else { return }
-            defer {
+            let drainCompletions: (Bool) -> Void = { ok in
                 self.lock.lock()
                 self.isRefreshing = false
+                let completions = self.pendingCompletions
+                self.pendingCompletions.removeAll()
                 self.lock.unlock()
+                DispatchQueue.main.async {
+                    if ok {
+                        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+                        NotificationCenter.default.post(name: FullGramExtras.didChangeNotification, object: "featureFlags")
+                    }
+                    for cb in completions { cb(ok) }
+                }
             }
             guard let http = response as? HTTPURLResponse,
                   (200 ..< 300).contains(http.statusCode),
                   let data,
                   data.count <= 65_536,
                   let payload = try? JSONDecoder().decode(FullGramRemoteFlagsPayload.self, from: data) else {
-                DispatchQueue.main.async { completion?(false) }
+                drainCompletions(false)
                 return
             }
 
@@ -2052,11 +2065,7 @@ public final class FullGramFeatureFlags: @unchecked Sendable {
             self.remoteFlags = payload.flags
             self.lock.unlock()
 
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
-                NotificationCenter.default.post(name: FullGramExtras.didChangeNotification, object: "featureFlags")
-                completion?(true)
-            }
+            drainCompletions(true)
         }.resume()
     }
 }
@@ -2094,7 +2103,7 @@ public enum FullGramDesignWatchdog {
         self.lock.lock()
         defer { self.lock.unlock() }
         let defaults = UserDefaults.standard
-        let classicRawKey = "fullgram.extra.classicDesign"
+        let classicRawKey = "fullgram.extras.classicDesign"
         guard defaults.bool(forKey: classicRawKey) else {
             defaults.set(false, forKey: self.pendingKey)
             defaults.set(0, forKey: self.launchStreakKey)
@@ -2109,6 +2118,7 @@ public enum FullGramDesignWatchdog {
             defaults.set(false, forKey: self.pendingKey)
             defaults.set(0, forKey: self.launchStreakKey)
             defaults.set(true, forKey: self.rolledBackKey)
+            FullGramExtras.shared.classicDesign = false
             return true
         }
         return false

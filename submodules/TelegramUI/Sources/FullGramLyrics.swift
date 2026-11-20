@@ -229,7 +229,10 @@ enum FullGramLyricsFetcher {
                 subscriber.putCompletion()
                 return EmptyDisposable
             }
-            let task = session.dataTask(with: makeLRCLIBRequest(url: url)) { data, response, _ in
+            let task = session.dataTask(with: makeLRCLIBRequest(url: url)) { data, response, error in
+                if (error as? URLError)?.code == .cancelled {
+                    return
+                }
                 if let http = response as? HTTPURLResponse, http.statusCode == 200,
                    let data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let result = parseLRCLIBEntry(json, duration: duration) {
@@ -410,12 +413,15 @@ final class FullGramKaraokeLineView: UIView {
         didSet {
             let p = max(0.0, min(1.0, self.progress))
             let feather: CGFloat = 0.08
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
             self.maskLayer.locations = [
                 0.0 as NSNumber,
                 NSNumber(value: Double(max(0.0, p - feather))),
                 NSNumber(value: Double(min(1.0, p + feather))),
                 1.0 as NSNumber
             ]
+            CATransaction.commit()
         }
     }
 

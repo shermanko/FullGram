@@ -190,7 +190,8 @@ public final class FullGramAntiScam {
             guard self.isEnabled && self.checkLinks else { return nil }
         }
         let trimmed = rawUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: trimmed) ?? URL(string: "https://" + trimmed),
+        let candidate = trimmed.contains("://") ? trimmed : "https://" + trimmed
+        guard let url = URL(string: candidate),
               let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https" else {
             return nil

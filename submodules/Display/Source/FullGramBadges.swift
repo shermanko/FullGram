@@ -76,6 +76,7 @@ public final class FullGramBadges {
     private var cachedIsEnabled: Bool?
     private var cachedCustomPopupText: String?
     private var isRefreshing = false
+    private var pendingCompletions: [(Result<Int, Error>) -> Void] = []
 
     public static let builtInRoles: [String: FullGramBadgeRole] = [
         "creator": FullGramBadgeRole(label: "Создатель FullGram", shortLabel: "CREATOR", emoji: "👑", color: "#FF9500"),
@@ -305,6 +306,9 @@ public final class FullGramBadges {
         }
 
         self.lock.lock()
+        if let completion {
+            self.pendingCompletions.append(completion)
+        }
         if self.isRefreshing {
             self.lock.unlock()
             return
@@ -312,22 +316,23 @@ public final class FullGramBadges {
         self.isRefreshing = true
         self.lock.unlock()
 
-        self.fetchMirror(urls: urls, index: 0, lastError: nil, completion: completion)
+        self.fetchMirror(urls: urls, index: 0, lastError: nil)
     }
 
     private func fetchMirror(
         urls: [URL],
         index: Int,
-        lastError: Error?,
-        completion: ((Result<Int, Error>) -> Void)?
+        lastError: Error?
     ) {
         guard index < urls.count else {
             self.lock.lock()
             self.isRefreshing = false
+            let completions = self.pendingCompletions
+            self.pendingCompletions.removeAll()
             self.lock.unlock()
             let err = lastError ?? NSError(domain: "FullGramBadges", code: 500, userInfo: [NSLocalizedDescriptionKey: "Не удалось загрузить badges.json ни с одного зеркала."])
             DispatchQueue.main.async {
-                completion?(.failure(err))
+                for cb in completions { cb(.failure(err)) }
             }
             return
         }
@@ -340,12 +345,12 @@ public final class FullGramBadges {
             guard let self else { return }
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             if let error {
-                self.fetchMirror(urls: urls, index: index + 1, lastError: error, completion: completion)
+                self.fetchMirror(urls: urls, index: index + 1, lastError: error)
                 return
             }
             guard (200 ..< 300).contains(status), let data, data.count <= 512_000 else {
                 let httpErr = NSError(domain: "FullGramBadges", code: status, userInfo: [NSLocalizedDescriptionKey: "HTTP \(status) от \(urls[index].host ?? "")"])
-                self.fetchMirror(urls: urls, index: index + 1, lastError: httpErr, completion: completion)
+                self.fetchMirror(urls: urls, index: index + 1, lastError: httpErr)
                 return
             }
             do {
@@ -357,14 +362,16 @@ public final class FullGramBadges {
                 self.lock.lock()
                 self.isRefreshing = false
                 let total = self.usersById.count + self.usersByName.count
+                let completions = self.pendingCompletions
+                self.pendingCompletions.removeAll()
                 self.lock.unlock()
 
                 DispatchQueue.main.async {
                     NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
-                    completion?(.success(total))
+                    for cb in completions { cb(.success(total)) }
                 }
             } catch {
-                self.fetchMirror(urls: urls, index: index + 1, lastError: error, completion: completion)
+                self.fetchMirror(urls: urls, index: index + 1, lastError: error)
             }
         }.resume()
     }

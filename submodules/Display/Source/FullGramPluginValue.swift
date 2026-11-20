@@ -78,11 +78,20 @@ public struct FullGramPluginMetadata: Codable, Equatable {
             }
         }
 
+        if !id.isEmpty {
+            let cleanId = id.lowercased().replacingOccurrences(of: "[^a-z0-9_-]+", with: "_", options: .regularExpression)
+            id = cleanId.trimmingCharacters(in: CharacterSet(charactersIn: "_-"))
+        }
         if id.isEmpty {
             let clean = name.lowercased().replacingOccurrences(of: "[^a-z0-9_]+", with: "_", options: .regularExpression)
             id = clean.trimmingCharacters(in: CharacterSet(charactersIn: "_"))
             if id.isEmpty {
-                id = "plugin_\(abs(name.hashValue) % 100000)"
+                var fnv: UInt64 = 14695981039346656037
+                for byte in name.utf8 {
+                    fnv ^= UInt64(byte)
+                    fnv = fnv &* 1099511628211
+                }
+                id = "plugin_\(fnv % 100000)"
             }
         }
         return FullGramPluginMetadata(id: id, name: name, version: version, author: author, description: description, permissions: permissions)
@@ -181,17 +190,25 @@ public final class FullGramPluginTableBox {
     public func set(key: FullGramPluginValue, value: FullGramPluginValue) {
         switch key {
         case let .int(i):
-            let idx = Int(i) - 1
-            if idx >= 0 && idx < self.arrayPart.count {
-                self.arrayPart[idx] = value
-                return
-            } else if idx == self.arrayPart.count {
-                if case .nil = value { return }
-                self.arrayPart.append(value)
-                return
+            if i >= 1 && i <= Int64(Int.max) {
+                let idx = Int(i) - 1
+                if idx >= 0 && idx < self.arrayPart.count {
+                    self.arrayPart[idx] = value
+                    return
+                } else if idx == self.arrayPart.count {
+                    if case .nil = value { return }
+                    self.arrayPart.append(value)
+                    return
+                }
             }
             let s = String(i)
             self.setMapKey(s, value: value)
+        case let .double(d):
+            if d.isFinite && d == d.rounded() && d >= Double(Int64.min) && d < Double(Int64.max) {
+                self.set(key: .int(Int64(d)), value: value)
+                return
+            }
+            self.setMapKey(String(d), value: value)
         case let .string(s):
             self.setMapKey(s, value: value)
         default:
@@ -212,15 +229,26 @@ public final class FullGramPluginTableBox {
     }
 
     public func toJSONObject() -> Any {
+        var visited = Set<ObjectIdentifier>()
+        return self.toJSONObject(visited: &visited, depth: 0)
+    }
+
+    internal func toJSONObject(visited: inout Set<ObjectIdentifier>, depth: Int) -> Any {
+        let oid = ObjectIdentifier(self)
+        if depth >= 32 || visited.contains(oid) {
+            return "<circular>"
+        }
+        visited.insert(oid)
+        defer { visited.remove(oid) }
         if self.mapPart.isEmpty {
-            return self.arrayPart.map { $0.toJSONObject() }
+            return self.arrayPart.map { $0.toJSONObject(visited: &visited, depth: depth + 1) }
         }
         var dict: [String: Any] = [:]
         for (k, v) in self.mapPart {
-            dict[k] = v.toJSONObject()
+            dict[k] = v.toJSONObject(visited: &visited, depth: depth + 1)
         }
         for (i, v) in self.arrayPart.enumerated() {
-            dict[String(i + 1)] = v.toJSONObject()
+            dict[String(i + 1)] = v.toJSONObject(visited: &visited, depth: depth + 1)
         }
         return dict
     }
@@ -260,7 +288,9 @@ public indirect enum FullGramPluginValue {
     public var asInt: Int64? {
         switch self {
         case let .int(i): return i
-        case let .double(d): return Int64(d)
+        case let .double(d):
+            guard d.isFinite && d >= Double(Int64.min) && d < Double(Int64.max) else { return nil }
+            return Int64(d)
         case let .bool(b): return b ? 1 : 0
         case let .string(s): return Int64(s.trimmingCharacters(in: .whitespaces))
         default: return nil
@@ -296,15 +326,21 @@ public indirect enum FullGramPluginValue {
     }
 
     public func toJSONObject() -> Any {
+        var visited = Set<ObjectIdentifier>()
+        return self.toJSONObject(visited: &visited, depth: 0)
+    }
+
+    internal func toJSONObject(visited: inout Set<ObjectIdentifier>, depth: Int) -> Any {
+        if depth >= 32 { return "<circular>" }
         switch self {
         case .nil: return NSNull()
         case let .bool(b): return b
         case let .int(i): return i
-        case let .double(d): return d
+        case let .double(d): return d.isFinite ? d : 0.0
         case let .string(s): return s
-        case let .list(arr): return arr.map { $0.toJSONObject() }
+        case let .list(arr): return arr.map { $0.toJSONObject(visited: &visited, depth: depth + 1) }
         case let .table(box):
-            return box.toJSONObject()
+            return box.toJSONObject(visited: &visited, depth: depth + 1)
         case .function:
             return "<function>"
         }

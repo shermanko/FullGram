@@ -981,6 +981,10 @@ public final class FullGramRustVM {
         self.registerBuiltins(hostAPI: hostAPI, printHandler: printHandler)
     }
 
+    deinit {
+        self.globalEnv.vars.removeAll()
+    }
+
     public func load(code: String) throws {
         self.vmLock.lock()
         defer { self.vmLock.unlock() }
@@ -1314,18 +1318,24 @@ public final class FullGramRustVM {
         case let .closure(params, body):
             return .function { [weak self] args in
                 guard let self else { return .nil }
+                try self.enterCall()
+                defer { self.callDepth = max(0, self.callDepth - 1) }
                 let cEnv = RsEnv(parent: env)
                 for (i, p) in params.enumerated() {
                     cEnv.define(p, i < args.count ? args[i] : .nil)
                 }
-                return try self.eval(body, env: cEnv)
+                do {
+                    return try self.eval(body, env: cEnv)
+                } catch let RsControlFlow.returnValue(val) {
+                    return val
+                }
             }
         case let .unary(op, rhsExpr):
             let v = try self.eval(rhsExpr, env: env)
             switch op {
             case "!": return .bool(!v.isTruthy)
             case "-":
-                if case let .int(i) = v { return .int(-i) }
+                if case let .int(i) = v { return .int(0 &- i) }
                 return .double(-(v.asDouble ?? 0.0))
             default: return v
             }
@@ -1425,8 +1435,17 @@ public final class FullGramRustVM {
 
     private func evalMethodCall(target: FullGramPluginValue, method: String, args: [FullGramPluginValue]) throws -> FullGramPluginValue {
         switch method {
-        case "to_string", "as_str", "clone":
+        case "to_string", "as_str":
             return .string(target.asString)
+        case "clone":
+            if case let .table(box) = target {
+                let copy = FullGramPluginTableBox()
+                copy.arrayPart = box.arrayPart
+                copy.mapPart = box.mapPart
+                copy.orderedKeys = box.orderedKeys
+                return .table(copy)
+            }
+            return target
         case "unwrap", "unwrap_or":
             if case .nil = target { return args.first ?? .nil }
             return target

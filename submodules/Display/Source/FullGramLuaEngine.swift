@@ -759,6 +759,10 @@ public final class FullGramLuaVM {
         self.registerStdlib(hostAPI: hostAPI, printHandler: printHandler)
     }
 
+    deinit {
+        self.globalEnv.vars.removeAll()
+    }
+
     public func load(code: String) throws {
         self.vmLock.lock()
         defer { self.vmLock.unlock() }
@@ -886,19 +890,22 @@ public final class FullGramLuaVM {
                 let iterVal = try self.evalExpr(firstIter, env: env)
                 switch iterVal {
                 case let .table(box):
+                    var didBreak = false
                     for (idx, item) in box.arrayPart.enumerated() {
                         try self.tick()
                         let loopEnv = LuaEnv(parent: env)
                         if vars.count >= 1 { loopEnv.setLocal(vars[0], .int(Int64(idx + 1))) }
                         if vars.count >= 2 { loopEnv.setLocal(vars[1], item) }
-                        do { _ = try self.execBlock(body, env: loopEnv) } catch LuaSignal.breakLoop { return nil }
+                        do { _ = try self.execBlock(body, env: loopEnv) } catch LuaSignal.breakLoop { didBreak = true; break }
                     }
-                    for key in box.orderedKeys {
-                        try self.tick()
-                        let loopEnv = LuaEnv(parent: env)
-                        if vars.count >= 1 { loopEnv.setLocal(vars[0], .string(key)) }
-                        if vars.count >= 2 { loopEnv.setLocal(vars[1], box.mapPart[key] ?? .nil) }
-                        do { _ = try self.execBlock(body, env: loopEnv) } catch LuaSignal.breakLoop { return nil }
+                    if !didBreak {
+                        for key in box.orderedKeys {
+                            try self.tick()
+                            let loopEnv = LuaEnv(parent: env)
+                            if vars.count >= 1 { loopEnv.setLocal(vars[0], .string(key)) }
+                            if vars.count >= 2 { loopEnv.setLocal(vars[1], box.mapPart[key] ?? .nil) }
+                            do { _ = try self.execBlock(body, env: loopEnv) } catch LuaSignal.breakLoop { break }
+                        }
                     }
                 case let .list(arr):
                     for (idx, item) in arr.enumerated() {

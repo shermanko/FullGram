@@ -223,8 +223,10 @@ public enum FullGramFonts {
                         DispatchQueue.main.async { completion(.failure(DownloadError.invalidFontFile)) }
                         return
                     }
-                    self.selectedId = option.id
-                    DispatchQueue.main.async { completion(.success(())) }
+                    DispatchQueue.main.async {
+                        self.selectedId = option.id
+                        completion(.success(()))
+                    }
                 } catch {
                     DispatchQueue.main.async { completion(.failure(error)) }
                 }
@@ -373,8 +375,13 @@ public enum FullGramThemeColors {
     private static let cacheLock = NSLock()
     private static var slotCache: [Slot: CachedSlot] = [:]
     private static var cachedHasColors: Bool?
+    private static var _revision: Int = 0
 
-    public private(set) static var revision: Int = 0
+    public static var revision: Int {
+        self.cacheLock.lock()
+        defer { self.cacheLock.unlock() }
+        return self._revision
+    }
 
     private static func cachedEntry(for slot: Slot) -> CachedSlot {
         self.cacheLock.lock()
@@ -414,15 +421,15 @@ public enum FullGramThemeColors {
     }
 
     public static func set(_ slot: Slot, hex: String?) {
-        self.cacheLock.lock()
-        self.slotCache.removeValue(forKey: slot)
-        self.cachedHasColors = nil
-        self.cacheLock.unlock()
         if let hex, let value = parse(hex) {
             UserDefaults.standard.set(String(format: "#%06X", value), forKey: key(slot))
         } else {
             UserDefaults.standard.removeObject(forKey: key(slot))
         }
+        self.cacheLock.lock()
+        self.slotCache.removeValue(forKey: slot)
+        self.cachedHasColors = nil
+        self.cacheLock.unlock()
         changed()
     }
 
@@ -445,10 +452,6 @@ public enum FullGramThemeColors {
     }
 
     public static func apply(_ preset: Preset) {
-        self.cacheLock.lock()
-        self.slotCache.removeAll()
-        self.cachedHasColors = nil
-        self.cacheLock.unlock()
         for slot in Slot.allCases {
             if let value = preset.colors[slot] {
                 UserDefaults.standard.set(value, forKey: key(slot))
@@ -457,19 +460,31 @@ public enum FullGramThemeColors {
             }
         }
         UserDefaults.standard.set(preset.id, forKey: "fullgram.theme.presetId")
+        self.cacheLock.lock()
+        self.slotCache.removeAll()
+        self.cachedHasColors = nil
+        self.cacheLock.unlock()
         changed()
     }
 
     public static func reset() {
-        self.cacheLock.lock()
-        self.slotCache.removeAll()
-        self.cachedHasColors = false
-        self.cacheLock.unlock()
         for slot in Slot.allCases {
             UserDefaults.standard.removeObject(forKey: key(slot))
         }
         UserDefaults.standard.removeObject(forKey: "fullgram.theme.presetId")
+        self.cacheLock.lock()
+        self.slotCache.removeAll()
+        self.cachedHasColors = false
+        self.cacheLock.unlock()
         changed()
+    }
+
+    public static func invalidateCache() {
+        self.cacheLock.lock()
+        self.slotCache.removeAll()
+        self.cachedHasColors = nil
+        self._revision += 1
+        self.cacheLock.unlock()
     }
 
     public static func markCustom() {
@@ -477,7 +492,9 @@ public enum FullGramThemeColors {
     }
 
     private static func changed() {
-        revision += 1
+        self.cacheLock.lock()
+        self._revision += 1
+        self.cacheLock.unlock()
         NotificationCenter.default.post(name: didChangeNotification, object: nil)
     }
 

@@ -27,10 +27,15 @@ private enum FullGramAITelegramContextBuilder {
         let makeRange: (Date, String) -> ParsedDateQuery? = { date, label in
             let start = cal.startOfDay(for: date)
             guard let end = cal.date(byAdding: .day, value: 1, to: start) else { return nil }
+            let startSec = start.timeIntervalSince1970
+            let endSec = end.timeIntervalSince1970 - 1.0
+            guard startSec >= 0.0, endSec >= startSec, endSec <= Double(Int32.max) else {
+                return nil
+            }
             return ParsedDateQuery(
                 label: label,
-                startTimestamp: Int32(start.timeIntervalSince1970),
-                endTimestamp: Int32(end.timeIntervalSince1970) - 1
+                startTimestamp: Int32(startSec),
+                endTimestamp: Int32(endSec)
             )
         }
 
@@ -1092,8 +1097,19 @@ private final class FullGramAIChatWindowView: UIView, UITextFieldDelegate {
             self.panStartOrigin = self.frame.origin
         case .changed:
             let trans = gr.translation(in: host)
-            self.customOrigin = CGPoint(x: self.panStartOrigin.x + trans.x, y: self.panStartOrigin.y + trans.y)
-            self.layoutInHost(bounds: host.bounds, safeInsets: host.safeAreaInsets)
+            let safeInsets = host.safeAreaInsets
+            let rawX = self.panStartOrigin.x + trans.x
+            let rawY = self.panStartOrigin.y + trans.y
+            let minX: CGFloat = 8.0
+            let maxX = max(minX, host.bounds.width - self.bounds.width - 8.0)
+            let minY = safeInsets.top + 8.0
+            let maxY = max(minY, host.bounds.height - safeInsets.bottom - self.bounds.height - 8.0)
+            let clamped = CGPoint(
+                x: min(max(rawX, minX), maxX),
+                y: min(max(rawY, minY), maxY)
+            )
+            self.customOrigin = clamped
+            self.frame.origin = clamped
         default:
             break
         }
@@ -1178,8 +1194,19 @@ final class FullGramAIOverlayCoordinator {
         for obs in self.observers {
             NotificationCenter.default.removeObserver(obs)
         }
-        self.petView?.removeFromSuperview()
-        self.windowView?.removeFromSuperview()
+        let pet = self.petView
+        let win = self.windowView
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                pet?.removeFromSuperview()
+                win?.removeFromSuperview()
+            }
+        } else {
+            DispatchQueue.main.async {
+                pet?.removeFromSuperview()
+                win?.removeFromSuperview()
+            }
+        }
     }
 
     private func startAutoResponderMonitor() {

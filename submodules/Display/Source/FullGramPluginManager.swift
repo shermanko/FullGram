@@ -35,6 +35,7 @@ private final class FullGramLoadedPlugin {
     var hasOutgoingHook: Bool = false
     var hasRenderHook: Bool = false
     var hasCommandHook: Bool = false
+    var hasMessageActionHook: Bool = false
 
     init(descriptor: FullGramPluginDescriptor) {
         self.descriptor = descriptor
@@ -58,7 +59,7 @@ public final class FullGramPluginManager {
         set {
             let normalized = (newValue == "en2ru" || newValue == "auto") ? newValue : "ru2en"
             UserDefaults.standard.set(normalized, forKey: Self.layoutFixerModeKey)
-            NotificationCenter.default.post(name: FullGramPluginNotifications.pluginsDidChange, object: nil)
+            self.postPluginsDidChange()
         }
     }
 
@@ -260,7 +261,11 @@ public final class FullGramPluginManager {
     ) -> FullGramPluginDescriptor {
         self.ensureLoaded()
         let meta = FullGramPluginMetadata.parse(from: code, fallbackName: name, language: language)
-        let resolvedId = id ?? meta.id
+        let rawId = (id?.isEmpty == false ? id! : meta.id)
+        let sanitizedId = rawId.lowercased()
+            .replacingOccurrences(of: "[^a-z0-9_-]+", with: "_", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "_-"))
+        let resolvedId = sanitizedId.isEmpty ? meta.id : sanitizedId
 
         self.lock.lock()
         let existingIndex = self.descriptors.firstIndex(where: { $0.id == resolvedId })
@@ -287,8 +292,18 @@ public final class FullGramPluginManager {
         self.reloadRuntimeLocked()
         self.lock.unlock()
 
-        NotificationCenter.default.post(name: FullGramPluginNotifications.pluginsDidChange, object: nil)
+        self.postPluginsDidChange()
         return descriptor
+    }
+
+    private func postPluginsDidChange() {
+        if Thread.isMainThread {
+            NotificationCenter.default.post(name: FullGramPluginNotifications.pluginsDidChange, object: nil)
+        } else {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: FullGramPluginNotifications.pluginsDidChange, object: nil)
+            }
+        }
     }
 
     public func setPluginEnabled(id: String, enabled: Bool) {
@@ -300,7 +315,7 @@ public final class FullGramPluginManager {
             self.reloadRuntimeLocked()
         }
         self.lock.unlock()
-        NotificationCenter.default.post(name: FullGramPluginNotifications.pluginsDidChange, object: nil)
+        self.postPluginsDidChange()
     }
 
     public func deletePlugin(id: String) {
@@ -311,10 +326,13 @@ public final class FullGramPluginManager {
             let scriptURL = self.pluginsDirectoryURL.appendingPathComponent("\(item.id).\(item.language.fileExtension)")
             try? FileManager.default.removeItem(at: scriptURL)
             self.loaded.removeValue(forKey: id)
+            self.cachedOrderedPlugins.removeAll { $0.descriptor.id == id }
+            self.cachedRenderPlugins.removeAll { $0.descriptor.id == id }
+            self.hasRenderHooks = !self.cachedRenderPlugins.isEmpty
             self.persistLocked()
         }
         self.lock.unlock()
-        NotificationCenter.default.post(name: FullGramPluginNotifications.pluginsDidChange, object: nil)
+        self.postPluginsDidChange()
     }
 
     public func importPlugin(from url: URL, preferredFileName: String? = nil) throws -> FullGramPluginDescriptor {
@@ -457,6 +475,10 @@ public final class FullGramPluginManager {
                 guard !key.isEmpty, let stored = UserDefaults.standard.object(forKey: storagePrefix + key) else {
                     return fallback
                 }
+                if let data = stored as? Data,
+                   let obj = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) {
+                    return FullGramPluginValue.fromJSONObject(obj, forPython: true)
+                }
                 return FullGramPluginValue.fromJSONObject(stored, forPython: true)
             },
             "storage_set": .function { args in
@@ -466,7 +488,15 @@ public final class FullGramPluginManager {
                 if case .nil = val {
                     UserDefaults.standard.removeObject(forKey: storagePrefix + key)
                 } else {
-                    UserDefaults.standard.set(val.toJSONObject(), forKey: storagePrefix + key)
+                    let obj = val.toJSONObject()
+                    if JSONSerialization.isValidJSONObject(obj),
+                       let data = try? JSONSerialization.data(withJSONObject: obj, options: []) {
+                        UserDefaults.standard.set(data, forKey: storagePrefix + key)
+                    } else if obj is NSNull {
+                        UserDefaults.standard.removeObject(forKey: storagePrefix + key)
+                    } else {
+                        UserDefaults.standard.set(obj, forKey: storagePrefix + key)
+                    }
                 }
                 return .bool(true)
             },
@@ -486,25 +516,38 @@ public final class FullGramPluginManager {
                 }
                 return .nil
             },
-            "http_get": .function { args in
+            "http_get": .function { [weak self] args in
                 let rawURL = args.first?.asString ?? ""
                 guard let url = URL(string: rawURL),
                       let scheme = url.scheme?.lowercased(),
                       scheme == "https" || scheme == "http" else {
                     return .nil
                 }
+                if Thread.isMainThread {
+                    self?.appendLog(pluginId: pluginId, message: "WARN: http_get blocked on main thread")
+                    return .nil
+                }
                 let sem = DispatchSemaphore(value: 0)
+                let boxLock = NSLock()
                 var body: String?
                 var request = URLRequest(url: url)
                 request.timeoutInterval = 8.0
-                URLSession.shared.dataTask(with: request) { data, _, _ in
-                    if let data {
-                        body = String(data: data, encoding: .utf8)
+                let task = URLSession.shared.dataTask(with: request) { data, _, _ in
+                    if let data, data.count <= 1_048_576, let text = String(data: data, encoding: .utf8) {
+                        boxLock.lock()
+                        body = text
+                        boxLock.unlock()
                     }
                     sem.signal()
-                }.resume()
-                _ = sem.wait(timeout: .now() + 8.5)
-                return body.map { .string($0) } ?? .nil
+                }
+                task.resume()
+                if sem.wait(timeout: .now() + 8.5) == .timedOut {
+                    task.cancel()
+                }
+                boxLock.lock()
+                let result = body
+                boxLock.unlock()
+                return result.map { .string($0) } ?? .nil
             }
         ]
     }
@@ -524,6 +567,7 @@ public final class FullGramPluginManager {
                 holder.hasOutgoingHook = vm.hasFunction("on_outgoing_message")
                 holder.hasRenderHook = vm.hasFunction("on_render_message")
                 holder.hasCommandHook = holder.hasCommandHook || vm.hasFunction("on_command")
+                holder.hasMessageActionHook = vm.hasFunction("on_message_action")
             case .python:
                 let vm = FullGramPythonVM(hostAPI: hostAPI) { [weak self] msg in
                     self?.appendLog(pluginId: descriptor.id, message: msg)
@@ -533,6 +577,7 @@ public final class FullGramPluginManager {
                 holder.hasOutgoingHook = vm.hasFunction("on_outgoing_message")
                 holder.hasRenderHook = vm.hasFunction("on_render_message")
                 holder.hasCommandHook = holder.hasCommandHook || vm.hasFunction("on_command")
+                holder.hasMessageActionHook = vm.hasFunction("on_message_action")
             case .rust:
                 let vm = FullGramRustVM(hostAPI: hostAPI) { [weak self] msg in
                     self?.appendLog(pluginId: descriptor.id, message: msg)
@@ -542,6 +587,7 @@ public final class FullGramPluginManager {
                 holder.hasOutgoingHook = vm.hasFunction("on_outgoing_message")
                 holder.hasRenderHook = vm.hasFunction("on_render_message")
                 holder.hasCommandHook = holder.hasCommandHook || vm.hasFunction("on_command")
+                holder.hasMessageActionHook = vm.hasFunction("on_message_action")
             }
         } catch {
             holder.lastError = error.localizedDescription
@@ -554,7 +600,7 @@ public final class FullGramPluginManager {
         self.ensureLoaded()
         self.lock.lock()
         defer { self.lock.unlock() }
-        return self.isSystemEnabled && !self.loaded.values.filter({ ($0.luaVM?.hasFunction("on_message_action") ?? false) || ($0.pythonVM?.hasFunction("on_message_action") ?? false) || ($0.rustVM?.hasFunction("on_message_action") ?? false) }).isEmpty
+        return self.isSystemEnabled && self.loaded.values.contains(where: { $0.hasMessageActionHook })
     }
 
     public func availableCommands() -> [(command: String, description: String, pluginName: String)] {

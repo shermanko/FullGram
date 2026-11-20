@@ -814,6 +814,11 @@ public final class FullGramPythonVM {
         self.registerBuiltins(hostAPI: hostAPI, printHandler: printHandler)
     }
 
+    deinit {
+        self.globalEnv.vars.removeAll()
+        self.modules.removeAll()
+    }
+
     public func load(code: String) throws {
         self.vmLock.lock()
         defer { self.vmLock.unlock() }
@@ -1131,7 +1136,12 @@ public final class FullGramPythonVM {
             arr.reverse()
             return .nil
         case "sort":
-            arr.sort { ($0.asDouble ?? 0) < ($1.asDouble ?? 0) || $0.asString < $1.asString }
+            arr.sort {
+                if let a = $0.asDouble, let b = $1.asDouble, a.isFinite && b.isFinite {
+                    return a < b
+                }
+                return $0.asString < $1.asString
+            }
             return .nil
         default:
             return nil
@@ -1409,17 +1419,29 @@ public final class FullGramPythonVM {
         self.globalEnv.set("sorted", .function { [weak self] args in
             guard let self else { return .list([]) }
             let items = self.iterableItems(args.first ?? .nil)
-            return .list(items.sorted { ($0.asDouble ?? 0) < ($1.asDouble ?? 0) || $0.asString < $1.asString })
+            return .list(items.sorted {
+                if let a = $0.asDouble, let b = $1.asDouble, a.isFinite && b.isFinite {
+                    return a < b
+                }
+                return $0.asString < $1.asString
+            })
         })
         self.globalEnv.set("abs", .function { args in
-            if case let .int(i)? = args.first { return .int(abs(i)) }
+            if case let .int(i)? = args.first { return .int(i == Int64.min ? Int64.max : abs(i)) }
             return .double(abs(args.first?.asDouble ?? 0.0))
         })
         self.globalEnv.set("round", .function { args in
             let v = args.first?.asDouble ?? 0.0
+            guard v.isFinite else { return .double(v) }
             let digits = Int(args.count > 1 ? (args[1].asInt ?? 0) : 0)
-            if digits <= 0 { return .int(Int64(v.rounded())) }
-            let factor = pow(10.0, Double(digits))
+            if digits <= 0 {
+                let r = v.rounded()
+                if r >= Double(Int64.min) && r < Double(Int64.max) {
+                    return .int(Int64(r))
+                }
+                return .double(r)
+            }
+            let factor = pow(10.0, Double(min(digits, 12)))
             return .double((v * factor).rounded() / factor)
         })
         self.globalEnv.set("min", .function { [weak self] args in

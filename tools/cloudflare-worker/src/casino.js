@@ -125,6 +125,13 @@ const S = {
 const RED = new Set([1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36]);
 const WHEEL = [0,32,15,19,4,21,2,25,17,34,6,27,13,36,11,30,8,23,10,5,24,16,33,1,20,14,31,9,22,18,29,7,28,12,35,3,26];
 let raf = null;
+let dropRaf = null;
+function sizeCanvas(cv, targetH){
+  const w = Math.max(2, (cv.clientWidth || 320) * 2), h = targetH;
+  if(cv.width !== w) cv.width = w;
+  if(cv.height !== h) cv.height = h;
+  return [w, h];
+}
 
 function bridge(action, payload){
   try { window.webkit.messageHandlers.fullgramPlugin.postMessage({ action, payload }); } catch(e){}
@@ -141,7 +148,7 @@ function openDep(){ document.getElementById('depModal').classList.add('open'); }
 function closeDep(){ document.getElementById('depModal').classList.remove('open'); }
 function addBal(n){ S.balance += n; save(); hap('success'); closeDep(); }
 function applyDep(){ const v = parseInt(document.getElementById('depIn').value, 10); if(!isNaN(v) && v > 0){ S.balance += v; save(); hap('success'); } closeDep(); }
-function stopAll(){ if(raf){ cancelAnimationFrame(raf); raf = null; } olympus.spinning = false; aviator.running = false; roul.spinning = false; }
+function stopAll(){ if(raf){ cancelAnimationFrame(raf); raf = null; } if(dropRaf){ cancelAnimationFrame(dropRaf); dropRaf = null; } olympus.spinning = false; aviator.running = false; roul.spinning = false; }
 
 function setBet(m){
   if(olympus.spinning || aviator.running || roul.spinning || mines.active) return;
@@ -239,7 +246,7 @@ function startOlympusLoop(){
   const ctx=cv.getContext('2d');
   const loop=(t)=>{
     if(S.view!=='zeus') return;
-    const w=cv.width=cv.clientWidth*2, h=cv.height=620;
+    const [w, h] = sizeCanvas(cv, 620);
     const bg=ctx.createLinearGradient(0,0,0,h); bg.addColorStop(0,'#1e0b36'); bg.addColorStop(0.55,'#11152c'); bg.addColorStop(1,'#29160a');
     ctx.fillStyle=bg; ctx.fillRect(0,0,w,h);
     ctx.fillStyle='rgba(255,215,120,0.08)'; ctx.fillRect(14,20,32,h-40); ctx.fillRect(w-46,20,32,h-40);
@@ -298,8 +305,9 @@ function spinOlympus(){
   const nextGrid=Array.from({length:15},pick);
   const t0=performance.now();
   const dropAnim=(now)=>{
+    if(S.view!=='zeus' || !olympus.spinning){ dropRaf=null; return; }
     const dt=now-t0;
-    if(dt<260){ const p=dt/260; for(let i=0;i<15;i++) olympus.yOff[i]=p*p*650; requestAnimationFrame(dropAnim); return; }
+    if(dt<260){ const p=dt/260; for(let i=0;i<15;i++) olympus.yOff[i]=p*p*650; dropRaf=requestAnimationFrame(dropAnim); return; }
     if(dt>=260 && olympus.grid!==nextGrid){ olympus.grid=nextGrid; for(let i=0;i<15;i++) olympus.yOff[i]=-650; }
     let allDone=true;
     for(let c=0;c<5;c++){
@@ -311,10 +319,10 @@ function spinOlympus(){
         else olympus.yOff[idx]=0;
       }
     }
-    if(!allDone){ requestAnimationFrame(dropAnim); return; }
-    hap('light'); olympus.spinning=false; evalOlympus(nextGrid,S.bet,cost,isFS);
+    if(!allDone){ dropRaf=requestAnimationFrame(dropAnim); return; }
+    dropRaf=null; hap('light'); olympus.spinning=false; evalOlympus(nextGrid,S.bet,cost,isFS);
   };
-  requestAnimationFrame(dropAnim);
+  dropRaf=requestAnimationFrame(dropAnim);
 }
 function evalOlympus(grid, bet, cost, isFS){
   const cnt=[0,0,0,0,0,0,0]; grid.forEach(id=>cnt[id]++);
@@ -361,7 +369,7 @@ function drawPlane(ctx, x, y, angle, t){
 }
 function drawAviator(mult, prog, crashed, t){
   const cv=document.getElementById('avCv'); if(!cv) return;
-  const ctx=cv.getContext('2d'); const w=cv.width=cv.clientWidth*2, h=cv.height=520;
+  const ctx=cv.getContext('2d'); const [w, h] = sizeCanvas(cv, 520);
   ctx.fillStyle='#0a0c12'; ctx.fillRect(0,0,w,h);
   ctx.save(); ctx.translate(0,h); ctx.rotate((t||0)*0.00018);
   for(let i=0;i<12;i++){ ctx.rotate(Math.PI/6); ctx.fillStyle=i%2===0?'rgba(255,45,85,0.035)':'transparent'; ctx.beginPath(); ctx.moveTo(0,0); ctx.arc(0,0,w*1.4,0,Math.PI/12); ctx.closePath(); ctx.fill(); }
@@ -383,6 +391,7 @@ function toggleAviator(){
     aviator.running=false; if(raf) cancelAnimationFrame(raf);
     const pay=Math.round(aviator.bet*aviator.mult); S.balance+=pay; save(); hap('success');
     aviator.hist.unshift(aviator.crashAt); aviator.hist=aviator.hist.slice(0,10);
+    const ch=document.getElementById('chist'); if(ch) ch.innerHTML=aviator.hist.map(x=>'<span class="cp '+(x>=2?'hi':'lo')+'">'+x.toFixed(2)+'x</span>').join('');
     setBar('ЗАБРАЛ '+aviator.mult.toFixed(2)+'x (+'+pay.toLocaleString('ru-RU')+' 🪙)!','pos');
     S.lastShare='PARIMATCH Aviator\\nЗабрал на '+aviator.mult.toFixed(2)+'x (+'+pay+' 🪙)! Баланс: '+S.balance+' 🪙';
     const b=document.getElementById('avBtn'); if(b){ b.className='mbtn'; b.textContent='СТАРТ ПОЛЁТА'; }
@@ -428,7 +437,7 @@ function renderRoulette(){
 function pickR(b){ if(roul.spinning) return; roul.bet=b; hap('light'); renderRoulette(); }
 function drawRoul(a, ba, landed){
   const cv=document.getElementById('rCv'); if(!cv) return;
-  const ctx=cv.getContext('2d'); const w=cv.width=cv.clientWidth*2, h=cv.height=520;
+  const ctx=cv.getContext('2d'); const [w, h] = sizeCanvas(cv, 520);
   const bg=ctx.createRadialGradient(w/2,h/2,40,w/2,h/2,w*0.6); bg.addColorStop(0,'#0f3b28'); bg.addColorStop(1,'#071710');
   ctx.fillStyle=bg; ctx.fillRect(0,0,w,h);
   const cx=w/2, cy=h/2, R=Math.min(w,h)*0.44, step=(Math.PI*2)/37;
@@ -490,7 +499,7 @@ function renderMines(){
 }
 function drawMines(){
   const cv=document.getElementById('mCv'); if(!cv) return;
-  const ctx=cv.getContext('2d'); const w=cv.width=cv.clientWidth*2, h=cv.height=560;
+  const ctx=cv.getContext('2d'); const [w, h] = sizeCanvas(cv, 560);
   ctx.fillStyle='#0c101b'; ctx.fillRect(0,0,w,h);
   const pad=14, gap=10, cw=(w-pad*2-gap*4)/5, ch=(h-pad*2-gap*4)/5;
   for(let r=0;r<5;r++){
@@ -530,7 +539,9 @@ function tapMine(i){
   if(mines.bombs.has(i)){ mines.active=false; hap('error'); renderMines(); setBar('БОМБА! -'+mines.bet+' 🪙','neg'); return; }
   mines.opened.add(i);
   const safeLeft=25-mines.count-(mines.opened.size-1), totalLeft=25-(mines.opened.size-1);
-  mines.mult*=(totalLeft/safeLeft)*0.97; hap('light'); renderMines();
+  mines.mult*=(totalLeft/safeLeft)*0.97;
+  if(mines.opened.size >= 25 - mines.count){ toggleMines(); return; }
+  hap('light'); renderMines();
 }
 
 function renderLobby(){

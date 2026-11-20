@@ -16,6 +16,7 @@ final class FullGramSleepTimer {
     private var timer: Timer?
     private(set) var mode: Mode = .off
     private(set) var targetDate: Date?
+    private var lastReportedLabel: String?
 
     private init() {}
 
@@ -35,24 +36,38 @@ final class FullGramSleepTimer {
     }
 
     func set(mode: Mode) {
-        self.timer?.invalidate()
-        self.timer = nil
-        self.targetDate = nil
-        self.mode = mode
+        let apply = {
+            self.timer?.invalidate()
+            self.timer = nil
+            self.targetDate = nil
+            self.mode = mode
+            self.lastReportedLabel = nil
 
-        if case let .minutes(mins) = mode, mins > 0 {
-            self.targetDate = Date().addingTimeInterval(TimeInterval(mins * 60))
-            let t = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-                guard let self, let target = self.targetDate else { return }
-                if target.timeIntervalSinceNow <= 0 {
-                    self.fire()
-                } else {
-                    NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+            if case let .minutes(mins) = mode, mins > 0 {
+                self.targetDate = Date().addingTimeInterval(TimeInterval(mins * 60))
+                self.lastReportedLabel = self.shortLabel
+                let t = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+                    guard let self, let target = self.targetDate else { return }
+                    if target.timeIntervalSinceNow <= 0 {
+                        self.fire()
+                    } else {
+                        let nextLabel = self.shortLabel
+                        if nextLabel != self.lastReportedLabel {
+                            self.lastReportedLabel = nextLabel
+                            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+                        }
+                    }
                 }
+                RunLoop.main.add(t, forMode: .common)
+                self.timer = t
             }
-            self.timer = t
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
         }
-        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        if Thread.isMainThread {
+            apply()
+        } else {
+            DispatchQueue.main.async(execute: apply)
+        }
     }
 
     func handleTrackChanged() {

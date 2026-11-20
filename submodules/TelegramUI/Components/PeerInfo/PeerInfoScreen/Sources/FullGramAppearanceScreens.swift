@@ -503,7 +503,10 @@ private final class FullGramColorPickerDelegate: NSObject, UIColorPickerViewCont
         var b: CGFloat = 0
         var a: CGFloat = 0
         color.getRed(&r, green: &g, blue: &b, alpha: &a)
-        return String(format: "#%02X%02X%02X", Int(round(r * 255)), Int(round(g * 255)), Int(round(b * 255)))
+        let ri = Int((max(0.0, min(1.0, r)) * 255.0).rounded())
+        let gi = Int((max(0.0, min(1.0, g)) * 255.0).rounded())
+        let bi = Int((max(0.0, min(1.0, b)) * 255.0).rounded())
+        return String(format: "#%02X%02X%02X", ri, gi, bi)
     }
 }
 
@@ -874,23 +877,46 @@ private let fullGramStandardIcons: [FullGramIconPreset] = [
 ]
 
 private let fullGramCustomIcons: [FullGramIconPreset] = [
-    FullGramIconPreset(iconName: "FullGramDefault", title: "default", isMonochrome: false, previewResource: "FullGramIcon_FullGramDefault"),
-    FullGramIconPreset(iconName: "FullGramRed", title: "red", isMonochrome: false, previewResource: "FullGramIcon_FullGramRed"),
-    FullGramIconPreset(iconName: "FullGramMascot", title: "mascot", isMonochrome: false, previewResource: "FullGramIcon_FullGramMascot"),
-    FullGramIconPreset(iconName: "FullGramOrange", title: "orange", isMonochrome: false, previewResource: "FullGramIcon_FullGramOrange")
+    FullGramIconPreset(iconName: "FullGramDefault", title: "FullGram Chrome", isMonochrome: false, previewResource: "FullGramIcon_FullGramDefault"),
+    FullGramIconPreset(iconName: "FullGramRed", title: "FullGram Red", isMonochrome: false, previewResource: "FullGramIcon_FullGramRed"),
+    FullGramIconPreset(iconName: "FullGramOrange", title: "FullGram Orange", isMonochrome: false, previewResource: "FullGramIcon_FullGramOrange"),
+    FullGramIconPreset(iconName: "FullGramCyan", title: "Cyan Neon", isMonochrome: false, previewResource: "FullGramIcon_FullGramCyan"),
+    FullGramIconPreset(iconName: "FullGramPurple", title: "Violet Plasma", isMonochrome: false, previewResource: "FullGramIcon_FullGramPurple"),
+    FullGramIconPreset(iconName: "FullGramGold", title: "Royal Gold", isMonochrome: false, previewResource: "FullGramIcon_FullGramGold"),
+    FullGramIconPreset(iconName: "FullGramEmerald", title: "Toxic Matrix", isMonochrome: false, previewResource: "FullGramIcon_FullGramEmerald"),
+    FullGramIconPreset(iconName: "FullGramSakura", title: "Sakura Pink", isMonochrome: false, previewResource: "FullGramIcon_FullGramSakura"),
+    FullGramIconPreset(iconName: "FullGramArctic", title: "Arctic Ice", isMonochrome: false, previewResource: "FullGramIcon_FullGramArctic"),
+    FullGramIconPreset(iconName: "FullGramVapor", title: "Vaporwave", isMonochrome: false, previewResource: "FullGramIcon_FullGramVapor"),
+    FullGramIconPreset(iconName: "FullGramMidnight", title: "Stealth Carbon", isMonochrome: true, previewResource: "FullGramIcon_FullGramMidnight"),
+    FullGramIconPreset(iconName: "FullGramSunset", title: "Sunset Glow", isMonochrome: false, previewResource: "FullGramIcon_FullGramSunset"),
+    FullGramIconPreset(iconName: "FullGramHolo", title: "Holographic", isMonochrome: false, previewResource: "FullGramIcon_FullGramHolo"),
+    FullGramIconPreset(iconName: "FullGramMascot", title: "Mascot Classic", isMonochrome: false, previewResource: "FullGramIcon_FullGramMascot"),
+    FullGramIconPreset(iconName: "FullGramMascotNeon", title: "Mascot Cyber", isMonochrome: false, previewResource: "FullGramIcon_FullGramMascotNeon"),
+    FullGramIconPreset(iconName: "FullGramMascotGold", title: "Mascot Royal", isMonochrome: false, previewResource: "FullGramIcon_FullGramMascotGold")
 ]
 
+private let fullGramIconPreviewCache: NSCache<NSString, UIImage> = {
+    let cache = NSCache<NSString, UIImage>()
+    cache.countLimit = 48
+    return cache
+}()
+
 private func fullGramIconPreviewImage(_ resource: String?) -> UIImage? {
-    guard let resource,
-          let path = Bundle.main.path(forResource: resource, ofType: "png"),
+    guard let resource else { return nil }
+    if let cached = fullGramIconPreviewCache.object(forKey: resource as NSString) {
+        return cached
+    }
+    guard let path = Bundle.main.path(forResource: resource, ofType: "png"),
           let raw = UIImage(contentsOfFile: path) else {
         return nil
     }
     let size = CGSize(width: 29.0, height: 29.0)
-    return UIGraphicsImageRenderer(size: size).image { _ in
+    let rendered = UIGraphicsImageRenderer(size: size).image { _ in
         UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: 7.0).addClip()
         raw.draw(in: CGRect(origin: .zero, size: size))
     }.withRenderingMode(.alwaysOriginal)
+    fullGramIconPreviewCache.setObject(rendered, forKey: resource as NSString)
+    return rendered
 }
 
 private struct FullGramIconsArguments {

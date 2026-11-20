@@ -430,12 +430,14 @@ public final class FullGramVoiceDSP {
             return nil
         }
         let procFormat = file.processingFormat
-        let capacity = AVAudioFrameCount(max(1, file.length))
+        let maxFrames = Int64(max(1.0, procFormat.sampleRate * 120.0))
+        let clampedLength = min(max(1, file.length), maxFrames)
+        let capacity = AVAudioFrameCount(clampedLength)
         guard let buffer = AVAudioPCMBuffer(pcmFormat: procFormat, frameCapacity: capacity) else {
             return nil
         }
         do {
-            try file.read(into: buffer)
+            try file.read(into: buffer, frameCount: capacity)
         } catch {
             return nil
         }
