@@ -168,7 +168,7 @@ private final class FullGramLyricsEditorViewController: UIViewController {
 
         self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Отмена", style: .plain, target: self, action: #selector(self.cancelTapped))
         var rightItems: [UIBarButtonItem] = [
-            UIBarButtonItem(title: "Сохранить", style: .done, target: self, action: #selector(self.saveTapped))
+            UIBarButtonItem(title: "Сохранить", style: .plain, target: self, action: #selector(self.saveTapped))
         ]
         if self.hasCustom {
             rightItems.append(UIBarButtonItem(title: "Сбросить", style: .plain, target: self, action: #selector(self.resetTapped)))

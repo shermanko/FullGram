@@ -59,7 +59,7 @@ final class FullGramScreenshotEditorController: UIViewController {
         self.title = "Редактор скриншота"
 
         self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Закрыть", style: .plain, target: self, action: #selector(self.closeTapped))
-        self.navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Поделиться", style: .done, target: self, action: #selector(self.shareTapped))
+        self.navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Поделиться", style: .plain, target: self, action: #selector(self.shareTapped))
 
         self.hintLabel.text = "Проведите пальцем по сообщению или тексту, чтобы скрыть"
         self.hintLabel.font = .systemFont(ofSize: 12.5, weight: .medium)
