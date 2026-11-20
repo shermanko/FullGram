@@ -1842,37 +1842,10 @@ public enum FullGramLinkCleaner {
                     )
                     newMediaReference = .standalone(media: newFile)
                 }
-            } else if FullGramExtras.shared.removePhotoMetadata, let image = newMediaReference?.media as? TelegramMediaImage {
-                var updatedReps: [TelegramMediaImageRepresentation] = []
-                var modified = false
-                for rep in image.representations {
-                    if let localRef = rep.resource as? LocalFileReferenceMediaResource,
-                       let rawData = try? Data(contentsOf: URL(fileURLWithPath: localRef.localFilePath)),
-                       let stripped = FullGramExtras.strippedImageData(rawData) {
-                        let cleanPath = NSTemporaryDirectory() + "fg-clean-img-\(Int64.random(in: 1 ... Int64.max)).jpg"
-                        if (try? stripped.write(to: URL(fileURLWithPath: cleanPath), options: .atomic)) != nil {
-                            var randomId: Int64 = 0
-                            arc4random_buf(&randomId, 8)
-                            let newRes = LocalFileReferenceMediaResource(localFilePath: cleanPath, randomId: randomId)
-                            updatedReps.append(TelegramMediaImageRepresentation(dimensions: rep.dimensions, resource: newRes, progressiveSizes: rep.progressiveSizes, immediateThumbnailData: rep.immediateThumbnailData, hasVideo: rep.hasVideo, isPersonal: rep.isPersonal))
-                            modified = true
-                            continue
-                        }
-                    }
-                    updatedReps.append(rep)
-                }
-                if modified {
-                    let newImage = TelegramMediaImage(
-                        imageId: image.imageId,
-                        representations: updatedReps,
-                        immediateThumbnailData: image.immediateThumbnailData,
-                        reference: image.reference,
-                        partialReference: image.partialReference,
-                        flags: image.flags
-                    )
-                    newMediaReference = .standalone(media: newImage)
-                }
             }
+            // Compressed photos (TelegramMediaImage) are intentionally left untouched: Telegram already
+            // re-encodes them without EXIF/GPS, and swapping their LocalFileReferenceMediaResource for a new
+            // temp file broke camera captures (the bubble stayed grey and the send failed with "!").
             return .message(
                 text: newText,
                 attributes: newAttributes,
