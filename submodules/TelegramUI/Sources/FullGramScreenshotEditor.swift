@@ -366,7 +366,8 @@ enum FullGramScreenshotPrompt {
             pill.alpha = 1.0
             pill.transform = .identity
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak pill] in
+        Task { @MainActor [weak pill] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
             guard let pill, pill.superview != nil else { return }
             UIView.animate(withDuration: 0.22, animations: {
                 pill.alpha = 0.0

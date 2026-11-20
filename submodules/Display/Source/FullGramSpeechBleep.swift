@@ -955,29 +955,38 @@ public enum FullGramSpeechBleep {
             request.append(buffer)
             request.endAudio()
 
-            let lock = NSLock()
-            var done = false
-            let finish: @Sendable (String?) -> Void = { text in
-                lock.lock()
-                if done {
-                    lock.unlock()
-                    return
+            final class OnceGate: @unchecked Sendable {
+                private let lock = NSLock()
+                private var done = false
+                func enter() -> Bool {
+                    self.lock.lock()
+                    defer { self.lock.unlock() }
+                    if self.done { return false }
+                    self.done = true
+                    return true
                 }
-                done = true
-                lock.unlock()
+            }
+            final class TaskBox: @unchecked Sendable {
+                let task: SFSpeechRecognitionTask
+                init(_ task: SFSpeechRecognitionTask) { self.task = task }
+            }
+
+            let gate = OnceGate()
+            let finish: @Sendable (String?) -> Void = { text in
+                guard gate.enter() else { return }
                 let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
                 completion((trimmed?.isEmpty == false) ? trimmed : nil)
             }
 
-            let task = recognizer.recognitionTask(with: request) { result, error in
+            let taskBox = TaskBox(recognizer.recognitionTask(with: request) { result, error in
                 if let result, result.isFinal {
                     finish(result.bestTranscription.formattedString)
                 } else if error != nil {
                     finish(nil)
                 }
-            }
+            })
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 10.0) {
-                task.cancel()
+                taskBox.task.cancel()
                 finish(nil)
             }
         }

@@ -612,7 +612,7 @@ public final class SharedAccountContextImpl: SharedAccountContext {
                 return nil
             }
         }
-        NotificationCenter.default.addObserver(forName: FullGramPowerSaving.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+        let _ = NotificationCenter.default.addObserver(forName: FullGramPowerSaving.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
             guard let strongSelf = self else { return }
             let next = strongSelf.currentAutomaticMediaDownloadSettings
             let lpm = automaticEnergyUsageShouldBeOnNow(settings: next)
