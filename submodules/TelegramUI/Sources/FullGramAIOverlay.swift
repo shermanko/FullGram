@@ -1441,7 +1441,8 @@ final class FullGramAIOverlayCoordinator {
 
         let vc: UIViewController
         if kind == "webview", let rawUrl = spec["url"] as? String, let url = URL(string: rawUrl), url.scheme?.lowercased() == "https" {
-            let webVC = FullGramPluginWebViewController(url: url, onSendToChat: sendToChat)
+            let webTitle = (spec["title"] as? String) ?? ""
+            let webVC = FullGramPluginWebViewController(url: url, title: webTitle, onSendToChat: sendToChat)
             webVC.modalPresentationStyle = .fullScreen
             self.presentNativeUIKitController(webVC, retryCount: retryCount)
             return
@@ -2237,11 +2238,12 @@ private final class FullGramPluginWebViewController: UIViewController {
     private let impactHeavy = UIImpactFeedbackGenerator(style: .heavy)
     private let notifFeedback = UINotificationFeedbackGenerator()
 
-    init(url: URL, title: String, onSendToChat: @escaping (String) -> Void) {
+    init(url: URL, title: String = "", onSendToChat: @escaping (String) -> Void) {
         self.url = url
         self.titleText = title
         self.onSendToChat = onSendToChat
         super.init(nibName: nil, bundle: nil)
+        self.title = title
     }
 
     required init?(coder: NSCoder) { fatalError() }
