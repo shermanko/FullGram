@@ -17,11 +17,13 @@
   - **Анимации открытия профиля (Discord Profile Effects)**: многослойные APNG-эффекты проигрываются поверх шапки профиля при его открытии ([FullGramAvatarFrames.swift](../submodules/Display/Source/FullGramAvatarFrames.swift), [PeerInfoHeaderNode.swift](../submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift)).
   - **Кастомные рамки**: загрузка своей PNG/APNG/GIF рамки из фотоплёнки iPhone или по прямой `https://`-ссылке (видна всем пользователям FullGram).
   - Обновлённый экран «Косметика Discord» с вкладками `Рамки` / `Эффекты профиля`, поиском и живым превью ([FullGramCosmeticScreens.swift](../submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramCosmeticScreens.swift)).
-- **Нативный анимированный BetKing / Betona Casino GUI**:
-  - Заменил текстовый спам в чат на полноценный анимированный нативный интерфейс в тёмно-золотом стиле ([FullGramCasinoBetKingController.swift](../submodules/TelegramUI/Sources/FullGramCasinoBetKingController.swift)).
-  - 6 анимированных игр: **⚡ Gates of Olympus (5×3)**, **🐶 The Dog House (5×3)**, **🎰 Slots 777 (3 барабана)**, **🚀 Live Crash (60fps график ракеты + кнопка ЗАБРАТЬ)**, **🎡 Европейская рулетка (крутящаяся лента)**, **🪙 3D-Монетка**.
-  - Чипы ставок (`10..500`, `½`, `2x`, `MAX`), `Ante Bet +25%`, `Buy Bonus`, пополнение баланса и отправка результата в чат только по желанию кнопкой «В чат».
-  - Встроенный плагин `fg_casino` обновлён до **v5.0** — все команды (`.casino`, `.zeus`, `.dogs`, `.slots`, `.crash`, `.roulette`, `.coin`) открывают GUI.
+- **Плагин-система с WebView UI и HD-казино (Parimatch · Beton v5.1)**:
+  - Универсальный `FullGramPluginWebViewController` (`kind = "webview"`) с белым списком доверенных HTTPS-доменов и подтверждением отправки сообщений в чат (`UIAlertController`).
+  - Полноэкранное 60fps Canvas 2D казино на Cloudflare Worker (`/casino`: Gates of Olympus, Aviator Live, 3D Рулетка, Beton Mines 5×5); встроенный плагин `fg_casino` обновлён до **v5.1**.
+- **Усиление безопасности (iOS + Cloudflare Worker)**:
+  - Ограничен домен WebView-плагинов (`fullgram.korsakovx.workers.dev`) и добавлено подтверждение пользователя перед отправкой `shareChat`.
+  - Команды `/auth` и `/token` в Telegram-боте работают только в личных сообщениях (защита от утечки токена в группы).
+  - Fail-closed проверка секрета Telegram Webhook, отключение legacy `ADMIN_TOKEN` по умолчанию (`ALLOW_LEGACY_ADMIN_TOKEN=1` для явного включения), убран открытый CORS и добавлены `X-Robots-Tag: noindex`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` на `/badges.json`, `/cosmetics.json`, `/nfts.json`.
 - **Классический дизайн Telegram + Watchdog**:
   - Полноценный классический таб-бар (`TabBarContollerNode.swift`) и классические вкладки папок с подчёркиванием (`ChatListControllerNode.swift`), с корректным переключением без перезапуска.
   - Встроенный `FullGramDesignWatchdog` для автоматического отката к стабильному интерфейсу при сбое запуска + удалённые feature-флаги (`/config.json`).

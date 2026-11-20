@@ -467,4 +467,4 @@ jobs:
 
           gh release create "$TAG" "${FILES[@]}" \
             --title "FullGram v1.5.2 (${APP_VERSION} • ${BUILD_NUMBER})" \
-            --notes "Unsigned iOS build of FullGram v1.5.2 (${APP_VERSION} • ${BUILD_NUMBER}) from commit ${GITHUB_SHA}."
+            --notes "FullGram v1.5.2 (${APP_VERSION} • ${BUILD_NUMBER}) from commit ${GITHUB_SHA}: improved plugin WebView system & HD casino, upgraded Discord cosmetics & NFT Grant Studio, and hardened iOS/Worker security."
