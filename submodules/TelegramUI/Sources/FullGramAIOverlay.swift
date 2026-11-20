@@ -1440,7 +1440,7 @@ final class FullGramAIOverlayCoordinator {
         }
 
         let vc: UIViewController
-        if kind == "webview", let rawUrl = spec["url"] as? String, let url = URL(string: rawUrl), url.scheme?.lowercased() == "https" {
+        if kind == "webview", let rawUrl = spec["url"] as? String, let url = URL(string: rawUrl), FullGramPluginWebViewController.isAllowedURL(url) {
             let webTitle = (spec["title"] as? String) ?? ""
             let webVC = FullGramPluginWebViewController(url: url, title: webTitle, onSendToChat: sendToChat)
             webVC.modalPresentationStyle = .fullScreen
@@ -2227,6 +2227,18 @@ private final class FullGramPluginWebMessageHandler: NSObject, WKScriptMessageHa
 }
 
 private final class FullGramPluginWebViewController: UIViewController {
+    static let allowedHosts: Set<String> = [
+        "fullgram.korsakovx.workers.dev"
+    ]
+
+    static func isAllowedURL(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https",
+              let host = url.host?.lowercased() else {
+            return false
+        }
+        return self.allowedHosts.contains(host)
+    }
+
     private let url: URL
     private let titleText: String
     private let onSendToChat: (String) -> Void
@@ -2294,8 +2306,21 @@ private final class FullGramPluginWebViewController: UIViewController {
         case "close":
             self.dismiss(animated: true)
         case "shareChat":
+            guard let currentURL = self.webView?.url, Self.isAllowedURL(currentURL) else {
+                return
+            }
             if let text = dict["text"] as? String, !text.isEmpty {
-                self.onSendToChat(text)
+                let preview = String(text.prefix(240))
+                let alert = UIAlertController(
+                    title: "Отправить в чат?",
+                    message: preview,
+                    preferredStyle: .alert
+                )
+                alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+                alert.addAction(UIAlertAction(title: "Отправить", style: .default) { [weak self] _ in
+                    self?.onSendToChat(text)
+                })
+                self.present(alert, animated: true)
             }
         case "haptic":
             let kind = (dict["kind"] as? String) ?? "light"

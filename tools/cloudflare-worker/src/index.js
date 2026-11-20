@@ -1020,7 +1020,24 @@ function jsonResponse(data, status = 200, extraHeaders = {}) {
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+      "Referrer-Policy": "no-referrer",
+      "X-Robots-Tag": "noindex, nofollow",
       "Access-Control-Allow-Origin": "*",
+      ...extraHeaders
+    }
+  });
+}
+
+function privateJsonResponse(data, status = 200, extraHeaders = {}) {
+  return new Response(JSON.stringify(data, null, 2), {
+    status,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+      "Referrer-Policy": "no-referrer",
+      "X-Robots-Tag": "noindex, nofollow",
       ...extraHeaders
     }
   });
@@ -1219,7 +1236,7 @@ async function authenticateRequest(request, env) {
       const session = await verifySessionToken(token, env);
       if (session) return session;
     }
-    if (env.ADMIN_TOKEN && env.ALLOW_LEGACY_ADMIN_TOKEN !== "0" && timingSafeEqual(token, env.ADMIN_TOKEN)) {
+    if (env.ADMIN_TOKEN && env.ALLOW_LEGACY_ADMIN_TOKEN === "1" && timingSafeEqual(token, env.ADMIN_TOKEN)) {
       const ownerId = Array.from(getAdminIds(env))[0] || DEFAULT_OWNER_ID;
       return { uid: ownerId, isAdmin: true, method: "legacy_admin_token" };
     }
@@ -1590,11 +1607,12 @@ async function sendTelegramMessage(env, chatId, text) {
 
 async function handleTelegramWebhook(request, env, origin) {
   const expected = await expectedWebhookSecret(env);
-  if (expected) {
-    const provided = request.headers.get("X-Telegram-Bot-Api-Secret-Token") || "";
-    if (!timingSafeEqual(provided, expected)) {
-      return new Response("Forbidden", { status: 403 });
-    }
+  if (!expected) {
+    return new Response("Webhook secret not configured", { status: 500 });
+  }
+  const provided = request.headers.get("X-Telegram-Bot-Api-Secret-Token") || "";
+  if (!timingSafeEqual(provided, expected)) {
+    return new Response("Forbidden", { status: 403 });
   }
 
   let update;
@@ -1611,21 +1629,30 @@ async function handleTelegramWebhook(request, env, origin) {
 
   const senderId = String(msg.from.id);
   const chatId = msg.chat?.id ?? msg.from.id;
+  const isPrivateChat = msg.chat?.type === "private";
   const senderIsAdmin = isAdminUserId(senderId, env);
 
   const rawText = (msg.text || "").trim();
   if (rawText === "/auth" || rawText === "/token" || rawText.startsWith("/auth ")) {
+    if (!isPrivateChat) {
+      await sendTelegramMessage(
+        env,
+        chatId,
+        "🔒 Команду /auth можно использовать только в личных сообщениях с ботом, чтобы токен не попал в общий чат."
+      );
+      return jsonResponse({ ok: true });
+    }
     try {
       const role = senderIsAdmin ? "admin" : "user";
       const issued = await issueSessionToken(senderId, role, env);
       const roleLabel = senderIsAdmin ? "администратора" : "пользователя";
       await sendTelegramMessage(
         env,
-        chatId,
+        msg.from.id,
         `🔐 Подписанный токен ${roleLabel} FullGram (ID ${senderId}, действует 7 дней):\n\n${issued.token}\n\nСкопируйте и вставьте его в настройках FullGram.`
       );
     } catch (err) {
-      await sendTelegramMessage(env, chatId, `❌ Не удалось выдать токен: ${err.message}`);
+      await sendTelegramMessage(env, msg.from.id, `❌ Не удалось выдать токен: ${err.message}`);
     }
     return jsonResponse({ ok: true });
   }
@@ -1845,11 +1872,11 @@ export default {
     }
 
     if (request.method === "GET" && path === "/badges.json") {
-      return jsonResponse(await loadBadges(env));
+      return privateJsonResponse(await loadBadges(env));
     }
 
     if (request.method === "GET" && path === "/cosmetics.json") {
-      return jsonResponse(await loadCosmetics(env));
+      return privateJsonResponse(await loadCosmetics(env));
     }
 
     if (request.method === "GET" && path === "/discord-cosmetics.json") {
@@ -1886,7 +1913,7 @@ export default {
     }
 
     if (request.method === "GET" && path === "/nfts.json") {
-      return jsonResponse(await loadNfts(env));
+      return privateJsonResponse(await loadNfts(env));
     }
 
     if (request.method === "POST" && path === "/decorations/batch") {
