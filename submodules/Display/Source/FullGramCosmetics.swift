@@ -68,6 +68,8 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
     private var localCache: [Int64: FullGramUserCosmetics] = [:]
     private var remoteUsers: [Int64: FullGramUserCosmetics] = [:]
     private var isRefreshing = false
+    private var pushWorkItem: DispatchWorkItem?
+    private var pushGeneration: Int = 0
 
     private static let session: URLSession = {
         let cfg = URLSessionConfiguration.default
@@ -224,8 +226,25 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
     }
 
     private func pushToCloud(peerId: Int64, entry: FullGramUserCosmetics) {
-        guard let url = URL(string: Self.updateEndpointURL) else { return }
         let norm = Self.normalizedPeerId(peerId)
+        self.lock.lock()
+        self.pushWorkItem?.cancel()
+        self.pushGeneration &+= 1
+        let gen = self.pushGeneration
+        let item = DispatchWorkItem { [weak self] in
+            self?.performPushToCloud(peerId: norm, entry: entry, generation: gen)
+        }
+        self.pushWorkItem = item
+        self.lock.unlock()
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.65, execute: item)
+    }
+
+    private func performPushToCloud(peerId norm: Int64, entry: FullGramUserCosmetics, generation: Int) {
+        self.lock.lock()
+        let isLatest = (self.pushGeneration == generation)
+        self.lock.unlock()
+        guard isLatest, let url = URL(string: Self.updateEndpointURL) else { return }
+
         let cloudFrameId = (entry.frameId == "custom_local") ? "" : (entry.frameId ?? "")
         let body: [String: Any] = [
             "peerId": String(norm),
@@ -242,10 +261,9 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
         req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
         _ = FullGramAdmin.shared.applyAuthHeaders(to: &req)
         req.httpBody = data
-        Self.session.dataTask(with: req) { [weak self] _, response, _ in
+        Self.session.dataTask(with: req) { _, response, _ in
             if let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) {
-                UserDefaults.standard.set(0.0, forKey: Self.lastSyncKey)
-                self?.refreshNow(completion: nil)
+                UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastSyncKey)
             }
         }.resume()
     }
@@ -420,18 +438,18 @@ public enum FullGramNicknameStyle {
     }
 }
 
-// MARK: - Анимация удаления сообщения (скомканный лист бумаги -> в мусорку)
+// MARK: - Анимация удаления сообщения (скомканный лист бумаги -> в мусорку, редизайн v1.5.5)
 
 public enum FullGramPaperTrashAnimator {
     @MainActor
     public static func animateDelete(snapshots: [(view: UIView, frameInHost: CGRect)], in hostView: UIView) {
         guard !snapshots.isEmpty else { return }
 
-        let binSize = CGSize(width: 64.0, height: 74.0)
+        let binSize = CGSize(width: 108.0, height: 122.0)
         let safeBottom = hostView.safeAreaInsets.bottom
         let binCenter = CGPoint(
             x: hostView.bounds.midX,
-            y: hostView.bounds.height - safeBottom - 86.0
+            y: hostView.bounds.height - safeBottom - 104.0
         )
 
         let binView = FullGramTrashBinView(frame: CGRect(
@@ -441,89 +459,114 @@ public enum FullGramPaperTrashAnimator {
             height: binSize.height
         ))
         binView.alpha = 0.0
-        binView.transform = CGAffineTransform(translationX: 0.0, y: 28.0).scaledBy(x: 0.72, y: 0.72)
+        binView.transform = CGAffineTransform(translationX: 0.0, y: 44.0).scaledBy(x: 0.65, y: 0.65)
         hostView.addSubview(binView)
 
-        UIView.animate(withDuration: 0.24, delay: 0.0, usingSpringWithDamping: 0.72, initialSpringVelocity: 0.5, options: [.allowUserInteraction]) {
+        let haptic = UIImpactFeedbackGenerator(style: .medium)
+        haptic.prepare()
+
+        UIView.animate(withDuration: 0.28, delay: 0.0, usingSpringWithDamping: 0.68, initialSpringVelocity: 0.6, options: [.allowUserInteraction]) {
             binView.alpha = 1.0
             binView.transform = .identity
         }
-        binView.setLidOpen(true, delay: 0.06)
+        binView.setLidOpen(true, delay: 0.05)
 
-        for (idx, item) in snapshots.prefix(4).enumerated() {
-            let delay = Double(idx) * 0.06
+        let batch = Array(snapshots.prefix(5))
+        for (idx, item) in batch.enumerated() {
+            let delay = Double(idx) * 0.065
             let snapshot = item.view
             snapshot.frame = item.frameInHost
-            snapshot.layer.cornerRadius = 14.0
+            snapshot.layer.cornerRadius = 16.0
             snapshot.clipsToBounds = true
             hostView.addSubview(snapshot)
 
-            let paperBall = FullGramCrumpledPaperBallView(frame: CGRect(x: 0.0, y: 0.0, width: 32.0, height: 32.0))
+            let ballSide: CGFloat = 56.0
+            let paperBall = FullGramCrumpledPaperBallView(frame: CGRect(x: 0.0, y: 0.0, width: ballSide, height: ballSide))
             paperBall.center = CGPoint(x: item.frameInHost.midX, y: item.frameInHost.midY)
             paperBall.alpha = 0.0
-            paperBall.transform = CGAffineTransform(scaleX: 1.35, y: 1.35)
+            paperBall.transform = CGAffineTransform(scaleX: 1.45, y: 1.45).rotated(by: idx % 2 == 0 ? -0.35 : 0.35)
             hostView.addSubview(paperBall)
 
-            // Phase 1: Crumple snapshot into paper ball
-            UIView.animate(withDuration: 0.22, delay: delay, options: [.curveEaseIn]) {
-                snapshot.transform = CGAffineTransform(scaleX: 0.18, y: 0.16).rotated(by: idx % 2 == 0 ? 0.35 : -0.35)
+            // Phase 1: Crumple message bubble into a large 3D-faceted paper ball
+            UIView.animate(withDuration: 0.22, delay: delay, options: [.curveEaseInOut]) {
+                snapshot.transform = CGAffineTransform(scaleX: 0.16, y: 0.14).rotated(by: idx % 2 == 0 ? 0.42 : -0.42)
                 snapshot.alpha = 0.0
                 paperBall.alpha = 1.0
-                paperBall.transform = CGAffineTransform(rotationAngle: 0.5)
+                paperBall.transform = CGAffineTransform(scaleX: 1.08, y: 1.08).rotated(by: idx % 2 == 0 ? 0.45 : -0.45)
             } completion: { _ in
                 snapshot.removeFromSuperview()
             }
 
-            // Phase 2: Parabolic throw of crumpled paper ball into open trash bin
+            // Phase 2: High parabolic toss into the open trash bin mouth
             let startPt = paperBall.center
-            let endPt = CGPoint(x: binCenter.x, y: binCenter.y - 6.0)
+            let endPt = CGPoint(x: binCenter.x + CGFloat(idx % 3 - 1) * 4.0, y: binCenter.y - 12.0)
+            let horizontalBias: CGFloat = (startPt.x < binCenter.x ? 34.0 : -34.0) + (idx % 2 == 0 ? 14.0 : -14.0)
+            let arcHeight: CGFloat = max(110.0, min(180.0, abs(startPt.y - endPt.y) * 0.35 + 95.0))
             let ctrlPt = CGPoint(
-                x: (startPt.x + endPt.x) * 0.5 + (idx % 2 == 0 ? 28.0 : -28.0),
-                y: min(startPt.y, endPt.y) - 90.0
+                x: (startPt.x + endPt.x) * 0.5 + horizontalBias,
+                y: min(startPt.y, endPt.y) - arcHeight
             )
             let arcPath = UIBezierPath()
             arcPath.move(to: startPt)
             arcPath.addQuadCurve(to: endPt, controlPoint: ctrlPt)
 
+            let throwStart = CACurrentMediaTime() + delay + 0.19
+            let throwDuration: Double = 0.42
+
             let posAnim = CAKeyframeAnimation(keyPath: "position")
             posAnim.path = arcPath.cgPath
-            posAnim.duration = 0.36
-            posAnim.beginTime = CACurrentMediaTime() + delay + 0.18
-            posAnim.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            posAnim.duration = throwDuration
+            posAnim.beginTime = throwStart
+            posAnim.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 0.08, 0.72, 1.0)
             posAnim.fillMode = .forwards
             posAnim.isRemovedOnCompletion = false
             paperBall.layer.add(posAnim, forKey: "fg.throw")
 
             let rotAnim = CABasicAnimation(keyPath: "transform.rotation.z")
-            rotAnim.fromValue = 0.5
-            rotAnim.toValue = Double.pi * (idx % 2 == 0 ? 3.2 : -3.2)
-            rotAnim.duration = 0.36
-            rotAnim.beginTime = CACurrentMediaTime() + delay + 0.18
+            rotAnim.fromValue = idx % 2 == 0 ? 0.45 : -0.45
+            rotAnim.toValue = Double.pi * (idx % 2 == 0 ? 3.8 : -3.8)
+            rotAnim.duration = throwDuration
+            rotAnim.beginTime = throwStart
             paperBall.layer.add(rotAnim, forKey: "fg.spin")
 
-            UIView.animate(withDuration: 0.14, delay: delay + 0.44, options: [.curveEaseIn]) {
-                paperBall.transform = CGAffineTransform(scaleX: 0.45, y: 0.45)
+            let scaleAnim = CAKeyframeAnimation(keyPath: "transform.scale")
+            scaleAnim.values = [1.08, 1.24, 0.92, 0.48]
+            scaleAnim.keyTimes = [0.0, 0.42, 0.82, 1.0]
+            scaleAnim.duration = throwDuration
+            scaleAnim.beginTime = throwStart
+            scaleAnim.fillMode = .forwards
+            scaleAnim.isRemovedOnCompletion = false
+            paperBall.layer.add(scaleAnim, forKey: "fg.scale")
+
+            UIView.animate(withDuration: 0.12, delay: delay + 0.19 + throwDuration - 0.10, options: [.curveEaseIn]) {
                 paperBall.alpha = 0.0
             } completion: { _ in
                 paperBall.removeFromSuperview()
             }
+
+            // Impact squash & dust puff when each paper ball lands in the bin
+            let impactDelay = delay + 0.19 + throwDuration - 0.04
+            Task { @MainActor [weak binView] in
+                try? await Task.sleep(nanoseconds: UInt64(impactDelay * 1_000_000_000))
+                guard let binView else { return }
+                if idx == 0 || idx == batch.count - 1 {
+                    haptic.impactOccurred(intensity: 0.75)
+                }
+                binView.pulseImpact()
+            }
         }
 
-        let finishDelay = Double(min(snapshots.count, 4)) * 0.06 + 0.56
-        binView.setLidOpen(false, delay: finishDelay - 0.10)
+        let finishDelay = Double(batch.count) * 0.065 + 0.64
+        binView.setLidOpen(false, delay: finishDelay - 0.06)
 
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64((finishDelay + 0.06) * 1_000_000_000))
-            UIView.animate(withDuration: 0.16, animations: {
-                binView.transform = CGAffineTransform(scaleX: 1.08, y: 0.92)
-            }, completion: { _ in
-                UIView.animate(withDuration: 0.22, delay: 0.12, animations: {
-                    binView.alpha = 0.0
-                    binView.transform = CGAffineTransform(translationX: 0.0, y: 24.0).scaledBy(x: 0.8, y: 0.8)
-                }, completion: { _ in
-                    binView.removeFromSuperview()
-                })
-            })
+            try? await Task.sleep(nanoseconds: UInt64((finishDelay + 0.16) * 1_000_000_000))
+            UIView.animate(withDuration: 0.24, delay: 0.0, options: [.curveEaseIn]) {
+                binView.alpha = 0.0
+                binView.transform = CGAffineTransform(translationX: 0.0, y: 36.0).scaledBy(x: 0.76, y: 0.76)
+            } completion: { _ in
+                binView.removeFromSuperview()
+            }
         }
     }
 }
@@ -534,39 +577,91 @@ private final class FullGramCrumpledPaperBallView: UIView {
         self.backgroundColor = .clear
         self.isUserInteractionEnabled = false
 
-        let body = CAShapeLayer()
-        let path = UIBezierPath()
-        path.move(to: CGPoint(x: 16, y: 2))
-        path.addLine(to: CGPoint(x: 26, y: 6))
-        path.addLine(to: CGPoint(x: 30, y: 15))
-        path.addLine(to: CGPoint(x: 25, y: 26))
-        path.addLine(to: CGPoint(x: 15, y: 30))
-        path.addLine(to: CGPoint(x: 6, y: 26))
-        path.addLine(to: CGPoint(x: 2, y: 16))
-        path.addLine(to: CGPoint(x: 7, y: 6))
-        path.close()
-        body.path = path.cgPath
-        body.fillColor = UIColor(white: 0.95, alpha: 1.0).cgColor
-        body.strokeColor = UIColor(white: 0.72, alpha: 1.0).cgColor
-        body.lineWidth = 1.2
-        body.shadowColor = UIColor.black.cgColor
-        body.shadowOpacity = 0.25
-        body.shadowRadius = 4.0
-        body.shadowOffset = CGSize(width: 0.0, height: 2.0)
-        self.layer.addSublayer(body)
+        let s = min(frame.width, frame.height) / 56.0
+        func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            return CGPoint(x: x * s, y: y * s)
+        }
 
+        // Outer irregular crumpled silhouette
+        let outerPath = UIBezierPath()
+        outerPath.move(to: pt(28, 3))
+        outerPath.addLine(to: pt(41, 7))
+        outerPath.addLine(to: pt(51, 17))
+        outerPath.addLine(to: pt(53, 31))
+        outerPath.addLine(to: pt(46, 44))
+        outerPath.addLine(to: pt(34, 52))
+        outerPath.addLine(to: pt(19, 51))
+        outerPath.addLine(to: pt(8, 43))
+        outerPath.addLine(to: pt(3, 29))
+        outerPath.addLine(to: pt(8, 14))
+        outerPath.addLine(to: pt(18, 6))
+        outerPath.close()
+
+        let baseLayer = CAShapeLayer()
+        baseLayer.path = outerPath.cgPath
+        baseLayer.fillColor = UIColor(rgb: 0xF5F6FA).cgColor
+        baseLayer.strokeColor = UIColor(rgb: 0xB8C0CC).cgColor
+        baseLayer.lineWidth = 1.5 * s
+        baseLayer.lineJoin = .round
+        baseLayer.shadowColor = UIColor.black.cgColor
+        baseLayer.shadowOpacity = 0.32
+        baseLayer.shadowRadius = 7.0 * s
+        baseLayer.shadowOffset = CGSize(width: 0.0, height: 3.5 * s)
+        self.layer.addSublayer(baseLayer)
+
+        // Shaded origami facets for 3D crumpled paper depth
+        func addFacet(_ points: [CGPoint], color: UIColor) {
+            let p = UIBezierPath()
+            guard let first = points.first else { return }
+            p.move(to: first)
+            for next in points.dropFirst() { p.addLine(to: next) }
+            p.close()
+            let layer = CAShapeLayer()
+            layer.path = p.cgPath
+            layer.fillColor = color.cgColor
+            self.layer.addSublayer(layer)
+        }
+
+        // Bright top-left highlight facet
+        addFacet([pt(28, 3), pt(41, 7), pt(31, 21), pt(18, 17), pt(18, 6)], color: UIColor(white: 1.0, alpha: 0.95))
+        // Mid-tone right facet
+        addFacet([pt(41, 7), pt(51, 17), pt(53, 31), pt(35, 30), pt(31, 21)], color: UIColor(rgb: 0xE6EAF2))
+        // Deeper bottom-right shadow facet
+        addFacet([pt(53, 31), pt(46, 44), pt(34, 52), pt(27, 37), pt(35, 30)], color: UIColor(rgb: 0xCFD6E2))
+        // Lower-left shadow facet
+        addFacet([pt(34, 52), pt(19, 51), pt(8, 43), pt(17, 32), pt(27, 37)], color: UIColor(rgb: 0xDCE1EB))
+        // Left mid facet
+        addFacet([pt(8, 43), pt(3, 29), pt(8, 14), pt(18, 17), pt(17, 32)], color: UIColor(rgb: 0xECEFF5))
+        // Center crumpled pocket
+        addFacet([pt(18, 17), pt(31, 21), pt(35, 30), pt(27, 37), pt(17, 32)], color: UIColor(rgb: 0xF9FAFC))
+
+        // Crisp paper fold creases + tiny faux text scribbles
         let creases = CAShapeLayer()
         let cPath = UIBezierPath()
-        cPath.move(to: CGPoint(x: 7, y: 6)); cPath.addLine(to: CGPoint(x: 17, y: 16)); cPath.addLine(to: CGPoint(x: 25, y: 26))
-        cPath.move(to: CGPoint(x: 26, y: 6)); cPath.addLine(to: CGPoint(x: 14, y: 14)); cPath.addLine(to: CGPoint(x: 6, y: 26))
-        cPath.move(to: CGPoint(x: 2, y: 16)); cPath.addLine(to: CGPoint(x: 18, y: 19)); cPath.addLine(to: CGPoint(x: 30, y: 15))
+        cPath.move(to: pt(18, 6)); cPath.addLine(to: pt(18, 17)); cPath.addLine(to: pt(31, 21)); cPath.addLine(to: pt(41, 7))
+        cPath.move(to: pt(8, 14)); cPath.addLine(to: pt(18, 17)); cPath.addLine(to: pt(17, 32)); cPath.addLine(to: pt(8, 43))
+        cPath.move(to: pt(31, 21)); cPath.addLine(to: pt(35, 30)); cPath.addLine(to: pt(53, 31))
+        cPath.move(to: pt(17, 32)); cPath.addLine(to: pt(27, 37)); cPath.addLine(to: pt(35, 30))
+        cPath.move(to: pt(27, 37)); cPath.addLine(to: pt(34, 52))
+        cPath.move(to: pt(18, 17)); cPath.addLine(to: pt(27, 37))
         creases.path = cPath.cgPath
         creases.fillColor = nil
-        creases.strokeColor = UIColor(white: 0.62, alpha: 0.9).cgColor
-        creases.lineWidth = 1.0
+        creases.strokeColor = UIColor(rgb: 0x9AA4B4, alpha: 0.85).cgColor
+        creases.lineWidth = 1.25 * s
         creases.lineCap = .round
         creases.lineJoin = .round
         self.layer.addSublayer(creases)
+
+        // Subtle ink lines hinting at deleted chat text on the paper
+        let inkLines = CAShapeLayer()
+        let iPath = UIBezierPath()
+        iPath.move(to: pt(21, 23)); iPath.addLine(to: pt(29, 25))
+        iPath.move(to: pt(20, 28)); iPath.addLine(to: pt(31, 30))
+        inkLines.path = iPath.cgPath
+        inkLines.strokeColor = UIColor(rgb: 0x6B778C, alpha: 0.45).cgColor
+        inkLines.lineWidth = 1.4 * s
+        inkLines.lineCap = .round
+        self.layer.addSublayer(inkLines)
     }
 
     @available(*, unavailable)
@@ -576,55 +671,144 @@ private final class FullGramCrumpledPaperBallView: UIView {
 }
 
 private final class FullGramTrashBinView: UIView {
+    private let containerView = UIView()
     private let lidLayer = CAShapeLayer()
+    private let glowLayer = CAShapeLayer()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         self.isUserInteractionEnabled = false
 
-        let backdrop = UIView(frame: CGRect(x: 2, y: 8, width: frame.width - 4, height: frame.height - 8))
-        backdrop.backgroundColor = UIColor(white: 0.10, alpha: 0.82)
-        backdrop.layer.cornerRadius = 18.0
-        backdrop.layer.borderWidth = 0.5
-        backdrop.layer.borderColor = UIColor(white: 1.0, alpha: 0.16).cgColor
-        self.addSubview(backdrop)
+        let w = frame.width
+        let h = frame.height
+        self.containerView.frame = self.bounds
+        self.containerView.isUserInteractionEnabled = false
+        self.addSubview(self.containerView)
 
-        // Bin body
-        let bodyLayer = CAShapeLayer()
-        let bPath = UIBezierPath()
-        bPath.move(to: CGPoint(x: 16, y: 27))
-        bPath.addLine(to: CGPoint(x: 48, y: 27))
-        bPath.addLine(to: CGPoint(x: 44, y: 62))
-        bPath.addQuadCurve(to: CGPoint(x: 40, y: 65), controlPoint: CGPoint(x: 44, y: 65))
-        bPath.addLine(to: CGPoint(x: 24, y: 65))
-        bPath.addQuadCurve(to: CGPoint(x: 20, y: 62), controlPoint: CGPoint(x: 20, y: 65))
-        bPath.close()
-        bodyLayer.path = bPath.cgPath
-        bodyLayer.fillColor = UIColor(rgb: 0xFF3B30).withAlphaComponent(0.92).cgColor
-        self.layer.addSublayer(bodyLayer)
+        // Frosted glass circular-squircle badge backdrop
+        let cardRect = CGRect(x: 4.0, y: 12.0, width: w - 8.0, height: h - 12.0)
+        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterialDark))
+        blur.frame = cardRect
+        blur.layer.cornerRadius = 28.0
+        blur.clipsToBounds = true
+        blur.layer.borderWidth = 1.0
+        blur.layer.borderColor = UIColor(white: 1.0, alpha: 0.18).cgColor
+        self.containerView.addSubview(blur)
 
-        // Vertical ribs
-        let ribs = CAShapeLayer()
-        let rPath = UIBezierPath()
-        for x in [26.0, 32.0, 38.0] {
-            rPath.move(to: CGPoint(x: x, y: 34))
-            rPath.addLine(to: CGPoint(x: x, y: 58))
+        // Soft outer shadow
+        let shadowHost = UIView(frame: cardRect)
+        shadowHost.backgroundColor = .clear
+        shadowHost.layer.shadowColor = UIColor.black.cgColor
+        shadowHost.layer.shadowOpacity = 0.42
+        shadowHost.layer.shadowRadius = 18.0
+        shadowHost.layer.shadowOffset = CGSize(width: 0.0, height: 8.0)
+        shadowHost.layer.shadowPath = UIBezierPath(roundedRect: shadowHost.bounds, cornerRadius: 28.0).cgPath
+        self.containerView.insertSubview(shadowHost, belowSubview: blur)
+
+        // Subtle crimson ambient glow behind bin
+        self.glowLayer.path = UIBezierPath(ovalIn: CGRect(x: w * 0.18, y: h * 0.28, width: w * 0.64, height: h * 0.56)).cgPath
+        self.glowLayer.fillColor = UIColor(rgb: 0xFF3B30, alpha: 0.24).cgColor
+        self.glowLayer.shadowColor = UIColor(rgb: 0xFF3B30).cgColor
+        self.glowLayer.shadowRadius = 16.0
+        self.glowLayer.shadowOpacity = 0.7
+        self.glowLayer.shadowOffset = .zero
+        self.containerView.layer.addSublayer(self.glowLayer)
+
+        // Dark interior mouth (visible when lid opens)
+        let mouthLayer = CAShapeLayer()
+        mouthLayer.path = UIBezierPath(ovalIn: CGRect(x: w * 0.23, y: h * 0.34, width: w * 0.54, height: 12.0)).cgPath
+        mouthLayer.fillColor = UIColor(rgb: 0x4A0E0C).cgColor
+        self.containerView.layer.addSublayer(mouthLayer)
+
+        // Tapered bin body with gradient fill
+        let bodyPath = UIBezierPath()
+        let topLeft = CGPoint(x: w * 0.22, y: h * 0.38)
+        let topRight = CGPoint(x: w * 0.78, y: h * 0.38)
+        let botRight = CGPoint(x: w * 0.71, y: h * 0.85)
+        let botLeft = CGPoint(x: w * 0.29, y: h * 0.85)
+        bodyPath.move(to: topLeft)
+        bodyPath.addLine(to: topRight)
+        bodyPath.addLine(to: CGPoint(x: botRight.x + 1.0, y: botRight.y - 6.0))
+        bodyPath.addQuadCurve(to: CGPoint(x: botRight.x - 8.0, y: botRight.y + 2.0), controlPoint: CGPoint(x: botRight.x, y: botRight.y + 2.0))
+        bodyPath.addLine(to: CGPoint(x: botLeft.x + 8.0, y: botLeft.y + 2.0))
+        bodyPath.addQuadCurve(to: CGPoint(x: botLeft.x - 1.0, y: botLeft.y - 6.0), controlPoint: CGPoint(x: botLeft.x, y: botLeft.y + 2.0))
+        bodyPath.close()
+
+        let bodyMask = CAShapeLayer()
+        bodyMask.path = bodyPath.cgPath
+        let bodyGradient = CAGradientLayer()
+        bodyGradient.frame = self.bounds
+        bodyGradient.colors = [
+            UIColor(rgb: 0xFF5247).cgColor,
+            UIColor(rgb: 0xE52521).cgColor,
+            UIColor(rgb: 0xB81818).cgColor
+        ]
+        bodyGradient.startPoint = CGPoint(x: 0.2, y: 0.35)
+        bodyGradient.endPoint = CGPoint(x: 0.85, y: 0.90)
+        bodyGradient.mask = bodyMask
+        self.containerView.layer.addSublayer(bodyGradient)
+
+        // Top metallic rim highlight on body
+        let rimLayer = CAShapeLayer()
+        let rimPath = UIBezierPath()
+        rimPath.move(to: CGPoint(x: topLeft.x + 1.0, y: topLeft.y + 1.0))
+        rimPath.addLine(to: CGPoint(x: topRight.x - 1.0, y: topRight.y + 1.0))
+        rimLayer.path = rimPath.cgPath
+        rimLayer.strokeColor = UIColor(white: 1.0, alpha: 0.42).cgColor
+        rimLayer.lineWidth = 2.0
+        rimLayer.lineCap = .round
+        self.containerView.layer.addSublayer(rimLayer)
+
+        // 3 sculpted vertical ribs (dark groove + bright edge)
+        let ribShadow = CAShapeLayer()
+        let ribLight = CAShapeLayer()
+        let rsPath = UIBezierPath()
+        let rlPath = UIBezierPath()
+        let ribConfigs: [(CGFloat, CGFloat)] = [
+            (w * 0.38, w * 0.40),
+            (w * 0.50, w * 0.50),
+            (w * 0.62, w * 0.60)
+        ]
+        for (topX, botX) in ribConfigs {
+            rsPath.move(to: CGPoint(x: topX, y: h * 0.47))
+            rsPath.addLine(to: CGPoint(x: botX, y: h * 0.78))
+            rlPath.move(to: CGPoint(x: topX + 1.5, y: h * 0.47))
+            rlPath.addLine(to: CGPoint(x: botX + 1.5, y: h * 0.78))
         }
-        ribs.path = rPath.cgPath
-        ribs.strokeColor = UIColor.white.withAlphaComponent(0.65).cgColor
-        ribs.lineWidth = 2.0
-        ribs.lineCap = .round
-        self.layer.addSublayer(ribs)
+        ribShadow.path = rsPath.cgPath
+        ribShadow.strokeColor = UIColor(rgb: 0x7A0C0C, alpha: 0.55).cgColor
+        ribShadow.lineWidth = 3.2
+        ribShadow.lineCap = .round
+        self.containerView.layer.addSublayer(ribShadow)
 
-        // Hinged lid
-        self.lidLayer.frame = CGRect(x: 12, y: 15, width: 40, height: 12)
+        ribLight.path = rlPath.cgPath
+        ribLight.strokeColor = UIColor(white: 1.0, alpha: 0.50).cgColor
+        ribLight.lineWidth = 2.0
+        ribLight.lineCap = .round
+        self.containerView.layer.addSublayer(ribLight)
+
+        // Hinged 3D lid with arched handle
+        let lidW = w * 0.64
+        let lidH: CGFloat = 20.0
+        let lidX = (w - lidW) * 0.5
+        let lidY = h * 0.38 - lidH + 2.0
+        self.lidLayer.frame = CGRect(x: lidX, y: lidY, width: lidW, height: lidH)
         self.lidLayer.anchorPoint = CGPoint(x: 0.08, y: 0.85)
-        self.lidLayer.position = CGPoint(x: 12 + 40 * 0.08, y: 15 + 12 * 0.85)
-        let lPath = UIBezierPath(roundedRect: CGRect(x: 0, y: 5, width: 40, height: 5), cornerRadius: 2.5)
-        lPath.append(UIBezierPath(roundedRect: CGRect(x: 14, y: 1, width: 12, height: 4), cornerRadius: 2.0))
-        self.lidLayer.path = lPath.cgPath
-        self.lidLayer.fillColor = UIColor(rgb: 0xFF6961).cgColor
-        self.layer.addSublayer(self.lidLayer)
+        self.lidLayer.position = CGPoint(x: lidX + lidW * 0.08, y: lidY + lidH * 0.85)
+
+        let lidPath = UIBezierPath(roundedRect: CGRect(x: 0.0, y: 9.0, width: lidW, height: 8.5), cornerRadius: 4.25)
+        let handleW: CGFloat = 22.0
+        let handleRect = CGRect(x: (lidW - handleW) * 0.5, y: 2.0, width: handleW, height: 8.0)
+        lidPath.append(UIBezierPath(roundedRect: handleRect, cornerRadius: 4.0))
+        self.lidLayer.path = lidPath.cgPath
+        self.lidLayer.fillColor = UIColor(rgb: 0xFF6B63).cgColor
+        self.lidLayer.strokeColor = UIColor(white: 1.0, alpha: 0.28).cgColor
+        self.lidLayer.lineWidth = 1.0
+        self.lidLayer.shadowColor = UIColor.black.cgColor
+        self.lidLayer.shadowOpacity = 0.28
+        self.lidLayer.shadowRadius = 4.0
+        self.lidLayer.shadowOffset = CGSize(width: 0.0, height: 2.0)
+        self.containerView.layer.addSublayer(self.lidLayer)
     }
 
     @available(*, unavailable)
@@ -633,7 +817,7 @@ private final class FullGramTrashBinView: UIView {
     }
 
     func setLidOpen(_ open: Bool, delay: TimeInterval) {
-        let angle: CGFloat = open ? -0.68 : 0.0
+        let angle: CGFloat = open ? -0.84 : 0.0
         Task { @MainActor [weak self] in
             if delay > 0 {
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -641,12 +825,42 @@ private final class FullGramTrashBinView: UIView {
             guard let self else { return }
             let anim = CASpringAnimation(keyPath: "transform.rotation.z")
             anim.toValue = angle
-            anim.damping = 10.0
-            anim.stiffness = 180.0
+            anim.damping = 9.5
+            anim.stiffness = 190.0
             anim.duration = anim.settlingDuration
             anim.fillMode = .forwards
             anim.isRemovedOnCompletion = false
             self.lidLayer.add(anim, forKey: "fg.lid")
+        }
+    }
+
+    func pulseImpact() {
+        UIView.animate(withDuration: 0.11, animations: {
+            self.containerView.transform = CGAffineTransform(scaleX: 1.12, y: 0.88).translatedBy(x: 0.0, y: 4.0)
+        }, completion: { _ in
+            UIView.animate(withDuration: 0.24, delay: 0.0, usingSpringWithDamping: 0.55, initialSpringVelocity: 0.8, options: [.allowUserInteraction]) {
+                self.containerView.transform = .identity
+            }
+        })
+
+        // Emit subtle white paper-dust puffs from bin mouth
+        let origin = CGPoint(x: self.bounds.midX, y: self.bounds.height * 0.36)
+        for i in 0 ..< 5 {
+            let puff = UIView(frame: CGRect(x: 0, y: 0, width: 7.0, height: 7.0))
+            puff.center = origin
+            puff.backgroundColor = UIColor(white: 1.0, alpha: 0.85)
+            puff.layer.cornerRadius = 3.5
+            puff.isUserInteractionEnabled = false
+            self.addSubview(puff)
+            let angle = -CGFloat.pi * (0.2 + CGFloat(i) * 0.15)
+            let dist: CGFloat = 24.0 + CGFloat(i % 2) * 12.0
+            UIView.animate(withDuration: 0.32, delay: 0.0, options: [.curveEaseOut]) {
+                puff.center = CGPoint(x: origin.x + cos(angle) * dist, y: origin.y + sin(angle) * dist)
+                puff.transform = CGAffineTransform(scaleX: 0.25, y: 0.25)
+                puff.alpha = 0.0
+            } completion: { _ in
+                puff.removeFromSuperview()
+            }
         }
     }
 }

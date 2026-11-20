@@ -234,6 +234,21 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
         return !self.gifts(forPeerId: peerId).isEmpty
     }
 
+    public func findBySlug(_ slug: String) -> (peerId: Int64, nft: FullGramGrantedNFT)? {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        for (peerId, list) in self.usersById {
+            for item in list {
+                guard let gid = item.numericGiftId else { continue }
+                let expectedSlug = "FullGram-\(gid)-\(item.number)"
+                if expectedSlug.caseInsensitiveCompare(slug) == .orderedSame {
+                    return (peerId, item)
+                }
+            }
+        }
+        return nil
+    }
+
     public func refreshIfNeeded(maxAge: TimeInterval = 45.0) {
         let last = UserDefaults.standard.double(forKey: Self.lastSyncKey)
         if Date().timeIntervalSince1970 - last < maxAge {
@@ -444,5 +459,50 @@ func fullGramGrantedGiftsSignal(
             }
             return result
         }
+    }
+}
+
+func fullGramResolveUniqueGift(
+    account: Account,
+    slug: String
+) -> Signal<StarGift.UniqueGift, GetUniqueStarGiftError> {
+    let matched = FullGramGrantedNFTStore.shared.findBySlug(slug)
+    let resolvedItem: FullGramGrantedNFT
+    let ownerPeerId: EnginePeer.Id
+    if let matched {
+        resolvedItem = matched.nft
+        ownerPeerId = EnginePeer.Id(namespace: Namespaces.Peer.CloudUser, id: EnginePeer.Id.Id._internalFromInt64Value(matched.peerId))
+    } else {
+        // Fallback: parse "FullGram-<giftId>-<number>" directly
+        let parts = slug.split(separator: "-")
+        guard parts.count >= 3,
+              let gid = Int64(parts[1]),
+              let num = Int32(parts[2]) else {
+            return .fail(.invalidSlug)
+        }
+        resolvedItem = FullGramGrantedNFT(
+            id: slug,
+            giftId: String(gid),
+            title: "NFT",
+            modelName: "",
+            backdropName: "",
+            backdropId: nil,
+            patternName: "",
+            number: num
+        )
+        ownerPeerId = account.peerId
+    }
+    guard let gid = resolvedItem.numericGiftId else {
+        return .fail(.invalidSlug)
+    }
+    return _internal_getStarGiftUpgradeAttributes(account: account, giftId: gid)
+    |> take(1)
+    |> castError(GetUniqueStarGiftError.self)
+    |> mapToSignal { attrs -> Signal<StarGift.UniqueGift, GetUniqueStarGiftError> in
+        guard let attrs, !attrs.isEmpty,
+              let unique = fullGramBuildUniqueGift(item: resolvedItem, ownerPeerId: ownerPeerId, attributes: attrs) else {
+            return .fail(.invalidSlug)
+        }
+        return .single(unique)
     }
 }

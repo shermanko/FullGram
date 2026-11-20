@@ -1210,9 +1210,10 @@ public class VideoMessageCameraScreen: ViewController {
                 guard let self else {
                     return
                 }
+                let positionChanged = self.cameraState.position != position
                 self.cameraState = self.cameraState.updatedPosition(position).updatedFlashMode(flashMode)
                 
-                if !self.cameraState.isDualCameraEnabled {
+                if positionChanged && !self.cameraState.isDualCameraEnabled {
                     self.animatePositionChange()
                 }
                 
@@ -1299,18 +1300,21 @@ public class VideoMessageCameraScreen: ViewController {
         
         private func animatePositionChange() {
             if let snapshotView = self.mainPreviewView.snapshotView(afterScreenUpdates: false) {
+                self.previewSnapshotView?.removeFromSuperview()
                 self.previewContainerContentView.insertSubview(snapshotView, belowSubview: self.progressView)
                 self.previewSnapshotView = snapshotView
                 
-                let action = { [weak self] in
-                    guard let self else {
+                let action = { [weak self, weak snapshotView] in
+                    guard let self, let snapshotView else {
                         return
                     }
                     UIView.animate(withDuration: 0.2, animations: {
-                        self.previewSnapshotView?.alpha = 0.0
-                    }, completion: { [weak self] _ in
-                        self?.previewSnapshotView?.removeFromSuperview()
-                        self?.previewSnapshotView = nil
+                        snapshotView.alpha = 0.0
+                    }, completion: { [weak self, weak snapshotView] _ in
+                        snapshotView?.removeFromSuperview()
+                        if let self, self.previewSnapshotView === snapshotView {
+                            self.previewSnapshotView = nil
+                        }
                     })
                 }
                 

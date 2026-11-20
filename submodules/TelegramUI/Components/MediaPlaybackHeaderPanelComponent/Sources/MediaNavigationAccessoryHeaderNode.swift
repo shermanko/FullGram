@@ -25,6 +25,7 @@ private func normalizeValue(_ value: CGFloat) -> CGFloat {
 private class MediaHeaderItemNode: ASDisplayNode {
     private let titleNode: TextNode
     private let subtitleNode: TextNode
+    var fullGramLyricLine: String?
     
     override init() {
         self.titleNode = TextNode()
@@ -50,8 +51,12 @@ private class MediaHeaderItemNode: ASDisplayNode {
             switch displayData {
                 case let .music(title, performer, _, long, _):
                     rateButtonHidden = !long
-                    let titleText: String = title ?? strings.MediaPlayer_UnknownTrack
-                    let subtitleText: String = performer ?? strings.MediaPlayer_UnknownArtist
+                    var titleText: String = title ?? strings.MediaPlayer_UnknownTrack
+                    var subtitleText: String = performer ?? strings.MediaPlayer_UnknownArtist
+                    if let line = self.fullGramLyricLine {
+                        subtitleText = titleText + " — " + subtitleText
+                        titleText = "♪ " + line
+                    }
                     
                     titleString = NSAttributedString(string: titleText, font: titleFont, textColor: theme.rootController.navigationBar.primaryTextColor)
                     subtitleString = NSAttributedString(string: subtitleText, font: subtitleFont, textColor: theme.rootController.navigationBar.secondaryTextColor)
@@ -201,6 +206,81 @@ public final class MediaNavigationAccessoryHeaderNode: ASDisplayNode, ASScrollVi
     public var playbackStatus: Signal<MediaPlayerStatus, NoError>? {
         didSet {
             self.scrubbingNode.status = self.playbackStatus
+            self.fullGramObservePlaybackStatus()
+        }
+    }
+
+    private var fullGramStatusDisposable: Disposable?
+    private var fullGramLastStatus: MediaPlayerStatus?
+    private var fullGramLyricsTimer: SwiftSignalKit.Timer?
+    private var fullGramLyricsObserver: NSObjectProtocol?
+
+    deinit {
+        self.fullGramStatusDisposable?.dispose()
+        self.fullGramLyricsTimer?.invalidate()
+        if let observer = self.fullGramLyricsObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    private func fullGramObservePlaybackStatus() {
+        self.fullGramStatusDisposable?.dispose()
+        self.fullGramStatusDisposable = nil
+        self.fullGramLastStatus = nil
+        if self.fullGramLyricsObserver == nil {
+            self.fullGramLyricsObserver = NotificationCenter.default.addObserver(forName: FullGramMiniLyrics.didUpdateNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.fullGramLyricsTick()
+            }
+        }
+        guard let playbackStatus = self.playbackStatus else {
+            self.fullGramLyricsTimer?.invalidate()
+            self.fullGramLyricsTimer = nil
+            self.fullGramLyricsTick()
+            return
+        }
+        self.fullGramStatusDisposable = (playbackStatus
+        |> deliverOnMainQueue).startStrict(next: { [weak self] status in
+            guard let self else { return }
+            self.fullGramLastStatus = status
+            if case .playing = status.status, FullGramMiniLyrics.isEnabled {
+                if self.fullGramLyricsTimer == nil {
+                    let timer = SwiftSignalKit.Timer(timeout: 0.25, repeat: true, completion: { [weak self] in
+                        self?.fullGramLyricsTick()
+                    }, queue: Queue.mainQueue())
+                    self.fullGramLyricsTimer = timer
+                    timer.start()
+                }
+            } else {
+                self.fullGramLyricsTimer?.invalidate()
+                self.fullGramLyricsTimer = nil
+            }
+            self.fullGramLyricsTick()
+        })
+    }
+
+    private func fullGramLyricsTick() {
+        var nextLine: String?
+        if FullGramMiniLyrics.isEnabled,
+           let item = self.playbackItems?.0,
+           let displayData = item.displayData,
+           case let .music(title, performer, _, _, _) = displayData,
+           let trackTitle = title, !trackTitle.isEmpty,
+           let status = self.fullGramLastStatus,
+           status.duration > 0.0 {
+            FullGramMiniLyrics.shared.request(title: trackTitle, artist: performer, duration: status.duration)
+            let elapsed: Double
+            if case .playing = status.status, status.generationTimestamp > 0.0 {
+                elapsed = status.timestamp + max(0.0, CACurrentMediaTime() - status.generationTimestamp) * status.baseRate
+            } else {
+                elapsed = status.timestamp
+            }
+            nextLine = FullGramMiniLyrics.shared.line(title: trackTitle, artist: performer, at: elapsed)
+        }
+        if self.currentItemNode.fullGramLyricLine != nextLine {
+            self.currentItemNode.fullGramLyricLine = nextLine
+            if let layout = self.validLayout {
+                self.updateLayout(size: layout.0, leftInset: layout.1, rightInset: layout.2, transition: .immediate)
+            }
         }
     }
     

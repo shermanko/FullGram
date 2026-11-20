@@ -9,6 +9,7 @@ public final class ChatRecordingViewOnceButtonNode: HighlightTrackingButtonNode 
     public enum Icon {
         case viewOnce
         case recordMore
+        case transcribe
     }
     
     private let icon: Icon
@@ -87,6 +88,15 @@ public final class ChatRecordingViewOnceButtonNode: HighlightTrackingButtonNode 
                 self.iconView.image = generateTintedImage(image: UIImage(bundleImageName: self.innerIsSelected ? "Media Gallery/ViewOnceEnabled" : "Media Gallery/ViewOnce"), color: .white)?.withRenderingMode(.alwaysTemplate)
             case .recordMore:
                 self.iconView.image = generateTintedImage(image: UIImage(bundleImageName: "Chat/Input/Text/IconMicrophone"), color: .white)?.withRenderingMode(.alwaysTemplate)
+            case .transcribe:
+                let text = NSAttributedString(string: "→A", attributes: [.font: UIFont.systemFont(ofSize: 15.0, weight: .semibold), .foregroundColor: UIColor.white])
+                let textSize = text.size()
+                self.iconView.image = generateImage(CGSize(width: ceil(textSize.width), height: ceil(textSize.height)), rotatedContext: { size, context in
+                    context.clear(CGRect(origin: CGPoint(), size: size))
+                    UIGraphicsPushContext(context)
+                    text.draw(at: CGPoint())
+                    UIGraphicsPopContext()
+                })?.withRenderingMode(.alwaysTemplate)
             }
             
             self.iconView.tintColor = theme.chat.inputPanel.panelControlColor

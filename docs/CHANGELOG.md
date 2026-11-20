@@ -4,6 +4,35 @@
 
 ---
 
+## [1.5.5] — 2026-11-20
+
+### Исправленные баги
+- **NFT в профиле («Такого подарка не существует»)**:
+  - Исправлено открытие выданных FullGram NFT при нажатии в шапке профиля и по ссылкам `t.me/nft/FullGram-...` — `ProfileGiftsContext.currentState` теперь хранит объединённый список подарков, а `_internal_getUniqueStarGift` локально резолвит FullGram-слаги вместо запроса к серверу Telegram ([FullGramGrantedNFTs.swift](../submodules/TelegramCore/Sources/FullGram/FullGramGrantedNFTs.swift), [StarGifts.swift](../submodules/TelegramCore/Sources/TelegramEngine/Payments/StarGifts.swift)).
+- **Контрастность ссылок на чёрно-белой теме**:
+  - В `FullGramCustomizedTheme.swift` исправлены цвета ссылок, `@упоминаний`, `#хештегов`, ответов, галочек прочтения, опросов и реакций внутри светлых/белых исходящих пузырей — ссылки больше не сливаются с белым фоном сообщения.
+- **Переключение камеры в видеокружках**:
+  - Устранён зависающий стоп-кадр поверх видеокружка при быстром переключении фронтальной/основной камеры ([VideoMessageCameraScreen.swift](../submodules/TelegramUI/Components/VideoMessageCameraScreen/Sources/VideoMessageCameraScreen.swift)).
+- **Запикивание мата в голосовых**:
+  - Улучшено распознавание нецензурных корней с русскими приставками ([FullGramSpeechBleep.swift](../submodules/Display/Source/FullGramSpeechBleep.swift)).
+
+### Новые возможности и редизайн
+- **Редизайн анимации удаления сообщений (большая мусорка + 3D-бумажка)**:
+  - Увеличена корзина (`108×122 pt`) с матовым стеклом, градиентным металлическим корпусом, рельефными рёбрами, пружинной крышкой, тактильным откликом и эффектом облачка пыли при попадании.
+  - Увеличен и перерисован скомканный лист бумаги (`56×56 pt`) с объёмными гранями оригами, складками, имитацией строчек текста и высокой параболической дугой броска ([FullGramCosmetics.swift](../submodules/Display/Source/FullGramCosmetics.swift)).
+- **Энергосбережение по профилям устройств** (**FullGram → Прочее → Энергосбережение**):
+  - Отдельные профили для телефона, планшета и ноутбука (Mac), выбор режима («Как в Telegram», «Никогда», «При низком заряде», «Всегда»), порог заряда `5–95%`, системный режим экономии, «Всегда без зарядки» и 7 отдельных переключателей ограничений ([FullGramPowerSaving.swift](../submodules/TelegramUIPreferences/Sources/FullGramPowerSaving.swift), [FullGramPowerSavingScreen.swift](../submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramPowerSavingScreen.swift)).
+- **Обновление музыкального плеера**:
+  - **Свой текст и правка текста песни**: сохранение пользовательских текстов в Application Support с поддержкой LRC-меток `[мм:сс.сс]` и сбросом к найденному тексту ([FullGramUserLyrics.swift](../submodules/TelegramUI/Sources/FullGramUserLyrics.swift), [FullGramLyrics.swift](../submodules/TelegramUI/Sources/FullGramLyrics.swift)).
+  - **Ночной режим плеера** (**FullGram → Медиа и Аудио → Ночной режим плеера**): расписание (включая переход через полночь `22:00–07:00`) или постоянно, 3 уровня затемнения, тёплый или нейтральный оттенок и полное выключение ([FullGramPlayerNightLook.swift](../submodules/TelegramUIPreferences/Sources/FullGramPlayerNightLook.swift)).
+  - **Строка песни в мини-плеере**: в свёрнутом плеере во время воспроизведения трека с синхронным текстом отображается текущая строка `♪ ...` (переключатель в **Медиа и Аудио**; [FullGramMiniLyrics.swift](../submodules/AccountContext/Sources/FullGramMiniLyrics.swift)).
+- **Кнопка `→A` на закреплённой голосовой записи**:
+  - Превращает закреплённую голосовую запись в редактируемый текст прямо в поле ввода сообщения ([ChatTextInputPanelNode.swift](../submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift), [ChatControllerMediaRecording.swift](../submodules/TelegramUI/Sources/Chat/ChatControllerMediaRecording.swift)).
+- **Редактор скриншота чата**:
+  - После скриншота в чате появляется кнопка «✂️ Редактировать скриншот» с размытием/закрашиванием сообщений, выбором фоновой рамки и быстрой отправкой ([FullGramScreenshotEditor.swift](../submodules/TelegramUI/Sources/FullGramScreenshotEditor.swift)).
+
+---
+
 ## [1.5.2] — 2026-11-20
 
 ### Новые возможности

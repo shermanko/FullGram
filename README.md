@@ -1,4 +1,4 @@
-# FullGram v1.5.2
+# FullGram v1.5.5
 
 > Расширенный iOS-клиент Telegram с модулем приватности, Анти-скамом, локальным AI-ассистентом, системой плагинов (Lua / Python / Rust + нативный GUI), полной косметикой Discord (663 рамки + 329 анимаций профиля), NFT Grant Studio, классическим дизайном Telegram и ускорением загрузки медиа.
 
@@ -41,7 +41,7 @@
 
 ## Документация
 
-- **[История изменений (Changelog v1.5.2)](docs/CHANGELOG.md)**
+- **[История изменений (Changelog v1.5.5)](docs/CHANGELOG.md)**
 - **[Руководство разработчика плагинов (Lua / Python / Rust API, GUI `open_ui`, ИИ-протокол)](docs/PLUGIN_API.md)**
 - **[Чек-лист тестирования релиза](docs/RELEASE_CHECKLIST.md)**
 

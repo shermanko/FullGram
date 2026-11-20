@@ -246,6 +246,55 @@ extension ChatControllerImpl {
         }
     }
     
+    func fullGramTranscribeActiveAudioRecording() {
+        guard let audioRecorderValue = self.audioRecorderValue else {
+            return
+        }
+        audioRecorderValue.stop()
+        self.dismissAllTooltips()
+        self.updateChatPresentationInterfaceState(animated: true, interactive: true, {
+            $0.updatedInputTextPanelState { panelState in
+                return panelState.withUpdatedMediaRecordingState(nil)
+            }
+        })
+        self.recorderDataDisposable.set(
+            (audioRecorderValue.takenRecordedData()
+            |> mapToSignal { data -> Signal<String?, NoError> in
+                guard let data, data.duration >= 0.3 else { return .single(nil) }
+                return FullGramProfanityBleep.transcribe(data)
+            }
+            |> deliverOnMainQueue).startStrict(next: { [weak self] recognized in
+                guard let strongSelf = self else { return }
+                strongSelf.audioRecorder.set(.single(nil))
+                strongSelf.recorderDataDisposable.set(nil)
+                if let recognized, !recognized.isEmpty {
+                    strongSelf.updateChatPresentationInterfaceState(animated: true, interactive: true, { state in
+                        return state.updatedInterfaceState { interfaceState in
+                            let current = interfaceState.composeInputState.inputText.string
+                            let joined = current.isEmpty ? recognized : (current + " " + recognized)
+                            let attr = NSAttributedString(string: joined)
+                            return interfaceState.withUpdatedComposeInputState(
+                                ChatTextInputState(inputText: attr, selectionRange: attr.length ..< attr.length)
+                            )
+                        }
+                    })
+                    strongSelf.chatDisplayNode.textInputPanelNode?.ensureFocused()
+                } else {
+                    let presentationData = strongSelf.context.sharedContext.currentPresentationData.with { $0 }
+                    strongSelf.present(
+                        UndoOverlayController(
+                            presentationData: presentationData,
+                            content: .info(title: nil, text: "Не удалось распознать речь", timeout: 2.5, customUndoText: nil),
+                            elevatedLayout: false,
+                            action: { _ in return false }
+                        ),
+                        in: .current
+                    )
+                }
+            })
+        )
+    }
+
     func dismissMediaRecorder(_ action: ChatFinishMediaRecordingAction) {
         var updatedAction = action
         var isScheduledMessages = false

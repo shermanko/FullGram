@@ -466,5 +466,5 @@ jobs:
           fi
 
           gh release create "$TAG" "${FILES[@]}" \
-            --title "FullGram v1.5.2 (${APP_VERSION} • ${BUILD_NUMBER})" \
-            --notes "FullGram v1.5.2 (${APP_VERSION} • ${BUILD_NUMBER}) from commit ${GITHUB_SHA}: improved plugin WebView system & HD casino, upgraded Discord cosmetics & NFT Grant Studio, and hardened iOS/Worker security."
+            --title "FullGram v1.5.5 (${APP_VERSION} • ${BUILD_NUMBER})" \
+            --notes "FullGram v1.5.5 (${APP_VERSION} • ${BUILD_NUMBER}) from commit ${GITHUB_SHA}: fixed profile NFT opening & B&W theme link contrast, redesigned paper-to-trash delete animation, added per-device power saving profiles, player night mode, custom/edited lyrics, mini-player live lyrics, ->A voice-to-text, chat screenshot editor, and round video camera switch fix."

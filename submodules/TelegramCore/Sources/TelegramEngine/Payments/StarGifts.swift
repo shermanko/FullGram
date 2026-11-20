@@ -3137,6 +3137,7 @@ public final class ProfileGiftsContext {
     private let queue: Queue = .mainQueue()
     private let account: Account
     private let impl: QueueLocalObject<ProfileGiftsContextImpl>
+    private let latestMergedState = Atomic<ProfileGiftsContext.State?>(value: nil)
     
     public var state: Signal<ProfileGiftsContext.State, NoError> {
         let baseState = Signal<ProfileGiftsContext.State, NoError> { subscriber in
@@ -3153,9 +3154,11 @@ public final class ProfileGiftsContext {
         guard self.collectionId == nil else {
             return baseState
         }
+        let latestMergedState = self.latestMergedState
         return combineLatest(baseState, fullGramGrantedGiftsSignal(account: self.account, peerId: self.peerId))
         |> map { state, granted in
             guard !granted.isEmpty else {
+                let _ = latestMergedState.swap(state)
                 return state
             }
             let existingSlugs = Set(state.gifts.compactMap { entry -> String? in
@@ -3169,6 +3172,7 @@ public final class ProfileGiftsContext {
                 return true
             }
             guard !freshGranted.isEmpty else {
+                let _ = latestMergedState.swap(state)
                 return state
             }
             var updated = state
@@ -3179,6 +3183,7 @@ public final class ProfileGiftsContext {
             } else {
                 updated.count = Int32(updated.gifts.count)
             }
+            let _ = latestMergedState.swap(updated)
             return updated
         }
     }
@@ -3375,6 +3380,9 @@ public final class ProfileGiftsContext {
     }
     
     public var currentState: ProfileGiftsContext.State? {
+        if let merged = self.latestMergedState.with({ $0 }) {
+            return merged
+        }
         var state: ProfileGiftsContext.State?
         self.impl.syncWith { impl in
             state = impl._state
@@ -3801,6 +3809,9 @@ func _internal_cachedUniqueStarGift(account: Account, slug: String) -> Signal<St
 }
 
 func _internal_getUniqueStarGift(account: Account, slug: String) -> Signal<StarGift.UniqueGift, GetUniqueStarGiftError> {
+    if slug.lowercased().hasPrefix("fullgram-") {
+        return fullGramResolveUniqueGift(account: account, slug: slug)
+    }
     return account.network.request(Api.functions.payments.getUniqueStarGift(slug: slug))
     |> mapError { error -> GetUniqueStarGiftError in
         if error.errorDescription == "STARGIFT_ALREADY_BURNED" {

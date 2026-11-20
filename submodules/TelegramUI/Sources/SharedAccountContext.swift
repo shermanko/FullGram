@@ -390,11 +390,11 @@ public final class SharedAccountContextImpl: SharedAccountContext {
         self.currentInAppNotificationSettings = Atomic(value: initialPresentationDataAndSettings.inAppNotificationSettings)
         self.currentChatSettings = Atomic(value: initialPresentationDataAndSettings.chatSettings)
         
-        if automaticEnergyUsageShouldBeOnNow(settings: self.currentAutomaticMediaDownloadSettings) {
-            self.energyUsageSettings = EnergyUsageSettings.powerSavingDefault
-        } else {
-            self.energyUsageSettings = self.currentAutomaticMediaDownloadSettings.energyUsageSettings
-        }
+        let initialSystemLPM = automaticEnergyUsageShouldBeOnNow(settings: self.currentAutomaticMediaDownloadSettings)
+        self.energyUsageSettings = FullGramPowerSaving.apply(
+            to: self.currentAutomaticMediaDownloadSettings.energyUsageSettings,
+            isSystemLowPowerMode: initialSystemLPM
+        )
         
         let presentationData: Signal<PresentationData, NoError> = .single(initialPresentationDataAndSettings.presentationData)
         |> then(
@@ -603,23 +603,31 @@ public final class SharedAccountContextImpl: SharedAccountContext {
             }).start()
         })
         
+        FullGramMiniLyrics.shared.fetch = { title, artist, duration in
+            return FullGramLyricsFetcher.fetch(title: title, artist: artist, duration: duration)
+            |> map { result -> [FullGramMiniLyrics.Line]? in
+                if case let .synced(lines) = result {
+                    return lines.map { FullGramMiniLyrics.Line(time: $0.time, endTime: $0.endTime, text: $0.text) }
+                }
+                return nil
+            }
+        }
+        NotificationCenter.default.addObserver(forName: FullGramPowerSaving.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let strongSelf = self else { return }
+            let next = strongSelf.currentAutomaticMediaDownloadSettings
+            let lpm = automaticEnergyUsageShouldBeOnNow(settings: next)
+            strongSelf.energyUsageSettings = FullGramPowerSaving.apply(to: next.energyUsageSettings, isSystemLowPowerMode: lpm)
+        }
         self.automaticMediaDownloadSettingsDisposable.set(self._automaticMediaDownloadSettings.get().start(next: { [weak self] next in
             if let strongSelf = self {
                 strongSelf.currentAutomaticMediaDownloadSettings = next
                 
-                if automaticEnergyUsageShouldBeOnNow(settings: next) {
-                    strongSelf.energyUsageSettings = EnergyUsageSettings.powerSavingDefault
-                } else {
-                    strongSelf.energyUsageSettings = next.energyUsageSettings
-                }
+                let initialLPM = automaticEnergyUsageShouldBeOnNow(settings: next)
+                strongSelf.energyUsageSettings = FullGramPowerSaving.apply(to: next.energyUsageSettings, isSystemLowPowerMode: initialLPM)
                 strongSelf.energyUsageAutomaticDisposable.set((automaticEnergyUsageShouldBeOn(settings: next)
                 |> deliverOnMainQueue).start(next: { value in
                     if let strongSelf = self {
-                        if value {
-                            strongSelf.energyUsageSettings = EnergyUsageSettings.powerSavingDefault
-                        } else {
-                            strongSelf.energyUsageSettings = next.energyUsageSettings
-                        }
+                        strongSelf.energyUsageSettings = FullGramPowerSaving.apply(to: next.energyUsageSettings, isSystemLowPowerMode: value)
                     }
                 }))
             }

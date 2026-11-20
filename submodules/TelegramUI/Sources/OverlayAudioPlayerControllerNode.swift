@@ -89,6 +89,8 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
     private var sleepTimerButton: UIButton?
     private var sleepTimerObserver: NSObjectProtocol?
     private var sleepTimerFiredObserver: NSObjectProtocol?
+    private var nightLookOverlayView: UIView?
+    private var nightLookObserver: NSObjectProtocol?
     private var lyricsStateDisposable: Disposable?
     private var currentTrackInfo: (title: String, artist: String?, duration: Double)?
         
@@ -539,6 +541,15 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
         self.sleepTimerFiredObserver = NotificationCenter.default.addObserver(forName: FullGramSleepTimer.didFireNotification, object: nil, queue: .main) { [weak self] _ in
             self?.controlsNode.control?(.playback(.pause))
         }
+        let nightOverlay = UIView()
+        nightOverlay.isUserInteractionEnabled = false
+        nightOverlay.backgroundColor = .clear
+        self.view.addSubview(nightOverlay)
+        self.nightLookOverlayView = nightOverlay
+        self.updateNightLookOverlay()
+        self.nightLookObserver = NotificationCenter.default.addObserver(forName: FullGramPlayerNightLook.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.updateNightLookOverlay()
+        }
         
         self.lyricsStateDisposable = (context.sharedContext.mediaManager.musicMediaPlayerState
         |> deliverOnMainQueue).startStrict(next: { [weak self] state in
@@ -709,6 +720,21 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
         if let observer = self.sleepTimerFiredObserver {
             NotificationCenter.default.removeObserver(observer)
         }
+        if let observer = self.nightLookObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    private func updateNightLookOverlay() {
+        guard let overlay = self.nightLookOverlayView else { return }
+        if let color = FullGramPlayerNightLook.activeOverlayColor() {
+            overlay.backgroundColor = color
+            overlay.isHidden = false
+            self.view.bringSubviewToFront(overlay)
+        } else {
+            overlay.backgroundColor = .clear
+            overlay.isHidden = true
+        }
     }
     
     private func updateSleepTimerButtonAppearance() {
@@ -775,6 +801,20 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
         let overlay = self.lyricsOverlayView ?? FullGramLyricsOverlayView(frame: self.bounds)
         overlay.onClose = { [weak self] in
             self?.toggleLyricsOverlay()
+        }
+        overlay.onEditRequested = { [weak self, weak overlay] title, artist, initialText, hasCustom in
+            guard let self, let parent = self.getParentController() else { return }
+            FullGramUserLyrics.presentEditor(
+                from: parent,
+                title: title,
+                artist: artist,
+                initialText: initialText,
+                hasCustom: hasCustom
+            ) { [weak self, weak overlay] _ in
+                guard let self else { return }
+                let info = self.currentTrackInfo
+                overlay?.load(title: info?.title ?? title, artist: info?.artist ?? artist, duration: info?.duration ?? 0.0)
+            }
         }
         overlay.frame = self.bounds
         overlay.alpha = 0.0
@@ -1215,6 +1255,12 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
         if let mixerOverlayView = self.mixerOverlayView, mixerOverlayView.superview != nil {
             mixerOverlayView.frame = CGRect(origin: .zero, size: layout.size)
             self.view.bringSubviewToFront(mixerOverlayView)
+        }
+        if let nightLookOverlayView = self.nightLookOverlayView {
+            nightLookOverlayView.frame = CGRect(origin: .zero, size: layout.size)
+            if !nightLookOverlayView.isHidden {
+                self.view.bringSubviewToFront(nightLookOverlayView)
+            }
         }
         
         insets.top = max(0.0, listNodeSize.height - floor(62.0 * 3.5))

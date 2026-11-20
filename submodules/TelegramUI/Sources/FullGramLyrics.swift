@@ -2,6 +2,7 @@ import Foundation
 import UIKit
 import SwiftSignalKit
 import Display
+import AccountContext
 
 struct FullGramLyricsWord: Equatable {
     let time: Double
@@ -73,13 +74,29 @@ enum FullGramLyricsFetcher {
         return (title, artist)
     }
 
+    static func invalidateCache(title: String, artist: String?) {
+        let normalized = normalizeMetadata(rawTitle: title, rawArtist: artist)
+        let cacheKey = "\(normalized.artist?.lowercased() ?? "")|\(normalized.title.lowercased())"
+        let rawKey = "\(artist?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "")|\(title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
+        self.cacheLock.lock()
+        self.lyricsCache.removeValue(forKey: cacheKey)
+        self.lyricsCache.removeValue(forKey: rawKey)
+        self.cacheLock.unlock()
+    }
+
     static func fetch(title: String, artist: String?, duration: Double) -> Signal<FullGramLyricsResult, NoError> {
+        if let custom = FullGramUserLyrics.load(title: title, artist: artist, duration: duration) {
+            return .single(custom)
+        }
         let normalized = normalizeMetadata(rawTitle: title, rawArtist: artist)
         let cleanTitle = normalized.title
         guard !cleanTitle.isEmpty else {
             return .single(.empty)
         }
         let cleanArtist = normalized.artist
+        if let customNormalized = FullGramUserLyrics.load(title: cleanTitle, artist: cleanArtist, duration: duration) {
+            return .single(customNormalized)
+        }
         let cacheKey = "\(cleanArtist?.lowercased() ?? "")|\(cleanTitle.lowercased())"
 
         self.cacheLock.lock()
@@ -450,10 +467,16 @@ final class FullGramKaraokeLineView: UIView {
 final class FullGramLyricsOverlayView: UIView {
     private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
     private let headerLabel = UILabel()
+    private let editButton = UIButton(type: .system)
     private let closeButton = UIButton(type: .system)
     private let scrollView = UIScrollView()
     private let stackView = UIStackView()
     private let statusLabel = UILabel()
+    private var currentTitle: String = ""
+    private var currentArtist: String?
+    private var currentDuration: Double = 0.0
+    private var currentResult: FullGramLyricsResult = .empty
+    var onEditRequested: ((String, String?, String, Bool) -> Void)?
 
     private var lines: [FullGramLyricsLine] = []
     private var lineViews: [FullGramKaraokeLineView] = []
@@ -481,6 +504,12 @@ final class FullGramLyricsOverlayView: UIView {
         self.closeButton.translatesAutoresizingMaskIntoConstraints = false
         self.addSubview(self.closeButton)
 
+        self.editButton.setImage(UIImage(systemName: "square.and.pencil"), for: .normal)
+        self.editButton.tintColor = UIColor(white: 1.0, alpha: 0.82)
+        self.editButton.addTarget(self, action: #selector(self.editTapped), for: .touchUpInside)
+        self.editButton.translatesAutoresizingMaskIntoConstraints = false
+        self.addSubview(self.editButton)
+
         self.scrollView.alwaysBounceVertical = true
         self.scrollView.showsVerticalScrollIndicator = false
         self.scrollView.translatesAutoresizingMaskIntoConstraints = false
@@ -492,9 +521,11 @@ final class FullGramLyricsOverlayView: UIView {
         self.scrollView.addSubview(self.stackView)
 
         self.statusLabel.font = .systemFont(ofSize: 15.0, weight: .medium)
-        self.statusLabel.textColor = UIColor(white: 1.0, alpha: 0.7)
+        self.statusLabel.textColor = UIColor(white: 1.0, alpha: 0.78)
         self.statusLabel.textAlignment = .center
         self.statusLabel.numberOfLines = 0
+        self.statusLabel.isUserInteractionEnabled = true
+        self.statusLabel.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(self.editTapped)))
         self.statusLabel.translatesAutoresizingMaskIntoConstraints = false
         self.addSubview(self.statusLabel)
 
@@ -506,7 +537,12 @@ final class FullGramLyricsOverlayView: UIView {
 
             self.headerLabel.topAnchor.constraint(equalTo: self.safeAreaLayoutGuide.topAnchor, constant: 16.0),
             self.headerLabel.leadingAnchor.constraint(equalTo: self.leadingAnchor, constant: 20.0),
-            self.headerLabel.trailingAnchor.constraint(equalTo: self.closeButton.leadingAnchor, constant: -12.0),
+            self.headerLabel.trailingAnchor.constraint(equalTo: self.editButton.leadingAnchor, constant: -10.0),
+
+            self.editButton.centerYAnchor.constraint(equalTo: self.headerLabel.centerYAnchor),
+            self.editButton.trailingAnchor.constraint(equalTo: self.closeButton.leadingAnchor, constant: -8.0),
+            self.editButton.widthAnchor.constraint(equalToConstant: 32.0),
+            self.editButton.heightAnchor.constraint(equalToConstant: 32.0),
 
             self.closeButton.centerYAnchor.constraint(equalTo: self.headerLabel.centerYAnchor),
             self.closeButton.trailingAnchor.constraint(equalTo: self.trailingAnchor, constant: -16.0),
@@ -540,7 +576,18 @@ final class FullGramLyricsOverlayView: UIView {
         self.onClose?()
     }
 
+    @objc private func editTapped() {
+        guard !self.currentTitle.isEmpty else { return }
+        let initial = FullGramUserLyrics.source(title: self.currentTitle, artist: self.currentArtist)
+            ?? FullGramUserLyrics.formatEditableText(from: self.currentResult)
+        let hasCustom = FullGramUserLyrics.hasCustom(title: self.currentTitle, artist: self.currentArtist)
+        self.onEditRequested?(self.currentTitle, self.currentArtist, initial, hasCustom)
+    }
+
     func load(title: String, artist: String?, duration: Double) {
+        self.currentTitle = title
+        self.currentArtist = artist
+        self.currentDuration = duration
         self.headerLabel.text = [artist, title].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " — ")
         self.statusLabel.text = "Поиск текста..."
         self.statusLabel.isHidden = false
@@ -548,7 +595,16 @@ final class FullGramLyricsOverlayView: UIView {
 
         self.fetchDisposable.set((FullGramLyricsFetcher.fetch(title: title, artist: artist, duration: duration)
         |> deliverOnMainQueue).startStrict(next: { [weak self] result in
-            self?.apply(result: result)
+            guard let self else { return }
+            self.currentResult = result
+            if case let .synced(lines) = result {
+                FullGramMiniLyrics.shared.update(
+                    title: title,
+                    artist: artist,
+                    lines: lines.map { FullGramMiniLyrics.Line(time: $0.time, endTime: $0.endTime, text: $0.text) }
+                )
+            }
+            self.apply(result: result)
         }))
     }
 
@@ -615,7 +671,7 @@ final class FullGramLyricsOverlayView: UIView {
                 self.lineViews.append(view)
             }
         case .empty:
-            self.statusLabel.text = "Текст песни не найден"
+            self.statusLabel.text = "Текст песни не найден\nНажмите, чтобы написать свой"
             self.statusLabel.isHidden = false
         }
     }

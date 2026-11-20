@@ -101,4 +101,26 @@ enum FullGramProfanityBleep {
         guard writer.writeFrame(nil, frameByteCount: 0) else { return nil }
         return dataItem.data()
     }
+
+    /// Transcribe a recorded voice message (`RecordedAudioData`) to editable text for the "→A" button.
+    static func transcribe(_ data: RecordedAudioData) -> Signal<String?, NoError> {
+        return Signal { subscriber in
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("fullgram_transcribe_\(Int64.random(in: 1 ... Int64.max)).ogg")
+            guard (try? data.compressedData.write(to: url)) != nil, let decodedSamples = decode(path: url.path) else {
+                try? FileManager.default.removeItem(at: url)
+                subscriber.putNext(nil)
+                subscriber.putCompletion()
+                return EmptyDisposable
+            }
+            try? FileManager.default.removeItem(at: url)
+
+            FullGramSpeechBleep.transcribe(decodedSamples, sampleRate: opusSampleRate) { text in
+                subscriber.putNext(text)
+                subscriber.putCompletion()
+            }
+            return EmptyDisposable
+        }
+        |> runOn(Queue.concurrentDefaultQueue())
+        |> timeout(12.0, queue: .concurrentDefaultQueue(), alternate: .single(nil))
+    }
 }

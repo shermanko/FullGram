@@ -8030,6 +8030,10 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
     override public func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         self.fullGramApplyChatLock()
+        FullGramScreenshotPrompt.attach(to: self)
+        self.chatDisplayNode.textInputPanelNode?.fullGramTranscribeRecording = { [weak self] in
+            self?.fullGramTranscribeActiveAudioRecording()
+        }
         self.forwardSideListAppearance(.didAppear, animated: animated)
         
         self.didAppear = true
@@ -8491,6 +8495,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
     
     override public func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        FullGramScreenshotPrompt.detach(from: self)
         self.forwardSideListAppearance(.willDisappear, animated: animated)
 
         self.walletTransferAnimationsVisible = false

@@ -13,6 +13,7 @@ import AccountContext
 import ItemListUI
 import PresentationDataUtils
 import TelegramPresentationData
+import TelegramUIPreferences
 
 /// Shared Telegram `ViewController` wrapper that hosts an embedded UIKit `UIViewController`
 /// with navigation bar presentation data and safe-area inset propagation.
@@ -501,7 +502,7 @@ private final class FullGramHeaderItemNode: ListViewItemNode {
 
             let (versionLayout, versionApply) = makeVersionLayout(TextNodeLayoutArguments(
                 attributedString: NSAttributedString(
-                    string: "1.5.2",
+                    string: "1.5.5",
                     font: Font.regular(15.0),
                     textColor: item.theme.list.itemSecondaryTextColor
                 ),
@@ -3592,6 +3593,7 @@ func fullGramSecurityCategoryController(context: AccountContext) -> ViewControll
 private struct FullGramOtherCategoryArguments {
     let toggleLocalPremium: (Bool) -> Void
     let openGeneral: () -> Void
+    let openPowerSaving: () -> Void
     let openAIAssistant: () -> Void
     let openBadges: () -> Void
     let exportBackup: () -> Void
@@ -3602,6 +3604,7 @@ private enum FullGramOtherCategoryEntry: ItemListNodeEntry {
     case localPremium(Bool)
     case localPremiumInfo(String)
     case generalLink(String)
+    case powerSavingLink(String, String)
     case aiAssistantLink(String, String)
     case badgesLink(String, String)
     case backupHeader(String)
@@ -3612,7 +3615,7 @@ private enum FullGramOtherCategoryEntry: ItemListNodeEntry {
     var section: ItemListSectionId {
         switch self {
         case .localPremium, .localPremiumInfo: return 0
-        case .generalLink, .aiAssistantLink, .badgesLink: return 1
+        case .generalLink, .powerSavingLink, .aiAssistantLink, .badgesLink: return 1
         case .backupHeader, .exportBackup, .importBackup, .backupInfo: return 2
         }
     }
@@ -3622,8 +3625,9 @@ private enum FullGramOtherCategoryEntry: ItemListNodeEntry {
         case .localPremium: return 0
         case .localPremiumInfo: return 1
         case .generalLink: return 10
-        case .aiAssistantLink: return 11
-        case .badgesLink: return 12
+        case .powerSavingLink: return 11
+        case .aiAssistantLink: return 12
+        case .badgesLink: return 13
         case .backupHeader: return 20
         case .exportBackup: return 21
         case .importBackup: return 22
@@ -3644,6 +3648,9 @@ private enum FullGramOtherCategoryEntry: ItemListNodeEntry {
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         case let .generalLink(title):
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.dataAndStorage, title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openGeneral)
+        case let .powerSavingLink(title, value):
+            let icon = UIImage(systemName: "bolt.batteryblock.fill")?.withTintColor(UIColor(rgb: 0x34c759), renderingMode: .alwaysOriginal) ?? PresentationResourcesSettings.powerSaving
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openPowerSaving)
         case let .aiAssistantLink(title, value):
             let icon = UIImage(systemName: "sparkles")?.withTintColor(UIColor(rgb: 0x5856d6), renderingMode: .alwaysOriginal) ?? PresentationResourcesSettings.stickers
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openAIAssistant)
@@ -3699,6 +3706,9 @@ func fullGramOtherCategoryController(context: AccountContext) -> ViewController 
         },
         openGeneral: {
             pushImpl?(fullGramOtherGeneralController(context: context))
+        },
+        openPowerSaving: {
+            pushImpl?(fullGramPowerSavingController(context: context))
         },
         openAIAssistant: {
             pushImpl?(fullGramAIAssistantController(context: context))
@@ -3768,10 +3778,12 @@ func fullGramOtherCategoryController(context: AccountContext) -> ViewController 
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let aiStatus = FullGramAIStore.shared.hasConfiguredKey ? FullGramAIStore.shared.provider.title : "Не настроен"
         let badgesStatus = FullGramBadges.shared.isEnabled ? "\(FullGramBadges.shared.totalCount)" : "Выкл."
+        let powerStatus = FullGramPowerSaving.profile().mode.title
         var entries: [FullGramOtherCategoryEntry] = [
             .localPremium(FullGramExtras.shared.localPremium),
             .localPremiumInfo("Открывает клиентские возможности Telegram Premium только на этом устройстве."),
             .generalLink("Основное"),
+            .powerSavingLink("Энергосбережение", powerStatus),
             .aiAssistantLink("ИИ Ассистент и свой агент", aiStatus)
         ]
         if fullGramCanOpenAdmin(context: context) {

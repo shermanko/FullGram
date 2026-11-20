@@ -137,9 +137,18 @@ public enum FullGramSpeechBleep {
             return true
         }
 
-        // 5. Prefix match for short stems ("бля...", "сук...", "хер...", "манд...")
+        // 5. Prefix match for short stems ("бля...", "сук...", "хер...", "манд...") including behind Russian verb/adverb prefixes
         for prefix in russianPrefixes where normalized.hasPrefix(prefix) {
             return true
+        }
+        for sp in splitPrefixes where normalized.hasPrefix(sp) && normalized.count > sp.count + 2 {
+            let tail = String(normalized.dropFirst(sp.count))
+            if russianExact.contains(tail) {
+                return true
+            }
+            for rp in russianPrefixes where tail.hasPrefix(rp) {
+                return true
+            }
         }
 
         return false
@@ -895,5 +904,82 @@ public enum FullGramSpeechBleep {
 
         let headCount = min(14, words.count)
         return words.prefix(headCount).joined(separator: " ") + (words.count > headCount ? "…" : "")
+    }
+
+    /// Transcribe mono Int16 PCM samples into editable text for "→A" on locked voice recordings.
+    public static func transcribe(
+        _ samples: [Int16],
+        sampleRate: Double = 48000.0,
+        completion: @escaping @Sendable (String?) -> Void
+    ) {
+        guard !samples.isEmpty else {
+            completion(nil)
+            return
+        }
+        SFSpeechRecognizer.requestAuthorization { status in
+            guard status == .authorized else {
+                completion(nil)
+                return
+            }
+            let preferred = Locale.preferredLanguages.first ?? "ru-RU"
+            let recognizer = SFSpeechRecognizer(locale: Locale(identifier: preferred))
+                ?? SFSpeechRecognizer(locale: Locale(identifier: "ru-RU"))
+                ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+                ?? SFSpeechRecognizer()
+            guard let recognizer, recognizer.isAvailable else {
+                completion(nil)
+                return
+            }
+            // Downsample 48 kHz -> 16 kHz if needed for crisp speech recognition
+            let targetRate: Double = sampleRate >= 32000.0 ? 16000.0 : sampleRate
+            let step = max(1, Int((sampleRate / targetRate).rounded()))
+            let count = samples.count / step
+            guard count > 0,
+                  let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: targetRate, channels: 1, interleaved: false),
+                  let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count)),
+                  let channel = buffer.floatChannelData?[0] else {
+                completion(nil)
+                return
+            }
+            buffer.frameLength = AVAudioFrameCount(count)
+            for i in 0 ..< count {
+                channel[i] = Float(samples[i * step]) / 32768.0
+            }
+
+            let request = SFSpeechAudioBufferRecognitionRequest()
+            request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
+            request.shouldReportPartialResults = false
+            if #available(iOS 16.0, *) {
+                request.addsPunctuation = true
+            }
+            request.append(buffer)
+            request.endAudio()
+
+            let lock = NSLock()
+            var done = false
+            let finish: @Sendable (String?) -> Void = { text in
+                lock.lock()
+                if done {
+                    lock.unlock()
+                    return
+                }
+                done = true
+                lock.unlock()
+                let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
+                completion((trimmed?.isEmpty == false) ? trimmed : nil)
+            }
+
+            let task = recognizer.recognitionTask(with: request) { result, error in
+                if let result, result.isFinal {
+                    finish(result.bestTranscription.formattedString)
+                } else if error != nil {
+                    finish(nil)
+                }
+            }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 10.0) {
+                task.cancel()
+                finish(nil)
+            }
+        }
     }
 }

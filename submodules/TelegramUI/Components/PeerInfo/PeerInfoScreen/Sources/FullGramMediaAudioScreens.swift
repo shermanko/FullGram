@@ -6,6 +6,7 @@ import AsyncDisplayKit
 import SwiftSignalKit
 import TelegramCore
 import TelegramPresentationData
+import TelegramUIPreferences
 import ItemListUI
 import AccountContext
 
@@ -16,22 +17,29 @@ private final class FullGramMediaAudioCategoryArguments {
     let openRoundVideo: () -> Void
     let openMixer: () -> Void
     let openLyricsSources: () -> Void
+    let openNightLook: () -> Void
+    let toggleMiniLyrics: (Bool) -> Void
 
     init(
         openVoice: @escaping () -> Void,
         openRoundVideo: @escaping () -> Void,
         openMixer: @escaping () -> Void,
-        openLyricsSources: @escaping () -> Void
+        openLyricsSources: @escaping () -> Void,
+        openNightLook: @escaping () -> Void,
+        toggleMiniLyrics: @escaping (Bool) -> Void
     ) {
         self.openVoice = openVoice
         self.openRoundVideo = openRoundVideo
         self.openMixer = openMixer
         self.openLyricsSources = openLyricsSources
+        self.openNightLook = openNightLook
+        self.toggleMiniLyrics = toggleMiniLyrics
     }
 }
 
 private enum FullGramMediaAudioCategorySection: Int32 {
     case main
+    case player
 }
 
 private enum FullGramMediaAudioCategoryEntry: ItemListNodeEntry {
@@ -39,9 +47,17 @@ private enum FullGramMediaAudioCategoryEntry: ItemListNodeEntry {
     case roundVideo(String, String)
     case mixer(String, String)
     case lyricsSources(String, String)
+    case playerHeader(String)
+    case nightLook(String, String)
+    case miniLyrics(Bool)
 
     var section: ItemListSectionId {
-        return FullGramMediaAudioCategorySection.main.rawValue
+        switch self {
+        case .voice, .roundVideo, .mixer, .lyricsSources:
+            return FullGramMediaAudioCategorySection.main.rawValue
+        case .playerHeader, .nightLook, .miniLyrics:
+            return FullGramMediaAudioCategorySection.player.rawValue
+        }
     }
 
     var stableId: Int32 {
@@ -50,6 +66,9 @@ private enum FullGramMediaAudioCategoryEntry: ItemListNodeEntry {
         case .roundVideo: return 1
         case .mixer: return 2
         case .lyricsSources: return 3
+        case .playerHeader: return 10
+        case .nightLook: return 11
+        case .miniLyrics: return 12
         }
     }
 
@@ -68,6 +87,12 @@ private enum FullGramMediaAudioCategoryEntry: ItemListNodeEntry {
             return ItemListDisclosureItem(presentationData: presentationData, title: title, label: value, sectionId: self.section, style: .blocks, action: args.openMixer)
         case let .lyricsSources(title, value):
             return ItemListDisclosureItem(presentationData: presentationData, title: title, label: value, sectionId: self.section, style: .blocks, action: args.openLyricsSources)
+        case let .playerHeader(text):
+            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+        case let .nightLook(title, value):
+            return ItemListDisclosureItem(presentationData: presentationData, title: title, label: value, sectionId: self.section, style: .blocks, action: args.openNightLook)
+        case let .miniLyrics(value):
+            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Строка песни в мини-плеере", value: value, sectionId: self.section, style: .blocks, updated: args.toggleMiniLyrics)
         }
     }
 }
@@ -85,7 +110,12 @@ func fullGramMediaAudioCategoryController(context: AccountContext) -> ViewContro
         openVoice: { pushImpl?(fullGramVoiceController(context: context, onChanged: bump)) },
         openRoundVideo: { pushImpl?(fullGramRoundVideoController(context: context, onChanged: bump)) },
         openMixer: { pushImpl?(fullGramMixerController(context: context, onChanged: bump)) },
-        openLyricsSources: { pushImpl?(fullGramLyricsSourcesController(context: context, onChanged: bump)) }
+        openLyricsSources: { pushImpl?(fullGramLyricsSourcesController(context: context, onChanged: bump)) },
+        openNightLook: { pushImpl?(fullGramPlayerNightLookController(context: context, onChanged: bump)) },
+        toggleMiniLyrics: { value in
+            FullGramMiniLyrics.isEnabled = value
+            bump()
+        }
     )
 
     let signal = combineLatest(context.sharedContext.presentationData, refresh.get())
@@ -101,12 +131,16 @@ func fullGramMediaAudioCategoryController(context: AccountContext) -> ViewContro
             FullGramLyricsProviderSettings.useLyricsOvh,
             FullGramLyricsProviderSettings.useNetEase
         ].filter { $0 }.count
+        let nightValue = FullGramPlayerNightLook.isEnabled ? FullGramPlayerNightLook.mode.title : "Выкл"
 
         let entries: [FullGramMediaAudioCategoryEntry] = [
             .voice("Голос", voiceValue),
             .roundVideo("Кружки и камера", roundValue),
             .mixer("Микшер", mixerValue),
-            .lyricsSources("Источники текстов песен", "\(sourcesCount)/3")
+            .lyricsSources("Источники текстов песен", "\(sourcesCount)/3"),
+            .playerHeader("ПЛЕЕР"),
+            .nightLook("Ночной режим плеера", nightValue),
+            .miniLyrics(FullGramMiniLyrics.isEnabled)
         ]
         let data = ItemListPresentationData(presentationData)
         let state = ItemListControllerState(

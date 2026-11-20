@@ -267,6 +267,8 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
     
     public var viewOnce = false
     public let viewOnceButton: ChatRecordingViewOnceButtonNode
+    public let fullGramTranscribeButton: ChatRecordingViewOnceButtonNode
+    public var fullGramTranscribeRecording: (() -> Void)?
     public let recordMoreButton: ChatRecordingViewOnceButtonNode
     
     private var accessoryPanel: (component: AnyComponentWithIdentity<ChatInputAccessoryPanelEnvironment>, view: ComponentView<ChatInputAccessoryPanelEnvironment>)?
@@ -812,6 +814,7 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
         self.slowModeButton.alpha = 0.0
         
         self.viewOnceButton = ChatRecordingViewOnceButtonNode(icon: .viewOnce)
+        self.fullGramTranscribeButton = ChatRecordingViewOnceButtonNode(icon: .transcribe)
         self.recordMoreButton = ChatRecordingViewOnceButtonNode(icon: .recordMore)
         
         super.init()
@@ -1125,12 +1128,15 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
         }
         
         self.viewOnceButton.addTarget(self, action: #selector(self.viewOncePressed), forControlEvents: [.touchUpInside])
+        self.fullGramTranscribeButton.addTarget(self, action: #selector(self.fullGramTranscribePressed), forControlEvents: [.touchUpInside])
+        self.fullGramTranscribeButton.alpha = 0.0
         self.recordMoreButton.addTarget(self, action: #selector(self.recordMorePressed), forControlEvents: [.touchUpInside])
         
         self.view.addSubview(self.recordMoreButton.view)
         
         if let viewForOverlayContent = self.viewForOverlayContent {
             viewForOverlayContent.addSubnode(self.viewOnceButton)
+            viewForOverlayContent.addSubnode(self.fullGramTranscribeButton)
         }
     }
 
@@ -3992,6 +3998,19 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
             self.viewOnceButton.isHidden = true
         }
         
+        var transcribeIsVisible = false
+        if let recordingState = interfaceState.inputTextPanelState.mediaRecordingState, case let .audio(_, isLocked) = recordingState {
+            transcribeIsVisible = isLocked
+        }
+        let transcribeSize = self.fullGramTranscribeButton.update(theme: interfaceState.theme)
+        let transcribeY = viewOnceButtonY - (self.viewOnceButton.isHidden ? 0.0 : 52.0)
+        let transcribeFrame = CGRect(origin: CGPoint(x: width - rightInset - 50.0 - UIScreenPixel, y: transcribeY), size: transcribeSize)
+        self.fullGramTranscribeButton.bounds = CGRect(origin: .zero, size: transcribeFrame.size)
+        transition.updatePosition(node: self.fullGramTranscribeButton, position: transcribeFrame.center)
+        transition.updateAlpha(node: self.fullGramTranscribeButton, alpha: transcribeIsVisible ? 1.0 : 0.0)
+        transition.updateTransformScale(node: self.fullGramTranscribeButton, scale: transcribeIsVisible ? 1.0 : 0.01)
+        self.fullGramTranscribeButton.isUserInteractionEnabled = transcribeIsVisible
+        
         let recordMoreSize = self.recordMoreButton.update(theme: interfaceState.theme)
         let recordMoreButtonFrame = CGRect(origin: CGPoint(x: width - rightInset - 50.0 - UIScreenPixel, y: -52.0), size: recordMoreSize)
         self.recordMoreButton.bounds = CGRect(origin: .zero, size: recordMoreButtonFrame.size)
@@ -4191,6 +4210,10 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
     
     @objc private func slowModeButtonPressed() {
         self.interfaceInteraction?.openBoostToUnrestrict()
+    }
+
+    @objc private func fullGramTranscribePressed() {
+        self.fullGramTranscribeRecording?()
     }
     
     @objc private func viewOncePressed() {
