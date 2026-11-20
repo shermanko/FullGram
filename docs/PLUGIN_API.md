@@ -1,4 +1,4 @@
-# FullGram Developer API (v1.5.0)
+# FullGram Developer API (v1.5.2)
 
 Документация по разработке плагинов на **Lua**, **Python** и **Rust**, созданию графического интерфейса (`fullgram.open_ui`), ограничениям безопасности и протоколу ИИ-ассистента FullGram.
 

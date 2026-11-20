@@ -450,7 +450,7 @@ jobs:
           key: bazel-disk-xcode27-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('versions.json') }}-${{ github.sha }}
 
       - name: Create GitHub Release
-        if: success() && ((github.event_name == 'push' && github.ref == 'refs/heads/master') || (github.event_name == 'workflow_dispatch' && inputs.create_release))
+        if: success() && ((github.event_name == 'push' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/heads/release/'))) || (github.event_name == 'workflow_dispatch' && inputs.create_release))
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -466,5 +466,5 @@ jobs:
           fi
 
           gh release create "$TAG" "${FILES[@]}" \
-            --title "FullGram v1.5.0 (${APP_VERSION} • ${BUILD_NUMBER})" \
-            --notes "Unsigned iOS build of FullGram v1.5.0 (${APP_VERSION} • ${BUILD_NUMBER}) from commit ${GITHUB_SHA}."
+            --title "FullGram v1.5.2 (${APP_VERSION} • ${BUILD_NUMBER})" \
+            --notes "Unsigned iOS build of FullGram v1.5.2 (${APP_VERSION} • ${BUILD_NUMBER}) from commit ${GITHUB_SHA}."
