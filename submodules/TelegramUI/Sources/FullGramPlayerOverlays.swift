@@ -36,7 +36,8 @@ final class FullGramSleepTimer {
     }
 
     func set(mode: Mode) {
-        let apply = {
+        let apply = { [weak self] in
+            guard let self else { return }
             self.timer?.invalidate()
             self.timer = nil
             self.targetDate = nil

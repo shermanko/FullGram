@@ -137,10 +137,13 @@ jobs:
           check_cmd automake automake
           check_cmd glibtoolize libtool
 
+          if ! command -v ccache >/dev/null 2>&1; then
+            MISSING+=("ccache")
+          fi
           if [ "${#MISSING[@]}" -gt 0 ]; then
             UNIQUE_FORMULAS=$(printf "%s\n" "${MISSING[@]}" | sort -u | tr '\n' ' ')
             echo "Installing missing Homebrew packages: ${UNIQUE_FORMULAS}"
-            HOMEBREW_NO_AUTO_UPDATE=1 brew install $UNIQUE_FORMULAS
+            HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install $UNIQUE_FORMULAS
           else
             echo "All required macOS build tools are already installed."
           fi
@@ -273,6 +276,7 @@ jobs:
           fi
 
           python3 - <<'PY'
+          import os
           from pathlib import Path
 
           rc = Path(".bazelrc")
@@ -282,6 +286,10 @@ jobs:
               "build --//Telegram:disableExtensions",
               "build --features=ayu_unsigned_compilation --features=disable_legacy_signing",
           ]
+          # On small CI runners (e.g. 3-core / 7 GiB), 3 concurrent Swift WMO jobs x 2 threads
+          # thrash CPU and RAM; capping Bazel jobs to 2 avoids swap pressure.
+          if (os.cpu_count() or 4) <= 4:
+              additions.append("build --jobs=2")
           missing = [line for line in additions if line not in text]
           if missing:
               rc.write_text(text.rstrip() + "\n" + "\n".join(missing) + "\n", encoding="utf-8")
@@ -296,7 +304,6 @@ jobs:
             --xcodeManagedCodesigning \
             --disableProvisioningProfiles \
             --skipDsym \
-            --continueOnError \
             --configurationPath="build-input/active-configuration.json" \
             --configuration="$BUILD_CONFIGURATION" \
             --buildNumber="$BUILD_NUMBER" \

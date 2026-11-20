@@ -804,16 +804,18 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
         }
         overlay.onEditRequested = { [weak self, weak overlay] title, artist, initialText, hasCustom in
             guard let self, let parent = self.getParentController() else { return }
-            FullGramUserLyrics.presentEditor(
-                from: parent,
-                title: title,
-                artist: artist,
-                initialText: initialText,
-                hasCustom: hasCustom
-            ) { [weak self, weak overlay] _ in
-                guard let self else { return }
-                let info = self.currentTrackInfo
-                overlay?.load(title: info?.title ?? title, artist: info?.artist ?? artist, duration: info?.duration ?? 0.0)
+            MainActor.assumeIsolated {
+                FullGramUserLyrics.presentEditor(
+                    from: parent,
+                    title: title,
+                    artist: artist,
+                    initialText: initialText,
+                    hasCustom: hasCustom
+                ) { [weak self, weak overlay] _ in
+                    guard let self else { return }
+                    let info = self.currentTrackInfo
+                    overlay?.load(title: info?.title ?? title, artist: info?.artist ?? artist, duration: info?.duration ?? 0.0)
+                }
             }
         }
         overlay.frame = self.bounds
