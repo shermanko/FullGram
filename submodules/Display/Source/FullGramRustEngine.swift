@@ -931,7 +931,7 @@ private struct RsParser {
 }
 
 private final class RsEnv {
-    private var vars: [String: FullGramPluginValue] = [:]
+    fileprivate var vars: [String: FullGramPluginValue] = [:]
     let parent: RsEnv?
 
     init(parent: RsEnv? = nil) {
