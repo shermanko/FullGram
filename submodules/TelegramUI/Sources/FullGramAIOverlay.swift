@@ -1,6 +1,6 @@
 import Foundation
 import UIKit
-import WebKit
+@preconcurrency import WebKit
 import Display
 import Postbox
 import TelegramCore
@@ -2216,7 +2216,6 @@ private final class FullGramCustomPluginGUIViewController: UIViewController {
     }
 }
 
-@MainActor
 private final class FullGramPluginWebMessageHandler: NSObject, WKScriptMessageHandler {
     weak var owner: FullGramPluginWebViewController?
     init(owner: FullGramPluginWebViewController) {
@@ -2227,7 +2226,6 @@ private final class FullGramPluginWebMessageHandler: NSObject, WKScriptMessageHa
     }
 }
 
-@MainActor
 private final class FullGramPluginWebViewController: UIViewController {
     private let url: URL
     private let titleText: String
