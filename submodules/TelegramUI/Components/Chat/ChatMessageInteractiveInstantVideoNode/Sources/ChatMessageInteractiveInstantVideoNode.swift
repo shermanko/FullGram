@@ -137,7 +137,7 @@ public class ChatMessageInteractiveInstantVideoNode: ASDisplayNode {
     private let playerStatusDisposable = MetaDisposable()
     private let fetchedThumbnailDisposable = MetaDisposable()
     private let fullGramSubtitleDisposable = MetaDisposable()
-    private var fullGramSubtitleMessageId: MessageId?
+    private var fullGramSubtitleMessageId: EngineMessage.Id?
     private var fullGramSubtitleCues: [FullGramSubtitleCue] = []
     private var fullGramSubtitleLabel: UILabel?
     

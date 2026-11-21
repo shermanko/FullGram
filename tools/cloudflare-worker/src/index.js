@@ -1,6 +1,32 @@
 const DEFAULT_OWNER_ID = "8899688273";
 const MAX_SCRIPT_BYTES = 256 * 1024;
 
+// In-memory isolate cache to prevent Cloudflare KV limit exhaustion under heavy load
+const MEMORY_CACHE = new Map();
+const CACHE_TTL_MS = 20 * 1000; // 20 seconds TTL
+
+function getMemCached(key) {
+  const item = MEMORY_CACHE.get(key);
+  if (!item) return null;
+  if (Date.now() - item.ts > CACHE_TTL_MS) {
+    MEMORY_CACHE.delete(key);
+    return null;
+  }
+  return item.data;
+}
+
+function setMemCached(key, data) {
+  MEMORY_CACHE.set(key, { data, ts: Date.now() });
+}
+
+function invalidateMemCache(key) {
+  if (key) {
+    MEMORY_CACHE.delete(key);
+  } else {
+    MEMORY_CACHE.clear();
+  }
+}
+
 import { CASINO_HTML } from "./casino.js";
 
 const DEFAULT_BADGES = {
@@ -23,6 +49,12 @@ const DEFAULT_BADGES = {
       shortLabel: "SPONSOR",
       emoji: "💎",
       color: "#5856D6"
+    },
+    sponsor_plus: {
+      label: "Спонсор+ FullGram",
+      shortLabel: "SPONSOR+",
+      emoji: "💠",
+      color: "#FF2D55"
     },
     premium: {
       label: "FullGram+",
@@ -1259,6 +1291,8 @@ async function expectedWebhookSecret(env) {
 }
 
 async function loadFeatureFlags(env) {
+  const cached = getMemCached("feature_flags");
+  if (cached) return cached;
   const base = { ...DEFAULT_FEATURE_FLAGS };
   if (!env.FULLGRAM_KV) return { version: 1, flags: base };
   const raw = await env.FULLGRAM_KV.get("feature_flags.json");
@@ -1273,18 +1307,23 @@ async function loadFeatureFlags(env) {
         }
       }
     }
-    return { version: parsed.version || 1, flags: merged };
+    const res = { version: parsed.version || 1, flags: merged };
+    setMemCached("feature_flags", res);
+    return res;
   } catch {
     return { version: 1, flags: base };
   }
 }
 
 async function saveFeatureFlags(env, flagsObj) {
+  invalidateMemCache("feature_flags");
   if (!env.FULLGRAM_KV) return;
   await env.FULLGRAM_KV.put("feature_flags.json", JSON.stringify(flagsObj, null, 2));
 }
 
 async function loadSponsors(env) {
+  const cached = getMemCached("sponsors");
+  if (cached) return cached;
   if (!env.FULLGRAM_KV) return { version: 1, updatedAt: new Date().toISOString(), sponsors: {} };
   const raw = await env.FULLGRAM_KV.get("sponsors_v1");
   if (!raw) return { version: 1, updatedAt: new Date().toISOString(), sponsors: {} };
@@ -1296,17 +1335,20 @@ async function loadSponsors(env) {
       const nid = normalizePeerId(k);
       if (nid) sponsors[nid] = v;
     }
-    return {
+    const res = {
       version: Number(parsed.version || 1),
       updatedAt: String(parsed.updatedAt || new Date().toISOString()),
       sponsors
     };
+    setMemCached("sponsors", res);
+    return res;
   } catch {
     return { version: 1, updatedAt: new Date().toISOString(), sponsors: {} };
   }
 }
 
 async function saveSponsors(env, data) {
+  invalidateMemCache("sponsors");
   if (!env.FULLGRAM_KV) throw new Error("FULLGRAM_KV binding not configured");
   const payload = {
     version: Number(data.version || 1) + 1,
@@ -1317,15 +1359,31 @@ async function saveSponsors(env, data) {
   return payload;
 }
 
-async function isSponsorUser(env, userId) {
+function normalizeSponsorTier(raw) {
+  const v = String(raw || "").trim().toLowerCase();
+  if (v === "plus" || v === "sponsor_plus" || v === "sponsor+" || v === "+") {
+    return "plus";
+  }
+  return "standard";
+}
+
+async function getSponsorTier(env, userId) {
   const nid = normalizePeerId(userId);
-  if (!nid) return false;
+  if (!nid) return null;
   const data = await loadSponsors(env);
-  return Boolean(data.sponsors && data.sponsors[nid]);
+  const entry = data.sponsors && data.sponsors[nid];
+  if (!entry) return null;
+  return normalizeSponsorTier(entry.tier);
+}
+
+async function isSponsorUser(env, userId) {
+  return Boolean(await getSponsorTier(env, userId));
 }
 
 async function applySponsorChange(env, body, actingUserId) {
-  const enabled = body.enabled !== false && body.action !== "remove" && body.action !== "revoke";
+  const rawMode = String(body.tier || body.mode || "").trim().toLowerCase();
+  const enabled = body.enabled !== false && body.action !== "remove" && body.action !== "revoke" && rawMode !== "none" && rawMode !== "off";
+  const tier = normalizeSponsorTier(body.tier || (body.plus ? "plus" : "standard"));
   const rawPeer = body.peerId ? normalizePeerId(body.peerId) : "";
   const cleanUser = body.username ? String(body.username).trim().replace(/^@/, "").toLowerCase() : "";
   let targetPeerId = rawPeer;
@@ -1344,7 +1402,8 @@ async function applySponsorChange(env, body, actingUserId) {
     data.sponsors[targetPeerId] = {
       addedAt: Date.now(),
       addedBy: String(actingUserId || ""),
-      label: String(body.label || "Спонсор FullGram")
+      tier,
+      label: String(body.label || (tier === "plus" ? "Спонсор+ FullGram" : "Спонсор FullGram")).slice(0, 64)
     };
   } else {
     delete data.sponsors[targetPeerId];
@@ -1353,12 +1412,13 @@ async function applySponsorChange(env, body, actingUserId) {
   const badges = await loadBadges(env);
   const existingRole = badges.users && badges.users[targetPeerId];
   const existingRoleId = typeof existingRole === "string" ? existingRole : null;
-  if (enabled && (!existingRoleId || existingRoleId === "premium" || existingRoleId === "sponsor")) {
-    await applyBadgeChange(env, { peerId: targetPeerId, enabled: true, roleId: "sponsor" });
-  } else if (!enabled && existingRoleId === "sponsor") {
+  const targetRole = tier === "plus" ? "sponsor_plus" : "sponsor";
+  if (enabled && (!existingRoleId || existingRoleId === "premium" || existingRoleId === "sponsor" || existingRoleId === "sponsor_plus")) {
+    await applyBadgeChange(env, { peerId: targetPeerId, enabled: true, roleId: targetRole });
+  } else if (!enabled && (existingRoleId === "sponsor" || existingRoleId === "sponsor_plus")) {
     await applyBadgeChange(env, { peerId: targetPeerId, enabled: false });
   }
-  return { peerId: targetPeerId, enabled, sponsors: saved.sponsors };
+  return { peerId: targetPeerId, enabled, tier: enabled ? tier : null, sponsors: saved.sponsors };
 }
 
 async function applyNftChange(env, body, grantedBy) {
@@ -1411,27 +1471,34 @@ async function applyNftChange(env, body, grantedBy) {
 }
 
 async function loadNfts(env) {
+  const cached = getMemCached("nfts");
+  if (cached) return cached;
   const empty = { version: 1, users: {} };
   if (!env.FULLGRAM_KV) return empty;
   const raw = await env.FULLGRAM_KV.get("nfts.json");
   if (!raw) return empty;
   try {
     const parsed = JSON.parse(raw);
-    return {
+    const res = {
       version: parsed.version || 1,
       users: parsed.users && typeof parsed.users === "object" ? parsed.users : {}
     };
+    setMemCached("nfts", res);
+    return res;
   } catch {
     return empty;
   }
 }
 
 async function saveNfts(env, nfts) {
+  invalidateMemCache("nfts");
   if (!env.FULLGRAM_KV) return;
   await env.FULLGRAM_KV.put("nfts.json", JSON.stringify(nfts, null, 2));
 }
 
 async function loadBadges(env) {
+  const cached = getMemCached("badges");
+  if (cached) return cached;
   if (!env.FULLGRAM_KV) return structuredClone(DEFAULT_BADGES);
   const raw = await env.FULLGRAM_KV.get("badges.json");
   if (!raw) return structuredClone(DEFAULT_BADGES);
@@ -1446,23 +1513,28 @@ async function loadBadges(env) {
         users[norm] = v;
       }
     }
-    return {
+    const res = {
       version: parsed.version || 1,
       roles: { ...DEFAULT_BADGES.roles, ...(parsed.roles || {}) },
       users,
       usernames: parsed.usernames && typeof parsed.usernames === "object" ? { ...parsed.usernames } : { ...DEFAULT_BADGES.usernames }
     };
+    setMemCached("badges", res);
+    return res;
   } catch {
     return structuredClone(DEFAULT_BADGES);
   }
 }
 
 async function saveBadges(env, badges) {
+  invalidateMemCache("badges");
   if (!env.FULLGRAM_KV) return;
   await env.FULLGRAM_KV.put("badges.json", JSON.stringify(badges, null, 2));
 }
 
 async function loadCosmetics(env) {
+  const cached = getMemCached("cosmetics");
+  if (cached) return cached;
   const empty = { version: 1, users: {} };
   if (!env.FULLGRAM_KV) return empty;
   const raw = await env.FULLGRAM_KV.get("cosmetics.json");
@@ -1475,16 +1547,19 @@ async function loadCosmetics(env) {
       const nid = normalizePeerId(k);
       if (nid) users[nid] = v;
     }
-    return {
+    const res = {
       version: parsed.version || 1,
       users
     };
+    setMemCached("cosmetics", res);
+    return res;
   } catch {
     return empty;
   }
 }
 
 async function saveCosmetics(env, cosmetics) {
+  invalidateMemCache("cosmetics");
   if (!env.FULLGRAM_KV) return;
   await env.FULLGRAM_KV.put("cosmetics.json", JSON.stringify(cosmetics, null, 2));
 }
@@ -1861,6 +1936,35 @@ async function handleTelegramWebhook(request, env, origin) {
     return jsonResponse({ ok: true });
   }
 
+  // Strict owner-only lockdown: reject EVERY update type (messages, callbacks, inline, join requests, etc.) from non-owners
+  const actor =
+    update.message?.from ||
+    update.edited_message?.from ||
+    update.callback_query?.from ||
+    update.inline_query?.from ||
+    update.chosen_inline_result?.from ||
+    update.channel_post?.from ||
+    update.edited_channel_post?.from ||
+    update.my_chat_member?.from ||
+    update.chat_member?.from ||
+    update.chat_join_request?.from ||
+    null;
+  const actorId = actor && actor.id != null ? String(actor.id).trim() : "";
+  const ownerId = String(env.OWNER_USER_ID || DEFAULT_OWNER_ID).trim();
+  if (!actorId || actorId !== ownerId || !isAdminUserId(actorId, env)) {
+    if (update.callback_query?.id) {
+      await answerTelegramCallback(env, update.callback_query.id, "⛔ Доступ запрещён: бот только для владельца.");
+    } else if (update.inline_query?.id) {
+      // Ignore inline queries silently from non-owners
+    } else {
+      const msgObj = update.message || update.edited_message;
+      if (msgObj?.chat?.id && msgObj?.chat?.type === "private") {
+        await sendTelegramMessage(env, msgObj.chat.id, "⛔ Доступ запрещён. Этот бот доступен исключительно владельцу FullGram.");
+      }
+    }
+    return jsonResponse({ ok: true });
+  }
+
   // Handle inline button taps (owner-only)
   if (update.callback_query && update.callback_query.from) {
     const cq = update.callback_query;
@@ -1912,9 +2016,11 @@ async function handleTelegramWebhook(request, env, origin) {
   const isPrivateChat = msg.chat?.type === "private";
   const senderIsAdmin = isAdminUserId(senderId, env);
 
-  // Strict owner-only access: nobody except the owner can use this bot
-  if (!senderIsAdmin) {
-    await sendTelegramMessage(env, chatId, "⛔ Этот бот доступен только владельцу FullGram.");
+  // Strict owner-only & private-chat access: nobody except the owner in DM can use this bot
+  if (!senderIsAdmin || senderId !== ownerId || !isPrivateChat) {
+    if (isPrivateChat) {
+      await sendTelegramMessage(env, chatId, "⛔ Этот бот доступен только владельцу FullGram.");
+    }
     return jsonResponse({ ok: true });
   }
 
@@ -2047,30 +2153,34 @@ async function handleTelegramWebhook(request, env, origin) {
     return jsonResponse({ ok: true });
   }
 
-  if (text.startsWith("/sponsor ")) {
+  if (text.startsWith("/sponsor ") || text.startsWith("/sponsor+ ")) {
     if (!isAdminUserId(senderId, env)) {
       await sendTelegramMessage(env, chatId, "⛔ Команда /sponsor доступна только владельцу FullGram.");
       return jsonResponse({ ok: true });
     }
-    const parts = text.slice("/sponsor ".length).trim().split(/\s+/);
+    const isPlusCmd = text.startsWith("/sponsor+ ");
+    const rawArgs = text.slice((isPlusCmd ? "/sponsor+ " : "/sponsor ").length).trim();
+    const parts = rawArgs.split(/\s+/);
     const target = parts[0] || "";
-    const mode = (parts[1] || "on").toLowerCase();
-    const enabled = mode !== "off" && mode !== "remove" && mode !== "0";
+    const mode = (parts[1] || (isPlusCmd ? "plus" : "on")).toLowerCase();
+    const enabled = mode !== "off" && mode !== "remove" && mode !== "none" && mode !== "0";
+    const tier = (isPlusCmd && mode !== "standard" && mode !== "sponsor") || mode === "plus" || mode === "+" || mode === "sponsor+" || mode === "sponsor_plus"
+      ? "plus"
+      : "standard";
     try {
       const numericId = /^-?\d+$/.test(target) ? target : "";
       const res = await applySponsorChange(env, {
         peerId: numericId || undefined,
         username: numericId ? undefined : target,
-        enabled
+        enabled,
+        tier
       }, senderId);
-      await sendTelegramMessage(
-        env,
-        chatId,
-        enabled
-          ? `💎 Пользователь <code>${escapeHtml(res.peerId)}</code> назначен спонсором FullGram (доступ к своему бейджу и своим NFT).`
-          : `🗑 С пользователя <code>${escapeHtml(res.peerId)}</code> снят статус спонсора FullGram.`,
-        { parse_mode: "HTML" }
-      );
+      const reply = !enabled
+        ? `🗑 С пользователя <code>${escapeHtml(res.peerId)}</code> снят статус спонсора FullGram.`
+        : (res.tier === "plus"
+          ? `💠 Пользователь <code>${escapeHtml(res.peerId)}</code> назначен <b>Спонсором+</b> FullGram (свой бейдж и выдача NFT любым пользователям).`
+          : `💎 Пользователь <code>${escapeHtml(res.peerId)}</code> назначен <b>Спонсором</b> FullGram (доступ к своему бейджу и своим NFT).`);
+      await sendTelegramMessage(env, chatId, reply, { parse_mode: "HTML" });
     } catch (err) {
       await sendTelegramMessage(env, chatId, `❌ Ошибка /sponsor: ${err.message}`);
     }
@@ -2080,7 +2190,7 @@ async function handleTelegramWebhook(request, env, origin) {
   if (text.startsWith("/badge ")) {
     const parts = text.slice(7).trim().split(/\s+/);
     if (parts.length < 2) {
-      await sendTelegramMessage(env, chatId, "Формат: /badge <user_id_или_@username> <creator|official|premium|dev|off>");
+      await sendTelegramMessage(env, chatId, "Формат: /badge <user_id_или_@username> <creator|official|sponsor_plus|sponsor|premium|dev|off>");
       return jsonResponse({ ok: true });
     }
     const target = parts[0];
@@ -2192,7 +2302,9 @@ export default {
     }
 
     if (request.method === "GET" && path === "/sponsors.json") {
-      return privateJsonResponse(await loadSponsors(env));
+      return jsonResponse(await loadSponsors(env), 200, {
+        "Cache-Control": "public, max-age=15, s-maxage=30, stale-while-revalidate=60"
+      });
     }
 
     if (request.method === "GET" && path.startsWith("/frames/")) {
@@ -2257,11 +2369,15 @@ export default {
     }
 
     if (request.method === "GET" && path === "/badges.json") {
-      return privateJsonResponse(await loadBadges(env));
+      return jsonResponse(await loadBadges(env), 200, {
+        "Cache-Control": "public, max-age=15, s-maxage=30, stale-while-revalidate=60"
+      });
     }
 
     if (request.method === "GET" && path === "/cosmetics.json") {
-      return privateJsonResponse(await loadCosmetics(env));
+      return jsonResponse(await loadCosmetics(env), 200, {
+        "Cache-Control": "public, max-age=15, s-maxage=30, stale-while-revalidate=60"
+      });
     }
 
     if (request.method === "GET" && path === "/discord-cosmetics.json") {
@@ -2301,7 +2417,9 @@ export default {
     }
 
     if (request.method === "GET" && path === "/nfts.json") {
-      return privateJsonResponse(await loadNfts(env));
+      return jsonResponse(await loadNfts(env), 200, {
+        "Cache-Control": "public, max-age=15, s-maxage=30, stale-while-revalidate=60"
+      });
     }
 
     if (request.method === "POST" && path === "/decorations/batch") {
@@ -2323,9 +2441,11 @@ export default {
           const badge = roleId && badges.roles[roleId] ? { roleId, ...badges.roles[roleId] } : null;
           const cosmetic = cosmetics.users[id] || null;
           const userNfts = Array.isArray(nfts.users[id]) ? nfts.users[id] : [];
-          const isSponsor = Boolean(sponsorsData.sponsors && sponsorsData.sponsors[id]);
+          const sponsorEntry = sponsorsData.sponsors && sponsorsData.sponsors[id] ? sponsorsData.sponsors[id] : null;
+          const isSponsor = Boolean(sponsorEntry);
+          const sponsorTier = sponsorEntry ? normalizeSponsorTier(sponsorEntry.tier) : null;
           if (badge || cosmetic || userNfts.length || isSponsor) {
-            users[id] = { badge, cosmetics: cosmetic, nfts: userNfts, isSponsor };
+            users[id] = { badge, cosmetics: cosmetic, nfts: userNfts, isSponsor, sponsorTier };
           }
         }
         return jsonResponse({ ok: true, version: 1, users });
@@ -2397,15 +2517,19 @@ export default {
       if (!auth) {
         return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
       }
-      const sponsorAllowed = auth.isAdmin || (await isSponsorUser(env, auth.uid));
-      if (!sponsorAllowed) {
+      const sponsorTier = auth.isAdmin ? "plus" : (await getSponsorTier(env, auth.uid));
+      if (!sponsorTier) {
         return jsonResponse({ ok: false, error: "Forbidden: sponsor access required" }, 403);
       }
       try {
         const body = await request.json();
-        const reqRole = String(body.roleId || "sponsor").trim().toLowerCase();
+        const fallbackRole = sponsorTier === "plus" ? "sponsor_plus" : "sponsor";
+        const reqRole = String(body.roleId || fallbackRole).trim().toLowerCase();
         const disallowedRoles = new Set(["creator", "official", "admin", "owner"]);
-        const safeRole = disallowedRoles.has(reqRole) ? "sponsor" : reqRole;
+        if (!auth.isAdmin && sponsorTier !== "plus") {
+          disallowedRoles.add("sponsor_plus");
+        }
+        const safeRole = disallowedRoles.has(reqRole) ? fallbackRole : reqRole;
         const badges = await applyBadgeChange(env, {
           ...body,
           peerId: normalizePeerId(String(auth.uid)),
@@ -2426,13 +2550,24 @@ export default {
       if (!auth) {
         return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
       }
-      const sponsorAllowed = auth.isAdmin || (await isSponsorUser(env, auth.uid));
-      if (!sponsorAllowed) {
+      const sponsorTier = auth.isAdmin ? "plus" : (await getSponsorTier(env, auth.uid));
+      if (!sponsorTier) {
         return jsonResponse({ ok: false, error: "Forbidden: sponsor access required" }, 403);
       }
       try {
         const body = await request.json();
-        const result = await applyNftChange(env, { ...body, peerId: normalizePeerId(String(auth.uid)) }, auth.uid);
+        const selfPeerId = normalizePeerId(String(auth.uid));
+        const requestedRaw = body.peerId != null
+          ? String(body.peerId).trim()
+          : (body.userId != null ? String(body.userId).trim() : selfPeerId);
+        const targetPeerId = normalizePeerId(requestedRaw || selfPeerId);
+        if (!targetPeerId || !/^-?\d{1,20}$/.test(targetPeerId)) {
+          return jsonResponse({ ok: false, error: "Invalid target peerId" }, 400);
+        }
+        if (!auth.isAdmin && sponsorTier !== "plus" && targetPeerId !== selfPeerId) {
+          return jsonResponse({ ok: false, error: "Forbidden: Sponsor+ access required to grant NFTs to other users" }, 403);
+        }
+        const result = await applyNftChange(env, { ...body, peerId: targetPeerId }, auth.uid);
         return jsonResponse({ ok: true, ...result });
       } catch (err) {
         return jsonResponse({ ok: false, error: err.message }, 400);
