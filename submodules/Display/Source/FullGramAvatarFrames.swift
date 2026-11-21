@@ -1619,6 +1619,10 @@ public final class FullGramAvatarFrameView: UIView {
         self.onLoadingStateChanged?(false)
     }
 
+    public func stop() {
+        self.cancelPendingLoad()
+    }
+
     public func configureThumbnail(with preset: FullGramAvatarFramePreset?) {
         FullGramAnimatedImageDecoder.cancelThumbnail(token: self.activeThumbToken)
         self.activeThumbToken = nil
@@ -1768,6 +1772,10 @@ public final class FullGramProfileEffectOverlayView: UIView {
         self.ambientLayer.removeAllAnimations()
         self.ambientLayer.contents = nil
         self.onLoadingStateChanged?(false)
+    }
+
+    public func stop() {
+        self.cancelPendingLoad()
     }
 
     public func configureThumbnail(with preset: FullGramProfileEffectPreset?) {

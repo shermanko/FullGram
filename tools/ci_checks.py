@@ -332,6 +332,7 @@ def check_swift_sources() -> int:
             display_syms.add(m.group(1))
 
     extra_paths = {
+        ROOT / "submodules" / "AvatarNode" / "Sources" / "AvatarNode.swift",
         ROOT / "submodules" / "TelegramUI" / "Sources" / "ManagedAudioRecorder.swift",
         ROOT / "submodules" / "TelegramUI" / "Sources" / "OverlayAudioPlayerControllerNode.swift",
         ROOT / "submodules" / "TelegramUI" / "Sources" / "Chat" / "ChatControllerLoadDisplayNode.swift",
@@ -368,6 +369,11 @@ def check_swift_sources() -> int:
             raise AssertionError(f"{rel} discards NotificationCenter observer without removing it in afterDisposed")
         if re.search(r"(?:\?\?\s*self\.rootController\b|rootController\s+as\??\s*ViewController\b)", text):
             raise AssertionError(f"{rel} treats TelegramRootController (NavigationController) as ViewController")
+
+    frames_path = ROOT / "submodules" / "Display" / "Source" / "FullGramAvatarFrames.swift"
+    frames_text = frames_path.read_text(encoding="utf-8")
+    if frames_text.count("public func stop()") < 2:
+        raise AssertionError("FullGramAvatarFrames.swift must define public func stop() on FullGramAvatarFrameView and FullGramProfileEffectOverlayView")
 
     return len(audit_files)
 
