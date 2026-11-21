@@ -1,46 +1,7 @@
 import Foundation
-import UIKit
 
-/// FullGram per-device power saving profiles (Phone / Tablet / Mac).
+/// FullGram power saving settings.
 public enum FullGramPowerSaving {
-    public enum DeviceKind: String, CaseIterable, Sendable {
-        case phone
-        case tablet
-        case laptop
-
-        public static let current: DeviceKind = {
-            if ProcessInfo.processInfo.isiOSAppOnMac || ProcessInfo.processInfo.isMacCatalystApp {
-                return .laptop
-            }
-            var size = 0
-            sysctlbyname("hw.machine", nil, &size, nil, 0)
-            if size > 0 {
-                var machine = [CChar](repeating: 0, count: size)
-                if sysctlbyname("hw.machine", &machine, &size, nil, 0) == 0 {
-                    let model = String(cString: machine)
-                    if model.hasPrefix("iPad") {
-                        return .tablet
-                    }
-                    if model.hasPrefix("iPhone") || model.hasPrefix("iPod") {
-                        return .phone
-                    }
-                }
-            }
-            if Thread.isMainThread {
-                return MainActor.assumeIsolated { UIDevice.current.userInterfaceIdiom == .pad ? .tablet : .phone }
-            }
-            return .phone
-        }()
-
-        public var title: String {
-            switch self {
-            case .phone: return "Телефон"
-            case .tablet: return "Планшет"
-            case .laptop: return "Ноутбук (Mac)"
-            }
-        }
-    }
-
     public enum Mode: Int, CaseIterable, Sendable {
         case telegram = 0
         case off = 1
@@ -100,52 +61,31 @@ public enum FullGramPowerSaving {
             self.limits = limits
         }
 
-        public static func defaults(for kind: DeviceKind) -> Profile {
-            switch kind {
-            case .phone:
-                return Profile(
-                    mode: .telegram,
-                    threshold: 20,
-                    followLowPowerMode: true,
-                    onBatteryOnly: false,
-                    limits: Set(Limit.allCases)
-                )
-            case .tablet:
-                return Profile(
-                    mode: .telegram,
-                    threshold: 15,
-                    followLowPowerMode: true,
-                    onBatteryOnly: false,
-                    limits: [.autoplayVideo, .autoplayGif, .loopStickers, .loopEmoji, .backgroundDownloads]
-                )
-            case .laptop:
-                return Profile(
-                    mode: .telegram,
-                    threshold: 25,
-                    followLowPowerMode: true,
-                    onBatteryOnly: true,
-                    limits: [.autoplayVideo, .autoplayGif, .translucency, .backgroundDownloads]
-                )
-            }
-        }
+        public static let `default` = Profile(
+            mode: .telegram,
+            threshold: 20,
+            followLowPowerMode: true,
+            onBatteryOnly: false,
+            limits: Set(Limit.allCases)
+        )
     }
 
     public static let didChangeNotification = Notification.Name("FullGram.PowerSavingDidChange")
 
-    private static func key(_ kind: DeviceKind, _ suffix: String) -> String {
-        return "fullgram.powerSaving.\(kind.rawValue).\(suffix)"
+    private static func key(_ suffix: String) -> String {
+        return "fullgram.powerSaving.\(suffix)"
     }
 
-    public static func profile(for kind: DeviceKind = .current) -> Profile {
+    public static func profile() -> Profile {
         let d = UserDefaults.standard
-        let def = Profile.defaults(for: kind)
-        let modeRaw = d.object(forKey: key(kind, "mode")) as? Int ?? def.mode.rawValue
+        let def = Profile.default
+        let modeRaw = d.object(forKey: key("mode")) as? Int ?? def.mode.rawValue
         let mode = Mode(rawValue: modeRaw) ?? def.mode
-        let threshold = d.object(forKey: key(kind, "threshold")) as? Int ?? def.threshold
-        let followLPM = d.object(forKey: key(kind, "followLPM")) as? Bool ?? def.followLowPowerMode
-        let onBattery = d.object(forKey: key(kind, "onBattery")) as? Bool ?? def.onBatteryOnly
+        let threshold = d.object(forKey: key("threshold")) as? Int ?? def.threshold
+        let followLPM = d.object(forKey: key("followLPM")) as? Bool ?? def.followLowPowerMode
+        let onBattery = d.object(forKey: key("onBattery")) as? Bool ?? def.onBatteryOnly
         var limits = def.limits
-        if let rawLimits = d.stringArray(forKey: key(kind, "limits")) {
+        if let rawLimits = d.stringArray(forKey: key("limits")) {
             limits = Set(rawLimits.compactMap { Limit(rawValue: $0) })
         }
         return Profile(
@@ -157,31 +97,30 @@ public enum FullGramPowerSaving {
         )
     }
 
-    public static func setProfile(_ profile: Profile, for kind: DeviceKind = .current) {
+    public static func setProfile(_ profile: Profile) {
         let d = UserDefaults.standard
-        d.set(profile.mode.rawValue, forKey: key(kind, "mode"))
-        d.set(min(95, max(5, profile.threshold)), forKey: key(kind, "threshold"))
-        d.set(profile.followLowPowerMode, forKey: key(kind, "followLPM"))
-        d.set(profile.onBatteryOnly, forKey: key(kind, "onBattery"))
-        d.set(profile.limits.map(\.rawValue).sorted(), forKey: key(kind, "limits"))
+        d.set(profile.mode.rawValue, forKey: key("mode"))
+        d.set(min(95, max(5, profile.threshold)), forKey: key("threshold"))
+        d.set(profile.followLowPowerMode, forKey: key("followLPM"))
+        d.set(profile.onBatteryOnly, forKey: key("onBattery"))
+        d.set(profile.limits.map(\.rawValue).sorted(), forKey: key("limits"))
         NotificationCenter.default.post(name: didChangeNotification, object: nil)
     }
 
-    public static func reset(for kind: DeviceKind = .current) {
+    public static func reset() {
         let d = UserDefaults.standard
         for suffix in ["mode", "threshold", "followLPM", "onBattery", "limits"] {
-            d.removeObject(forKey: key(kind, suffix))
+            d.removeObject(forKey: key(suffix))
         }
         NotificationCenter.default.post(name: didChangeNotification, object: nil)
     }
 
     public static func isSavingActive(
-        for kind: DeviceKind = .current,
         batteryLevel: Float? = nil,
         isCharging: Bool? = nil,
         isLowPowerMode: Bool = ProcessInfo.processInfo.isLowPowerModeEnabled
     ) -> Bool? {
-        let p = self.profile(for: kind)
+        let p = self.profile()
         switch p.mode {
         case .telegram:
             return nil
@@ -212,10 +151,8 @@ public enum FullGramPowerSaving {
         batteryLevel: Float? = nil,
         isCharging: Bool? = nil
     ) -> EnergyUsageSettings {
-        let kind = DeviceKind.current
-        let p = self.profile(for: kind)
+        let p = self.profile()
         guard let active = self.isSavingActive(
-            for: kind,
             batteryLevel: batteryLevel,
             isCharging: isCharging,
             isLowPowerMode: isSystemLowPowerMode

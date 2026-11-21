@@ -19,10 +19,25 @@ public final class FullGramMiniLyrics: @unchecked Sendable {
 
     private static let enabledKey = "fullgram.player.miniLyrics"
     public static let didUpdateNotification = Notification.Name("FullGram.MiniLyricsUpdated")
+    private static let stateLock = NSLock()
+    private static nonisolated(unsafe) var cachedIsEnabled: Bool?
 
     public static var isEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true }
+        get {
+            self.stateLock.lock()
+            if let v = self.cachedIsEnabled {
+                self.stateLock.unlock()
+                return v
+            }
+            let resolved = UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true
+            self.cachedIsEnabled = resolved
+            self.stateLock.unlock()
+            return resolved
+        }
         set {
+            self.stateLock.lock()
+            self.cachedIsEnabled = newValue
+            self.stateLock.unlock()
             UserDefaults.standard.set(newValue, forKey: enabledKey)
             NotificationCenter.default.post(name: didUpdateNotification, object: nil)
         }
@@ -107,12 +122,17 @@ public final class FullGramMiniLyrics: @unchecked Sendable {
         let snapshot = self.lines
         self.lock.unlock()
 
+        var lo = 0
+        var hi = snapshot.count - 1
         var matched: Line?
-        for item in snapshot {
-            if item.time <= timestamp + 0.12 {
-                matched = item
+        let targetTime = timestamp + 0.12
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            if snapshot[mid].time <= targetTime {
+                matched = snapshot[mid]
+                lo = mid + 1
             } else {
-                break
+                hi = mid - 1
             }
         }
         guard let current = matched else { return nil }

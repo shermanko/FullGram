@@ -7,10 +7,9 @@ import TelegramPresentationData
 import TelegramUIPreferences
 import ItemListUI
 
-// MARK: - Power Saving Profiles Screen (FullGram → Прочее → Энергосбережение)
+// MARK: - Power Saving Screen (FullGram → Прочее → Энергосбережение)
 
 private final class FullGramPowerSavingArguments {
-    let selectDevice: (FullGramPowerSaving.DeviceKind) -> Void
     let selectMode: (FullGramPowerSaving.Mode) -> Void
     let adjustThreshold: (Int) -> Void
     let toggleFollowLowPower: (Bool) -> Void
@@ -19,7 +18,6 @@ private final class FullGramPowerSavingArguments {
     let resetProfile: () -> Void
 
     init(
-        selectDevice: @escaping (FullGramPowerSaving.DeviceKind) -> Void,
         selectMode: @escaping (FullGramPowerSaving.Mode) -> Void,
         adjustThreshold: @escaping (Int) -> Void,
         toggleFollowLowPower: @escaping (Bool) -> Void,
@@ -27,7 +25,6 @@ private final class FullGramPowerSavingArguments {
         toggleLimit: @escaping (FullGramPowerSaving.Limit, Bool) -> Void,
         resetProfile: @escaping () -> Void
     ) {
-        self.selectDevice = selectDevice
         self.selectMode = selectMode
         self.adjustThreshold = adjustThreshold
         self.toggleFollowLowPower = toggleFollowLowPower
@@ -38,16 +35,13 @@ private final class FullGramPowerSavingArguments {
 }
 
 private enum FullGramPowerSavingSection: Int32 {
-    case device = 0
-    case mode = 1
-    case conditions = 2
-    case limits = 3
-    case reset = 4
+    case mode = 0
+    case conditions = 1
+    case limits = 2
+    case reset = 3
 }
 
 private enum FullGramPowerSavingEntry: ItemListNodeEntry {
-    case deviceHeader(String)
-    case deviceRow(Int32, FullGramPowerSaving.DeviceKind, Bool, Bool)
     case modeHeader(String)
     case modeRow(Int32, FullGramPowerSaving.Mode, Bool)
     case conditionsHeader(String)
@@ -60,7 +54,6 @@ private enum FullGramPowerSavingEntry: ItemListNodeEntry {
 
     var section: ItemListSectionId {
         switch self {
-        case .deviceHeader, .deviceRow: return FullGramPowerSavingSection.device.rawValue
         case .modeHeader, .modeRow: return FullGramPowerSavingSection.mode.rawValue
         case .conditionsHeader, .thresholdRow, .followLowPower, .onBatteryOnly: return FullGramPowerSavingSection.conditions.rawValue
         case .limitsHeader, .limitRow: return FullGramPowerSavingSection.limits.rawValue
@@ -70,8 +63,6 @@ private enum FullGramPowerSavingEntry: ItemListNodeEntry {
 
     var stableId: Int32 {
         switch self {
-        case .deviceHeader: return 0
-        case let .deviceRow(i, _, _, _): return 1 + i
         case .modeHeader: return 10
         case let .modeRow(i, _, _): return 11 + i
         case .conditionsHeader: return 20
@@ -91,13 +82,8 @@ private enum FullGramPowerSavingEntry: ItemListNodeEntry {
     func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
         let args = arguments as! FullGramPowerSavingArguments
         switch self {
-        case let .deviceHeader(text), let .modeHeader(text), let .conditionsHeader(text), let .limitsHeader(text):
+        case let .modeHeader(text), let .conditionsHeader(text), let .limitsHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
-        case let .deviceRow(_, kind, isSelected, isCurrent):
-            let title = isCurrent ? "\(kind.title) (текущее)" : kind.title
-            return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: title, style: .right, checked: isSelected, zeroSeparatorInsets: false, sectionId: self.section) {
-                args.selectDevice(kind)
-            }
         case let .modeRow(_, mode, isSelected):
             return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: mode.title, style: .right, checked: isSelected, zeroSeparatorInsets: false, sectionId: self.section) {
                 args.selectMode(mode)
@@ -122,9 +108,7 @@ private enum FullGramPowerSavingEntry: ItemListNodeEntry {
 }
 
 func fullGramPowerSavingController(context: AccountContext) -> ViewController {
-    let selectedDevice = ValuePromise<FullGramPowerSaving.DeviceKind>(FullGramPowerSaving.DeviceKind.current, ignoreRepeated: false)
     let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
-    var currentDevice = FullGramPowerSaving.DeviceKind.current
     var tick = 0
     let bump: () -> Void = {
         tick += 1
@@ -132,62 +116,53 @@ func fullGramPowerSavingController(context: AccountContext) -> ViewController {
     }
 
     let args = FullGramPowerSavingArguments(
-        selectDevice: { kind in
-            currentDevice = kind
-            selectedDevice.set(kind)
-            bump()
-        },
         selectMode: { mode in
-            var profile = FullGramPowerSaving.profile(for: currentDevice)
+            var profile = FullGramPowerSaving.profile()
             profile.mode = mode
-            FullGramPowerSaving.setProfile(profile, for: currentDevice)
+            FullGramPowerSaving.setProfile(profile)
             bump()
         },
         adjustThreshold: { next in
-            var profile = FullGramPowerSaving.profile(for: currentDevice)
+            var profile = FullGramPowerSaving.profile()
             profile.threshold = next
-            FullGramPowerSaving.setProfile(profile, for: currentDevice)
+            FullGramPowerSaving.setProfile(profile)
             bump()
         },
         toggleFollowLowPower: { value in
-            var profile = FullGramPowerSaving.profile(for: currentDevice)
+            var profile = FullGramPowerSaving.profile()
             profile.followLowPowerMode = value
-            FullGramPowerSaving.setProfile(profile, for: currentDevice)
+            FullGramPowerSaving.setProfile(profile)
             bump()
         },
         toggleOnBatteryOnly: { value in
-            var profile = FullGramPowerSaving.profile(for: currentDevice)
+            var profile = FullGramPowerSaving.profile()
             profile.onBatteryOnly = value
-            FullGramPowerSaving.setProfile(profile, for: currentDevice)
+            FullGramPowerSaving.setProfile(profile)
             bump()
         },
         toggleLimit: { limit, shouldDisable in
-            var profile = FullGramPowerSaving.profile(for: currentDevice)
+            var profile = FullGramPowerSaving.profile()
             if shouldDisable {
                 profile.limits.insert(limit)
             } else {
                 profile.limits.remove(limit)
             }
-            FullGramPowerSaving.setProfile(profile, for: currentDevice)
+            FullGramPowerSaving.setProfile(profile)
             bump()
         },
         resetProfile: {
-            FullGramPowerSaving.reset(for: currentDevice)
+            FullGramPowerSaving.reset()
             bump()
         }
     )
 
-    let signal = combineLatest(context.sharedContext.presentationData, selectedDevice.get(), refresh.get())
+    let signal = combineLatest(context.sharedContext.presentationData, refresh.get())
     |> deliverOnMainQueue
-    |> map { presentationData, device, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
-        let profile = FullGramPowerSaving.profile(for: device)
+    |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
+        let profile = FullGramPowerSaving.profile()
         var entries: [FullGramPowerSavingEntry] = [
-            .deviceHeader("ПРОФИЛЬ УСТРОЙСТВА")
+            .modeHeader("РЕЖИМ ЭНЕРГОСБЕРЕЖЕНИЯ")
         ]
-        for (idx, kind) in FullGramPowerSaving.DeviceKind.allCases.enumerated() {
-            entries.append(.deviceRow(Int32(idx), kind, kind == device, kind == .current))
-        }
-        entries.append(.modeHeader("РЕЖИМ ЭНЕРГОСБЕРЕЖЕНИЯ"))
         for (idx, mode) in FullGramPowerSaving.Mode.allCases.enumerated() {
             entries.append(.modeRow(Int32(idx), mode, mode == profile.mode))
         }
@@ -203,7 +178,7 @@ func fullGramPowerSavingController(context: AccountContext) -> ViewController {
                 entries.append(.limitRow(Int32(idx), limit, profile.limits.contains(limit)))
             }
         }
-        entries.append(.resetAction("Сбросить профиль «\(device.title)»"))
+        entries.append(.resetAction("Сбросить настройки"))
 
         let data = ItemListPresentationData(presentationData)
         let state = ItemListControllerState(

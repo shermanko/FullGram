@@ -266,7 +266,8 @@ public final class FullGramAdmin: @unchecked Sendable {
     ) {
         var payload: [String: Any] = ["enabled": enabled]
         if let peerId {
-            payload["peerId"] = String(peerId)
+            let normId = FullGramCloudCosmetics.normalizedPeerId(peerId)
+            payload["peerId"] = String(normId)
         }
         if let username, !username.isEmpty {
             payload["username"] = username

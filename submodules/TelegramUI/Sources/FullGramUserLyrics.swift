@@ -36,7 +36,9 @@ enum FullGramUserLyrics {
     }
 
     static func hasCustom(title: String, artist: String?) -> Bool {
-        return self.source(title: title, artist: artist) != nil
+        guard let dir = self.directory else { return false }
+        let path = dir.appendingPathComponent(self.fileKey(title: title, artist: artist) + ".json").path
+        return FileManager.default.fileExists(atPath: path)
     }
 
     static func load(title: String, artist: String?, duration: Double) -> FullGramLyricsResult? {

@@ -443,13 +443,14 @@ func fullGramBadgeDeskController(
                     animationRenderer: context.animationRenderer,
                     isStandalone: false,
                     subject: .status,
-                    hasTrending: false,
+                    hasTrending: true,
                     topReactionItems: [],
                     areUnicodeEmojiEnabled: false,
                     areCustomEmojiEnabled: true,
                     chatPeerId: context.account.peerId,
                     selectedItems: selectedItems,
-                    topStatusTitle: nil
+                    topStatusTitle: nil,
+                    forceHasPremium: true
                 ),
                 currentSelection: currentId,
                 destinationItemView: { [weak controller] in

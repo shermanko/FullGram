@@ -36,6 +36,7 @@ final class FullGramScreenshotEditorController: UIViewController {
     private var redactions: [RedactBox] = []
     private var activeDragStart: CGPoint?
     private var activePreviewLayer: CAShapeLayer?
+    private var lastLayoutOverlaySize: CGSize = .zero
 
     private let canvasContainer = UIView()
     private let bgGradientLayer = CAGradientLayer()
@@ -148,7 +149,10 @@ final class FullGramScreenshotEditorController: UIViewController {
             height: fitted.height
         )
         self.redactionOverlayView.frame = self.imageView.bounds
-        self.rebuildRedactionViews()
+        if self.lastLayoutOverlaySize != self.imageView.bounds.size {
+            self.lastLayoutOverlaySize = self.imageView.bounds.size
+            self.rebuildRedactionViews()
+        }
     }
 
     private func applyBackgroundPreset() {
@@ -335,6 +339,9 @@ enum FullGramScreenshotPrompt {
 
     @MainActor
     static func showBanner(in hostView: UIView, screenshot: UIImage, presentOn controller: UIViewController) {
+        for sub in hostView.subviews where sub is FullGramScreenshotBannerButton {
+            sub.removeFromSuperview()
+        }
         let pill = FullGramScreenshotBannerButton(type: .system)
         pill.setTitle("  ✂️ Редактировать скриншот  ", for: .normal)
         pill.titleLabel?.font = .systemFont(ofSize: 14.0, weight: .semibold)

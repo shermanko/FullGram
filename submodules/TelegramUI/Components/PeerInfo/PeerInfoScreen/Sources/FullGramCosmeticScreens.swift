@@ -251,6 +251,7 @@ private final class FullGramAvatarFramesViewController: ViewController, UITextFi
         self.collectionView.keyboardDismissMode = .onDrag
         self.collectionView.dataSource = self
         self.collectionView.delegate = self
+        self.collectionView.prefetchDataSource = self
         self.collectionView.register(FullGramFrameGridCell.self, forCellWithReuseIdentifier: "FrameCell")
         self.collectionView.register(FullGramProfileEffectGridCell.self, forCellWithReuseIdentifier: "EffectCell")
 
@@ -679,6 +680,23 @@ extension FullGramAvatarFramesViewController: UICollectionViewDataSource, UIColl
         let available = collectionView.bounds.width - 24.0 - (cols - 1.0) * 8.0
         let width = floor(max(96.0, available / cols))
         return CGSize(width: width, height: self.activeTab == .frames ? 104.0 : 122.0)
+    }
+}
+
+extension FullGramAvatarFramesViewController: UICollectionViewDataSourcePrefetching {
+    func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
+        if self.activeTab == .frames {
+            for indexPath in indexPaths where indexPath.item < self.filteredFrames.count {
+                FullGramAnimatedImageDecoder.prefetchThumbnail(for: self.filteredFrames[indexPath.item], maxPixelSize: 112)
+            }
+        } else {
+            for indexPath in indexPaths where indexPath.item < self.filteredEffects.count {
+                let effect = self.filteredEffects[indexPath.item]
+                if let urlString = effect.layerURLs.first {
+                    FullGramAnimatedImageDecoder.prefetchProfileEffectThumbnail(effectId: effect.id, urlString: urlString, maxPixelSize: 160)
+                }
+            }
+        }
     }
 }
 

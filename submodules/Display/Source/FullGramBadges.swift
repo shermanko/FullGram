@@ -243,12 +243,13 @@ public final class FullGramBadges {
             mergedRoles[k] = v
         }
 
-        var idMap = Self.builtInUsersById
-        var nameMap = Self.builtInUsernames
+        var idMap: [Int64: String] = [:]
+        var nameMap: [String: String] = [:]
         for (rawKey, roleId) in payload.users {
             let trimmed = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
             if let num = Int64(trimmed) {
                 idMap[num] = roleId
+                idMap[FullGramCloudCosmetics.normalizedPeerId(num)] = roleId
             } else {
                 let clean = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "@ ")).lowercased()
                 if !clean.isEmpty {

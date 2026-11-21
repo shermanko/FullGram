@@ -548,14 +548,7 @@ public final class EmojiStatusSelectionController: ViewController {
                                     }
                                 }
 
-                                let hasPremium = context.engine.data.subscribe(TelegramEngine.EngineData.Item.Peer.Peer(id: context.account.peerId))
-                                |> map { peer -> Bool in
-                                    guard case let .user(user) = peer else {
-                                        return false
-                                    }
-                                    return user.isPremium
-                                }
-                                |> distinctUntilChanged
+                                let hasPremium: Signal<Bool, NoError> = .single(true)
 
                                 let resultSignal = combineLatest(
                                     signal,

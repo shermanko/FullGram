@@ -83,8 +83,8 @@ public final class FullGramDiscordCosmeticsCatalog: @unchecked Sendable {
 
     private static let catalogURLs: [String] = [
         "https://fullgram.korsakovx.workers.dev/discord-cosmetics.json",
-        "https://raw.githubusercontent.com/shermanko/FullGram/master/assets/discord_cosmetics.json",
-        "https://cdn.jsdelivr.net/gh/shermanko/FullGram@master/assets/discord_cosmetics.json"
+        "https://cdn.jsdelivr.net/gh/shermanko/FullGram@release/next/assets/discord_cosmetics.json",
+        "https://raw.githubusercontent.com/shermanko/FullGram/release/next/assets/discord_cosmetics.json"
     ]
     private static let lastSyncKey = "fullgram.discordCatalog.lastSync"
 
@@ -278,8 +278,8 @@ public enum FullGramAvatarFrames {
 
     private static let showInChatsKey = "fullgram.frames.showInChats"
 
-    private static let rawBaseURL = "https://raw.githubusercontent.com/shermanko/FullGram/master/assets/frames/"
-    private static let cdnBaseURL = "https://cdn.jsdelivr.net/gh/shermanko/FullGram@master/assets/frames/"
+    private static let rawBaseURL = "https://raw.githubusercontent.com/shermanko/FullGram/release/next/assets/frames/"
+    private static let cdnBaseURL = "https://cdn.jsdelivr.net/gh/shermanko/FullGram@release/next/assets/frames/"
 
     private static let stateLock = NSLock()
     private static var cachedShowInChats: Bool?
@@ -350,7 +350,6 @@ public enum FullGramAvatarFrames {
     }
 
     public static func frame(forPeerId peerId: Int64?, selfPeerId: Int64?) -> FullGramAvatarFramePreset? {
-        FullGramDiscordCosmeticsCatalog.shared.refreshIfNeeded()
         guard let peerId,
               let cosmetics = FullGramCloudCosmetics.shared.cosmetics(forPeerId: peerId, selfPeerId: selfPeerId) else {
             return nil
@@ -394,6 +393,7 @@ public enum FullGramAvatarFrames {
         if let builtin = self.builtInFramesById[id] {
             return builtin
         }
+        FullGramDiscordCosmeticsCatalog.shared.refreshIfNeeded(maxAge: 21600.0)
         return FullGramDiscordCosmeticsCatalog.shared.frame(id: id)
     }
 
@@ -453,7 +453,6 @@ public enum FullGramAvatarFrames {
     ]
 
     public static let customFullGramFrames: [FullGramAvatarFramePreset] = [
-        // FullGram Signature (10)
         FullGramAvatarFramePreset(id: "fg_chrome_wings", title: "FG Chrome Wings", category: "FullGram", fileName: "fg_chrome_wings", accentHex: 0xE2E8F0, isBundled: false),
         FullGramAvatarFramePreset(id: "fg_crimson_wings", title: "FG Crimson Wings", category: "FullGram", fileName: "fg_crimson_wings", accentHex: 0xFF2E4C, isBundled: false),
         FullGramAvatarFramePreset(id: "fg_solar_flare", title: "FG Solar Orange", category: "FullGram", fileName: "fg_solar_flare", accentHex: 0xFF8C00, isBundled: false),
@@ -464,49 +463,11 @@ public enum FullGramAvatarFrames {
         FullGramAvatarFramePreset(id: "fg_royal_crown", title: "FG Royal Gold", category: "FullGram", fileName: "fg_royal_crown", accentHex: 0xFFD700, isBundled: false),
         FullGramAvatarFramePreset(id: "fg_void_prism", title: "FG Void Prism", category: "FullGram", fileName: "fg_void_prism", accentHex: 0xA855F7, isBundled: false),
         FullGramAvatarFramePreset(id: "fg_arctic_chrome", title: "FG Arctic Chrome", category: "FullGram", fileName: "fg_arctic_chrome", accentHex: 0x67E8F9, isBundled: false),
-        // Кибер & Неон (10)
         FullGramAvatarFramePreset(id: "fg_cyber_hex", title: "Cyber Hex Grid", category: "Кибер", fileName: "fg_cyber_hex", accentHex: 0x00E5FF, isBundled: false),
         FullGramAvatarFramePreset(id: "fg_synthwave_ring", title: "Synthwave Sunset", category: "Неон", fileName: "fg_synthwave_ring", accentHex: 0xFF2A85, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_matrix_code", title: "Matrix Digital", category: "Кибер", fileName: "fg_matrix_code", accentHex: 0x00FF66, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_laser_scan", title: "Laser Scanner", category: "Кибер", fileName: "fg_laser_scan", accentHex: 0xFF0055, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_plasma_arc", title: "Plasma Arc", category: "Неон", fileName: "fg_plasma_arc", accentHex: 0xC084FC, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_holo_ring", title: "Hologram Prism", category: "Неон", fileName: "fg_holo_ring", accentHex: 0x38BDF8, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_glitch_pulse", title: "Glitch Pulse", category: "Кибер", fileName: "fg_glitch_pulse", accentHex: 0xFF2A85, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_turbo_rpm", title: "Turbo RPM", category: "Кибер", fileName: "fg_turbo_rpm", accentHex: 0xF97316, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_circuit_flow", title: "Circuit Flow", category: "Кибер", fileName: "fg_circuit_flow", accentHex: 0x10B981, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_vapor_wave", title: "Vaporwave 1984", category: "Неон", fileName: "fg_vapor_wave", accentHex: 0xF472B6, isBundled: false),
-        // Стихия & Магия (10)
         FullGramAvatarFramePreset(id: "fg_inferno_ring", title: "Inferno Flame", category: "Стихия", fileName: "fg_inferno_ring", accentHex: 0xFF4500, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_frost_crystal", title: "Frost Crystals", category: "Стихия", fileName: "fg_frost_crystal", accentHex: 0x60A5FA, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_thunder_bolt", title: "Thunder Storm", category: "Стихия", fileName: "fg_thunder_bolt", accentHex: 0xFACC15, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_toxic_venom", title: "Toxic Venom", category: "Стихия", fileName: "fg_toxic_venom", accentHex: 0x84CC16, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_blood_moon", title: "Blood Moon", category: "Стихия", fileName: "fg_blood_moon", accentHex: 0xDC2626, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_emerald_aura", title: "Emerald Aura", category: "Стихия", fileName: "fg_emerald_aura", accentHex: 0x34D399, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_ocean_tide", title: "Ocean Tide", category: "Стихия", fileName: "fg_ocean_tide", accentHex: 0x0EA5E9, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_magma_crack", title: "Magma Core", category: "Стихия", fileName: "fg_magma_crack", accentHex: 0xEA580C, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_wind_vortex", title: "Wind Vortex", category: "Стихия", fileName: "fg_wind_vortex", accentHex: 0xA5F3FC, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_arcane_runes", title: "Arcane Runes", category: "Стихия", fileName: "fg_arcane_runes", accentHex: 0x8B5CF6, isBundled: false),
-        // Космос (8)
         FullGramAvatarFramePreset(id: "fg_nebula_swirl", title: "Nebula Swirl", category: "Космос", fileName: "fg_nebula_swirl", accentHex: 0x818CF8, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_supernova", title: "Supernova Burst", category: "Космос", fileName: "fg_supernova", accentHex: 0xFBBF24, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_saturn_orbit", title: "Orbital Moons", category: "Космос", fileName: "fg_saturn_orbit", accentHex: 0x38BDF8, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_starlight_halo", title: "Starlight Halo", category: "Космос", fileName: "fg_starlight_halo", accentHex: 0xE0E7FF, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_aurora_borealis", title: "Aurora Borealis", category: "Космос", fileName: "fg_aurora_borealis", accentHex: 0x2DD4BF, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_black_hole", title: "Event Horizon", category: "Космос", fileName: "fg_black_hole", accentHex: 0xF97316, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_comet_trail", title: "Comet Trail", category: "Космос", fileName: "fg_comet_trail", accentHex: 0x67E8F9, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_zodiac_gold", title: "Celestial Astrolabe", category: "Космос", fileName: "fg_zodiac_gold", accentHex: 0xF59E0B, isBundled: false),
-        // Милые, Аниме & Природа (12)
         FullGramAvatarFramePreset(id: "fg_sakura_petals", title: "Sakura Petals", category: "Аниме", fileName: "fg_sakura_petals", accentHex: 0xFF85B3, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_neko_neon", title: "Neko Neon Ears", category: "Милые", fileName: "fg_neko_neon", accentHex: 0xF472B6, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_pastel_hearts", title: "Pastel Hearts", category: "Милые", fileName: "fg_pastel_hearts", accentHex: 0xFB7185, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_angel_halo", title: "Angelic Halo", category: "Милые", fileName: "fg_angel_halo", accentHex: 0xFDE68A, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_devil_horns", title: "Crimson Horns", category: "Аниме", fileName: "fg_devil_horns", accentHex: 0xEF4444, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_butterfly_glow", title: "Neon Butterflies", category: "Природа", fileName: "fg_butterfly_glow", accentHex: 0xC084FC, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_lotus_bloom", title: "Lotus Bloom", category: "Природа", fileName: "fg_lotus_bloom", accentHex: 0xEC4899, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_rainbow_prism", title: "Rainbow Prism", category: "Неон", fileName: "fg_rainbow_prism", accentHex: 0xFF6B9D, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_candy_swirl", title: "Candy Swirl", category: "Милые", fileName: "fg_candy_swirl", accentHex: 0xF472B6, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_emerald_vine", title: "Emerald Vine", category: "Природа", fileName: "fg_emerald_vine", accentHex: 0x22C55E, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_fireflies", title: "Night Fireflies", category: "Природа", fileName: "fg_fireflies", accentHex: 0xFACC15, isBundled: false),
         FullGramAvatarFramePreset(id: "fg_diamond_lux", title: "Diamond Luxury", category: "FullGram", fileName: "fg_diamond_lux", accentHex: 0xE0F2FE, isBundled: false)
     ]
 
@@ -538,15 +499,33 @@ public enum FullGramAvatarFrames {
         return self.cacheDirectory().appendingPathComponent("\(preset.fileName).png")
     }
 
+    public static func cachedThumbnailDiskURL(for preset: FullGramAvatarFramePreset) -> URL {
+        return self.cacheDirectory().appendingPathComponent("\(preset.fileName)_thumb.png")
+    }
+
     public static func remoteURLs(for preset: FullGramAvatarFramePreset) -> [URL] {
         if !preset.remoteURLs.isEmpty {
             return preset.remoteURLs.compactMap { URL(string: $0) }
         }
         let file = "\(preset.fileName).png"
         return [
-            URL(string: self.rawBaseURL + file),
-            URL(string: self.cdnBaseURL + file)
+            URL(string: self.cdnBaseURL + file),
+            URL(string: self.rawBaseURL + file)
         ].compactMap { $0 }
+    }
+
+    public static func thumbnailRemoteURLs(for preset: FullGramAvatarFramePreset) -> [URL] {
+        let baseURLs = self.remoteURLs(for: preset)
+        return baseURLs.map { url in
+            let str = url.absoluteString
+            if str.contains("cdn.discordapp.com/avatar-decoration-presets/") {
+                let fast = str
+                    .replacingOccurrences(of: "size=240&passthrough=true", with: "size=128&passthrough=false")
+                    .replacingOccurrences(of: "passthrough=true", with: "passthrough=false")
+                return URL(string: fast) ?? url
+            }
+            return url
+        }
     }
 
     public static func frameURL(for preset: FullGramAvatarFramePreset) -> URL? {
@@ -757,7 +736,6 @@ public enum FullGramProfileEffects {
     }
 
     public static func effect(forPeerId peerId: Int64?, selfPeerId: Int64?) -> FullGramProfileEffectPreset? {
-        FullGramDiscordCosmeticsCatalog.shared.refreshIfNeeded()
         guard let cosmetics = FullGramCloudCosmetics.shared.cosmetics(forPeerId: peerId, selfPeerId: selfPeerId),
               let id = cosmetics.profileEffectId,
               !id.isEmpty else {
@@ -766,6 +744,7 @@ public enum FullGramProfileEffects {
         if let builtin = self.builtInEffectsById[id] {
             return builtin
         }
+        FullGramDiscordCosmeticsCatalog.shared.refreshIfNeeded(maxAge: 21600.0)
         return FullGramDiscordCosmeticsCatalog.shared.profileEffect(id: id)
     }
 
@@ -813,19 +792,21 @@ public final class FullGramAnimatedImageDecoder {
         let q = OperationQueue()
         q.name = "FullGram.AvatarFrameDecode"
         q.qualityOfService = .userInitiated
-        q.maxConcurrentOperationCount = 4
+        q.maxConcurrentOperationCount = 6
         return q
     }()
+    private static let ioQueue = DispatchQueue(label: "FullGram.AvatarFrameIO", qos: .userInitiated, attributes: .concurrent)
     private static let inflightLock = NSLock()
     private static var inflightCallbacks: [String: [@Sendable (FullGramAnimatedFrameSequence?) -> Void]] = [:]
-    private static var activeDownloadTasks: [UUID: URLSessionDataTask] = [:]
+    private static var inflightDownloadCallbacks: [String: [@Sendable (Bool) -> Void]] = [:]
     private static var cancelledTokens: Set<UUID> = []
     private static let session: URLSession = {
         let cfg = URLSessionConfiguration.default
-        cfg.timeoutIntervalForRequest = 14.0
-        cfg.timeoutIntervalForResource = 28.0
-        cfg.httpMaximumConnectionsPerHost = 4
+        cfg.timeoutIntervalForRequest = 8.0
+        cfg.timeoutIntervalForResource = 18.0
+        cfg.httpMaximumConnectionsPerHost = 12
         cfg.requestCachePolicy = .returnCacheDataElseLoad
+        cfg.urlCache = URLCache(memoryCapacity: 16 * 1024 * 1024, diskCapacity: 128 * 1024 * 1024)
         return URLSession(configuration: cfg)
     }()
 
@@ -846,12 +827,10 @@ public final class FullGramAnimatedImageDecoder {
         guard let token else { return }
         self.inflightLock.lock()
         self.cancelledTokens.insert(token)
-        let task = self.activeDownloadTasks.removeValue(forKey: token)
         if self.cancelledTokens.count > 512 {
             self.cancelledTokens.removeAll()
         }
         self.inflightLock.unlock()
-        task?.cancel()
     }
 
     private static func isCancelled(_ token: UUID) -> Bool {
@@ -859,6 +838,57 @@ public final class FullGramAnimatedImageDecoder {
         let flag = self.cancelledTokens.contains(token)
         self.inflightLock.unlock()
         return flag
+    }
+
+    public static func prefetchThumbnail(for preset: FullGramAvatarFramePreset, maxPixelSize: Int = 112) {
+        if self.cachedThumbnail(cacheKey: preset.id) != nil || self.cachedSequence(for: preset) != nil {
+            return
+        }
+        self.ioQueue.async {
+            if let localURL = FullGramAvatarFrames.frameURL(for: preset) {
+                self.decodeOpQueue.addOperation {
+                    _ = self.decodeStaticThumbnail(url: localURL, cacheKey: preset.id, maxPixelSize: maxPixelSize)
+                }
+                return
+            }
+            let thumbDst = FullGramAvatarFrames.cachedThumbnailDiskURL(for: preset)
+            if FileManager.default.fileExists(atPath: thumbDst.path) {
+                self.decodeOpQueue.addOperation {
+                    _ = self.decodeStaticThumbnail(url: thumbDst, cacheKey: preset.id, maxPixelSize: maxPixelSize)
+                }
+                return
+            }
+            guard !preset.isBundled && preset.localCustomPath == nil else { return }
+            self.downloadRemoteImage(urls: FullGramAvatarFrames.thumbnailRemoteURLs(for: preset), dst: thumbDst) { ok in
+                guard ok else { return }
+                self.decodeOpQueue.addOperation {
+                    _ = self.decodeStaticThumbnail(url: thumbDst, cacheKey: preset.id, maxPixelSize: maxPixelSize)
+                }
+            }
+        }
+    }
+
+    public static func prefetchProfileEffectThumbnail(effectId: String, urlString: String, maxPixelSize: Int = 160) {
+        let cacheKey = "pe_\(effectId)_0"
+        if self.cachedThumbnail(cacheKey: cacheKey) != nil || self.sequenceCache.object(forKey: cacheKey as NSString) != nil {
+            return
+        }
+        guard let url = URL(string: urlString) else { return }
+        let diskURL = FullGramProfileEffects.cachedLayerURL(effectId: effectId, layerIndex: 0)
+        self.ioQueue.async {
+            if FileManager.default.fileExists(atPath: diskURL.path) {
+                self.decodeOpQueue.addOperation {
+                    _ = self.decodeStaticThumbnail(url: diskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize)
+                }
+                return
+            }
+            self.downloadRemoteImage(urls: [url], dst: diskURL) { ok in
+                guard ok else { return }
+                self.decodeOpQueue.addOperation {
+                    _ = self.decodeStaticThumbnail(url: diskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize)
+                }
+            }
+        }
     }
 
     @discardableResult
@@ -878,20 +908,32 @@ public final class FullGramAnimatedImageDecoder {
         }
 
         let token = UUID()
-        self.decodeOpQueue.addOperation {
+        self.ioQueue.async {
             guard !self.isCancelled(token) else { return }
-            if let localURL = FullGramAvatarFrames.frameURL(for: preset),
-               let img = self.decodeStaticThumbnail(url: localURL, cacheKey: preset.id, maxPixelSize: maxPixelSize) {
-                guard !self.isCancelled(token) else { return }
-                DispatchQueue.main.async { completion(img) }
+            if let localURL = FullGramAvatarFrames.frameURL(for: preset) {
+                self.decodeOpQueue.addOperation {
+                    guard !self.isCancelled(token) else { return }
+                    let img = self.decodeStaticThumbnail(url: localURL, cacheKey: preset.id, maxPixelSize: maxPixelSize)
+                    guard !self.isCancelled(token) else { return }
+                    DispatchQueue.main.async { completion(img) }
+                }
+                return
+            }
+            let thumbDst = FullGramAvatarFrames.cachedThumbnailDiskURL(for: preset)
+            if FileManager.default.fileExists(atPath: thumbDst.path) {
+                self.decodeOpQueue.addOperation {
+                    guard !self.isCancelled(token) else { return }
+                    let img = self.decodeStaticThumbnail(url: thumbDst, cacheKey: preset.id, maxPixelSize: maxPixelSize)
+                    guard !self.isCancelled(token) else { return }
+                    DispatchQueue.main.async { completion(img) }
+                }
                 return
             }
             guard !preset.isBundled && preset.localCustomPath == nil else {
                 DispatchQueue.main.async { completion(nil) }
                 return
             }
-            let dst = FullGramAvatarFrames.cachedDiskURL(for: preset)
-            self.downloadRemoteImage(urls: FullGramAvatarFrames.remoteURLs(for: preset), dst: dst, token: token) { ok in
+            self.downloadRemoteImage(urls: FullGramAvatarFrames.thumbnailRemoteURLs(for: preset), dst: thumbDst) { ok in
                 guard !self.isCancelled(token) else { return }
                 guard ok else {
                     DispatchQueue.main.async { completion(nil) }
@@ -899,7 +941,7 @@ public final class FullGramAnimatedImageDecoder {
                 }
                 self.decodeOpQueue.addOperation {
                     guard !self.isCancelled(token) else { return }
-                    let img = self.decodeStaticThumbnail(url: dst, cacheKey: preset.id, maxPixelSize: maxPixelSize)
+                    let img = self.decodeStaticThumbnail(url: thumbDst, cacheKey: preset.id, maxPixelSize: maxPixelSize)
                     guard !self.isCancelled(token) else { return }
                     DispatchQueue.main.async { completion(img) }
                 }
@@ -932,15 +974,18 @@ public final class FullGramAnimatedImageDecoder {
 
         let token = UUID()
         let diskURL = FullGramProfileEffects.cachedLayerURL(effectId: effectId, layerIndex: 0)
-        self.decodeOpQueue.addOperation {
+        self.ioQueue.async {
             guard !self.isCancelled(token) else { return }
-            if FileManager.default.fileExists(atPath: diskURL.path),
-               let img = self.decodeStaticThumbnail(url: diskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize) {
-                guard !self.isCancelled(token) else { return }
-                DispatchQueue.main.async { completion(img) }
+            if FileManager.default.fileExists(atPath: diskURL.path) {
+                self.decodeOpQueue.addOperation {
+                    guard !self.isCancelled(token) else { return }
+                    let img = self.decodeStaticThumbnail(url: diskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize)
+                    guard !self.isCancelled(token) else { return }
+                    DispatchQueue.main.async { completion(img) }
+                }
                 return
             }
-            self.downloadRemoteImage(urls: [url], dst: diskURL, token: token) { ok in
+            self.downloadRemoteImage(urls: [url], dst: diskURL) { ok in
                 guard !self.isCancelled(token) else { return }
                 guard ok else {
                     DispatchQueue.main.async { completion(nil) }
@@ -1007,9 +1052,11 @@ public final class FullGramAnimatedImageDecoder {
             }
         }
 
-        self.decodeOpQueue.addOperation {
-            if let localSeq = self.sequence(for: preset, maxPixelSize: maxPixelSize) {
-                finish(localSeq)
+        self.ioQueue.async {
+            if let localURL = FullGramAvatarFrames.frameURL(for: preset) {
+                self.decodeOpQueue.addOperation {
+                    finish(self.decodeFile(url: localURL, cacheKey: preset.id, maxPixelSize: maxPixelSize, maxFrames: 60))
+                }
                 return
             }
             guard !preset.isBundled && preset.localCustomPath == nil else {
@@ -1017,7 +1064,7 @@ public final class FullGramAnimatedImageDecoder {
                 return
             }
             let dst = FullGramAvatarFrames.cachedDiskURL(for: preset)
-            self.downloadRemoteImage(urls: FullGramAvatarFrames.remoteURLs(for: preset), dst: dst, token: nil) { ok in
+            self.downloadRemoteImage(urls: FullGramAvatarFrames.remoteURLs(for: preset), dst: dst) { ok in
                 guard ok else {
                     finish(nil)
                     return
@@ -1068,13 +1115,14 @@ public final class FullGramAnimatedImageDecoder {
         }
 
         let diskURL = FullGramProfileEffects.cachedLayerURL(effectId: effectId, layerIndex: layerIndex)
-        self.decodeOpQueue.addOperation {
-            if FileManager.default.fileExists(atPath: diskURL.path),
-               let seq = self.decodeFile(url: diskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize, maxFrames: 45) {
-                finish(seq)
+        self.ioQueue.async {
+            if FileManager.default.fileExists(atPath: diskURL.path) {
+                self.decodeOpQueue.addOperation {
+                    finish(self.decodeFile(url: diskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize, maxFrames: 45))
+                }
                 return
             }
-            self.downloadRemoteImage(urls: [url], dst: diskURL, token: nil) { ok in
+            self.downloadRemoteImage(urls: [url], dst: diskURL) { ok in
                 guard ok else {
                     finish(nil)
                     return
@@ -1089,12 +1137,36 @@ public final class FullGramAnimatedImageDecoder {
     private static func downloadRemoteImage(
         urls: [URL],
         dst: URL,
-        token: UUID?,
         completion: @escaping @Sendable (Bool) -> Void
     ) {
-        if let token, self.isCancelled(token) {
+        let key = dst.path
+        self.inflightLock.lock()
+        if var callbacks = self.inflightDownloadCallbacks[key] {
+            callbacks.append(completion)
+            self.inflightDownloadCallbacks[key] = callbacks
+            self.inflightLock.unlock()
             return
         }
+        self.inflightDownloadCallbacks[key] = [completion]
+        self.inflightLock.unlock()
+
+        func finishDownload(_ ok: Bool) {
+            self.inflightLock.lock()
+            let callbacks = self.inflightDownloadCallbacks.removeValue(forKey: key) ?? []
+            self.inflightLock.unlock()
+            for cb in callbacks {
+                cb(ok)
+            }
+        }
+
+        self.performDownloadAttempt(urls: urls, dst: dst, completion: finishDownload)
+    }
+
+    private static func performDownloadAttempt(
+        urls: [URL],
+        dst: URL,
+        completion: @escaping @Sendable (Bool) -> Void
+    ) {
         guard let first = urls.first else {
             completion(false)
             return
@@ -1102,14 +1174,7 @@ public final class FullGramAnimatedImageDecoder {
         let rest = Array(urls.dropFirst())
         var req = URLRequest(url: first)
         req.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
-        let task = self.session.dataTask(with: req) { data, response, _ in
-            if let token {
-                self.inflightLock.lock()
-                self.activeDownloadTasks.removeValue(forKey: token)
-                let cancelled = self.cancelledTokens.contains(token)
-                self.inflightLock.unlock()
-                if cancelled { return }
-            }
+        self.session.dataTask(with: req) { data, response, _ in
             if let http = response as? HTTPURLResponse,
                http.statusCode == 200,
                let data,
@@ -1125,21 +1190,11 @@ public final class FullGramAnimatedImageDecoder {
                 }
             }
             if !rest.isEmpty {
-                self.downloadRemoteImage(urls: rest, dst: dst, token: token, completion: completion)
+                self.performDownloadAttempt(urls: rest, dst: dst, completion: completion)
             } else {
                 completion(false)
             }
-        }
-        if let token {
-            self.inflightLock.lock()
-            if self.cancelledTokens.contains(token) {
-                self.inflightLock.unlock()
-                return
-            }
-            self.activeDownloadTasks[token] = task
-            self.inflightLock.unlock()
-        }
-        task.resume()
+        }.resume()
     }
 
     public static func sequence(for preset: FullGramAvatarFramePreset, maxPixelSize: Int = 220) -> FullGramAnimatedFrameSequence? {

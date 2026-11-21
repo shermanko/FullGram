@@ -1305,11 +1305,20 @@ async function loadBadges(env) {
   if (!raw) return structuredClone(DEFAULT_BADGES);
   try {
     const parsed = JSON.parse(raw);
+    const rawUsers = parsed.users && typeof parsed.users === "object" ? parsed.users : DEFAULT_BADGES.users;
+    const users = {};
+    for (const [k, v] of Object.entries(rawUsers)) {
+      users[k] = v;
+      const norm = normalizePeerId(k);
+      if (norm && norm !== k) {
+        users[norm] = v;
+      }
+    }
     return {
       version: parsed.version || 1,
       roles: { ...DEFAULT_BADGES.roles, ...(parsed.roles || {}) },
-      users: { ...DEFAULT_BADGES.users, ...(parsed.users || {}) },
-      usernames: { ...DEFAULT_BADGES.usernames, ...(parsed.usernames || {}) }
+      users,
+      usernames: parsed.usernames && typeof parsed.usernames === "object" ? { ...parsed.usernames } : { ...DEFAULT_BADGES.usernames }
     };
   } catch {
     return structuredClone(DEFAULT_BADGES);
@@ -1477,9 +1486,28 @@ function parsePluginMetadata(code, filename, language) {
   };
 }
 
+function normalizePeerId(raw) {
+  const s = String(raw ?? "").trim();
+  if (!/^-?\d+$/.test(s)) return s;
+  try {
+    let n = BigInt(s);
+    if (n < 0n) n = -n;
+    const threshold = 1n << 35n;
+    if (n >= threshold) {
+      const low = n & 0xffffffffn;
+      const high = n >> 35n;
+      return String((high << 32n) | low);
+    }
+    return String(n);
+  } catch {
+    return s;
+  }
+}
+
 async function applyBadgeChange(env, body) {
   const badges = await loadBadges(env);
-  const peerId = body.peerId != null ? String(body.peerId).trim() : "";
+  const rawPeerId = body.peerId != null ? String(body.peerId).trim() : "";
+  const peerId = normalizePeerId(rawPeerId);
   const cleanUser = typeof body.username === "string"
     ? body.username.trim().replace(/^@+/, "").toLowerCase()
     : "";
@@ -1490,11 +1518,14 @@ async function applyBadgeChange(env, body) {
 
   const enabled = body.enabled !== false;
   const customRoleKey = peerId ? `user_${peerId}` : `name_${cleanUser}`;
+  const rawCustomRoleKey = rawPeerId && rawPeerId !== peerId ? `user_${rawPeerId}` : null;
 
   if (!enabled) {
     if (peerId) delete badges.users[peerId];
+    if (rawPeerId) delete badges.users[rawPeerId];
     if (cleanUser) delete badges.usernames[cleanUser];
     delete badges.roles[customRoleKey];
+    if (rawCustomRoleKey) delete badges.roles[rawCustomRoleKey];
     await saveBadges(env, badges);
     return badges;
   }
@@ -1536,8 +1567,12 @@ async function applyBadgeChange(env, body) {
   } else {
     delete badges.roles[customRoleKey];
   }
+  if (rawCustomRoleKey) {
+    delete badges.roles[rawCustomRoleKey];
+  }
 
   if (peerId) badges.users[peerId] = assignedRoleId;
+  if (rawPeerId && rawPeerId !== peerId) badges.users[rawPeerId] = assignedRoleId;
   if (cleanUser) badges.usernames[cleanUser] = assignedRoleId;
 
   await saveBadges(env, badges);
@@ -1999,21 +2034,24 @@ export default {
             status: 200,
             headers: {
               "Content-Type": "application/json; charset=utf-8",
-              "Cache-Control": "public, max-age=3600",
+              "Cache-Control": "public, max-age=3600, s-maxage=86400",
               "Access-Control-Allow-Origin": "*"
             }
           });
         }
       }
       try {
-        const upstream = await fetch("https://raw.githubusercontent.com/shermanko/FullGram/master/assets/discord_cosmetics.json");
+        const upstream = await fetch("https://raw.githubusercontent.com/shermanko/FullGram/release/next/assets/discord_cosmetics.json");
         if (upstream.ok) {
           const text = await upstream.text();
+          if (env.FULLGRAM_KV && text.length > 50) {
+            ctx.waitUntil(env.FULLGRAM_KV.put("discord_cosmetics.json", text));
+          }
           return new Response(text, {
             status: 200,
             headers: {
               "Content-Type": "application/json; charset=utf-8",
-              "Cache-Control": "public, max-age=1800",
+              "Cache-Control": "public, max-age=3600, s-maxage=86400",
               "Access-Control-Allow-Origin": "*"
             }
           });
@@ -2021,7 +2059,7 @@ export default {
       } catch {
         // fall through
       }
-      return jsonResponse({ version: 1, frames: [], profileEffects: [] });
+      return jsonResponse({ version: 2, frames: [], profileEffects: [] });
     }
 
     if (request.method === "GET" && path === "/nfts.json") {
