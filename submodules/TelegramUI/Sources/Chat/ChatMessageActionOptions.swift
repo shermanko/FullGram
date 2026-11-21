@@ -320,7 +320,7 @@ private func chatForwardOptions(selfController: ChatControllerImpl, sourceView: 
                 )
             }
             let editor = FullGramForwardEditController(items: editItems) { updatedItems in
-                var keptIds: [MessageId] = []
+                var keptIds: [EngineMessage.Id] = []
                 for entry in updatedItems {
                     if let orig = messages.first(where: { $0.id.id == entry.messageIdRaw }) {
                         FullGramForwardEditorStore.shared.setExcluded(!entry.included, rawMessageId: entry.messageIdRaw)

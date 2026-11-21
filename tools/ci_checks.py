@@ -369,6 +369,8 @@ def check_swift_sources() -> int:
             raise AssertionError(f"{rel} discards NotificationCenter observer without removing it in afterDisposed")
         if re.search(r"(?:\?\?\s*self\.rootController\b|rootController\s+as\??\s*ViewController\b)", text):
             raise AssertionError(f"{rel} treats TelegramRootController (NavigationController) as ViewController")
+        if "Postbox" not in imports and re.search(r"(?<![.\w])(?:MessageId|PeerId|MediaId)\b", text):
+            raise AssertionError(f"{rel} uses raw Postbox ID type (MessageId/PeerId/MediaId) without 'import Postbox' (use EngineMessage.Id / EnginePeer.Id / EngineMedia.Id)")
 
     frames_path = ROOT / "submodules" / "Display" / "Source" / "FullGramAvatarFrames.swift"
     frames_text = frames_path.read_text(encoding="utf-8")
