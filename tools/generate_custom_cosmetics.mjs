@@ -360,19 +360,19 @@ const CUSTOM_FRAMES = [
 ];
 
 function renderFrameAPNG(spec) {
-  const S = 240;
+  const S = 288;
   const cx = S / 2;
   const cy = S / 2;
-  const numFrames = 10;
+  const numFrames = 16;
   const rgb1 = hexToRGB(spec.c1);
   const rgb2 = hexToRGB(spec.c2);
   const rgb3 = hexToRGB(spec.c3);
 
-  // Strict ring bounds: inner clear circle >= 95px (avatar is ~100px at 1.18x scale)
-  // so center of avatar is 100% unobstructed and outer edge <= 118px so it never bleeds onto nicknames!
-  const R_INNER = 96.0;
-  const R_MID = 104.5;
-  const R_OUTER = 116.5;
+  // Strict ring bounds for 288x288 canvas: inner clear circle >= 111px so center of avatar
+  // stays 100% unobstructed, outer edge <= 142px with razor-sharp sculpted bevels & specular rims.
+  const R_INNER = 114.5;
+  const R_MID = 127.0;
+  const R_OUTER = 141.5;
 
   const frames = [];
 
@@ -386,14 +386,17 @@ function renderFrameAPNG(spec) {
       for (let x = 0; x < S; x++) {
         const dx = x - cx;
         const r = Math.hypot(dx, dy);
-        if (r < R_INNER - 6 || r > R_OUTER + 3) continue;
+        if (r < R_INNER - 4 || r > R_OUTER + 3) continue;
 
         const ang = Math.atan2(dy, dx); // -PI..PI
         const idx = (y * S + x) * 4;
 
-        // Hard inner safety fade: never cover avatar center!
-        const innerMask = smoothstep(R_INNER - 2.5, R_INNER + 1.5, r);
+        // Hard inner safety fade: never touch avatar face
+        const innerMask = smoothstep(R_INNER - 2.0, R_INNER + 1.5, r);
         const outerMask = 1.0 - smoothstep(R_OUTER - 1.5, R_OUTER + 2.5, r);
+        // Sculpted metallic inner & outer micro-bevels give every frame 3D depth
+        const innerBevel = Math.exp(-Math.pow((r - (R_INNER + 3.0)) / 1.8, 2));
+        const outerBevel = Math.exp(-Math.pow((r - (R_OUTER - 3.0)) / 1.9, 2));
 
         let alpha = 0;
         let mixT = 0.5 + 0.5 * Math.sin(ang * 2 + phase);
@@ -401,153 +404,169 @@ function renderFrameAPNG(spec) {
 
         switch (spec.style) {
           case "wings": {
-            const band = Math.exp(-Math.pow((r - R_MID) / 5.2, 2));
-            const wing = Math.pow(Math.abs(Math.cos(ang)), 1.6);
-            const shimmer = 0.55 + 0.45 * Math.sin(ang * 4 - phase * 2);
-            const outerWing = Math.exp(-Math.pow((r - (R_MID + 5.5 * wing)) / 3.0, 2)) * wing;
-            alpha = Math.min(1, band * (0.65 + 0.35 * shimmer) + outerWing * 0.9);
-            mixT = 0.5 + 0.5 * Math.sin(ang * 2 - phase);
-            hi = Math.pow(Math.max(0, Math.sin(ang * 3 + phase)), 6) * 0.85;
+            const sideCos = Math.abs(Math.cos(ang));
+            const feather = Math.pow(sideCos, 1.45) * (0.65 + 0.35 * Math.cos(ang * 14 - phase));
+            const band = Math.exp(-Math.pow((r - (R_INNER + 7.5)) / 4.8, 2)) * 0.85;
+            const wingArc = Math.exp(-Math.pow((r - (R_MID + 7.2 * feather)) / 3.4, 2)) * Math.pow(sideCos, 1.1);
+            const tipSpark = Math.pow(sideCos, 6) * Math.exp(-Math.pow((r - (R_OUTER - 4.0)) / 2.5, 2));
+            alpha = Math.min(1, band + wingArc * 0.95 + innerBevel * 0.6);
+            mixT = clamp(0.25 + 0.5 * Math.sin(ang * 2 - phase) + 0.25 * feather, 0, 1);
+            hi = Math.min(1, innerBevel * 0.5 + tipSpark * 0.95);
             break;
           }
           case "dual_arc": {
             const a1 = Math.sin(ang * 2 + phase);
-            const a2 = Math.sin(ang * 2 - phase + 1.5);
-            const r1 = Math.exp(-Math.pow((r - (R_MID - 2.2)) / 3.4, 2)) * smoothstep(-0.35, 0.5, a1);
-            const r2 = Math.exp(-Math.pow((r - (R_MID + 3.2)) / 3.4, 2)) * smoothstep(-0.35, 0.5, a2);
-            const base = Math.exp(-Math.pow((r - R_MID) / 4.0, 2)) * 0.32;
-            alpha = Math.min(1, base + r1 * 0.95 + r2 * 0.95);
+            const a2 = Math.sin(ang * 2 - phase + 1.57);
+            const r1 = Math.exp(-Math.pow((r - (R_MID - 3.2)) / 3.2, 2)) * smoothstep(-0.45, 0.55, a1);
+            const r2 = Math.exp(-Math.pow((r - (R_MID + 4.0)) / 3.2, 2)) * smoothstep(-0.45, 0.55, a2);
+            const base = Math.exp(-Math.pow((r - R_MID) / 5.5, 2)) * 0.38;
+            alpha = Math.min(1, base + innerBevel * 0.55 + r1 + r2);
             mixT = r2 / (r1 + r2 + 0.001);
-            hi = Math.max(r1, r2) * 0.35;
+            hi = Math.max(r1, r2) * 0.45 + innerBevel * 0.3;
             break;
           }
           case "corona": {
-            const flame = 3.6 * Math.sin(ang * 9 + phase * 2) + 2.2 * Math.cos(ang * 15 - phase * 3);
-            const d = r - (R_MID + flame * 0.55);
-            alpha = Math.exp(-Math.pow(d / 4.6, 2)) * (0.78 + 0.22 * Math.sin(ang * 6 + phase));
+            const flame = 4.5 * Math.sin(ang * 10 + phase * 2) + 2.8 * Math.cos(ang * 17 - phase * 3);
+            const plume = Math.exp(-Math.pow((r - (R_MID + flame * 0.65)) / 5.0, 2));
+            const core = Math.exp(-Math.pow((r - (R_INNER + 4.2)) / 2.8, 2)) * 0.95;
+            alpha = Math.min(1, core + plume * (0.78 + 0.22 * Math.sin(ang * 6 + phase)));
             mixT = clamp((r - R_INNER) / (R_OUTER - R_INNER), 0, 1);
-            hi = Math.exp(-Math.pow((r - (R_INNER + 3.5)) / 2.2, 2)) * 0.7;
+            hi = core * 0.8 + Math.max(0, Math.sin(ang * 10 + phase * 2)) * 0.35;
             break;
           }
           case "sparkles": {
-            const base = Math.exp(-Math.pow((r - R_MID) / 3.8, 2)) * 0.65;
-            const stars = Math.pow(Math.max(0, Math.sin(ang * 8 + phase)), 10) *
-              Math.exp(-Math.pow((r - (R_MID + 2.5)) / 4.2, 2));
-            const stars2 = Math.pow(Math.max(0, Math.cos(ang * 12 - phase * 2)), 14) *
-              Math.exp(-Math.pow((r - (R_MID - 2.0)) / 3.5, 2));
-            alpha = Math.min(1, base + stars * 1.1 + stars2 * 0.95);
+            const base = Math.exp(-Math.pow((r - R_MID) / 4.2, 2)) * 0.72 + innerBevel * 0.45;
+            let starGlow = 0;
+            for (let k = 0; k < 6; k++) {
+              const sa = (k * Math.PI) / 3 + phase * (k % 2 === 0 ? 0.5 : -0.5);
+              const sr = R_MID + (k % 2 === 0 ? 4.0 : -3.2);
+              const d = Math.hypot(dx - Math.cos(sa) * sr, dy - Math.sin(sa) * sr);
+              const twinkle = 0.6 + 0.4 * Math.sin(phase * 2 + k * 1.3);
+              const starCross = Math.exp(-Math.pow(d / 4.8, 2)) * twinkle;
+              starGlow = Math.max(starGlow, starCross);
+            }
+            alpha = Math.min(1, base + starGlow);
             mixT = 0.5 + 0.5 * Math.sin(ang * 3 + phase);
-            hi = Math.min(1, stars + stars2);
+            hi = Math.min(1, starGlow * 1.15 + innerBevel * 0.35);
             break;
           }
           case "blades": {
-            const seg = ((ang + phase * 0.5) % (Math.PI / 3) + Math.PI / 3) % (Math.PI / 3);
-            const blade = smoothstep(0.05, 0.25, seg) * (1 - smoothstep(0.75, 0.98, seg));
-            const edge = Math.exp(-Math.pow((r - (R_MID + 1.5 * Math.sin(ang * 6 + phase))) / 4.2, 2));
-            const core = Math.exp(-Math.pow((r - (R_INNER + 4.0)) / 2.0, 2)) * 0.7;
-            alpha = Math.min(1, edge * (0.35 + 0.65 * blade) + core);
+            const period = Math.PI / 3;
+            const seg = ((ang + phase * 0.5) % period + period) % period;
+            const blade = smoothstep(0.03, 0.22, seg) * (1 - smoothstep(0.68, 0.95, seg));
+            const edge = Math.exp(-Math.pow((r - (R_MID + 2.8 * (blade - 0.3))) / 4.2, 2));
+            const core = innerBevel * 0.9;
+            alpha = Math.min(1, core + edge * (0.45 + 0.55 * blade));
             mixT = blade;
-            hi = Math.pow(Math.max(0, Math.sin(ang * 6 - phase * 2)), 8) * 0.85;
+            hi = (Math.pow(Math.max(0, Math.sin(ang * 6 - phase)), 6) * 0.8 + innerBevel * 0.45);
             break;
           }
           case "hud": {
-            const tick = Math.sin(ang * 24 + phase) > 0.2 ? 1.0 : 0.25;
-            const ring1 = Math.exp(-Math.pow((r - (R_INNER + 3.5)) / 1.8, 2)) * 0.95;
-            const ring2 = Math.exp(-Math.pow((r - (R_OUTER - 3.5)) / 2.2, 2)) * tick * 0.9;
-            const arc = Math.exp(-Math.pow((r - R_MID) / 3.2, 2)) * smoothstep(0.2, 0.8, Math.sin(ang * 3 - phase));
-            alpha = Math.min(1, ring1 + ring2 + arc * 0.85);
+            const tick = Math.sin(ang * 24 + phase) > 0.15 ? 1.0 : 0.25;
+            const ring1 = Math.exp(-Math.pow((r - (R_INNER + 4.0)) / 2.2, 2)) * 0.98;
+            const ring2 = Math.exp(-Math.pow((r - (R_OUTER - 4.0)) / 2.4, 2)) * tick * 0.92;
+            const segArc = Math.exp(-Math.pow((r - R_MID) / 3.8, 2)) * smoothstep(0.05, 0.75, Math.sin(ang * 3 - phase));
+            const crosshair = (Math.exp(-Math.pow(Math.abs(Math.sin(ang * 2)) * 28, 2)) * 0.85) * smoothstep(R_INNER + 2, R_OUTER - 2, r);
+            alpha = Math.min(1, ring1 + ring2 + segArc * 0.9 + crosshair);
             mixT = ring2 > ring1 ? 0.8 : 0.2;
-            hi = arc * 0.6;
+            hi = segArc * 0.65 + crosshair * 0.7;
             break;
           }
           case "crown": {
-            const points = Math.max(0, Math.sin(ang * 10 + phase));
-            const band = Math.exp(-Math.pow((r - (R_MID - 1.0)) / 3.6, 2));
-            const crest = Math.exp(-Math.pow((r - (R_MID + 5.0 * Math.pow(points, 2))) / 2.6, 2)) * points;
-            const jewel = Math.pow(Math.max(0, Math.cos(ang * 5 - phase)), 12) * Math.exp(-Math.pow((r - R_MID) / 3.0, 2));
-            alpha = Math.min(1, band * 0.85 + crest * 0.9 + jewel);
-            mixT = 0.5 + 0.5 * Math.sin(ang * 5 + phase);
-            hi = jewel * 0.95 + Math.pow(points, 4) * 0.35;
+            const base = Math.exp(-Math.pow((r - (R_INNER + 6.5)) / 4.2, 2)) * 0.94;
+            const spikes = Math.pow(Math.max(0, Math.cos((ang + Math.PI / 2) * 5)), 1.7);
+            const tipY = R_MID + 8.5 * spikes;
+            const crest = Math.exp(-Math.pow((r - tipY) / 3.2, 2)) * smoothstep(0.1, 0.7, spikes);
+            // Shimmering royal ruby/diamond studs at every crown peak
+            let gem = 0;
+            for (let k = 0; k < 5; k++) {
+              const ga = -Math.PI / 2 + (k * Math.PI * 2) / 5;
+              const gx = Math.cos(ga) * (R_MID + 6.0);
+              const gy = Math.sin(ga) * (R_MID + 6.0);
+              const d = Math.hypot(dx - gx, dy - gy);
+              gem = Math.max(gem, Math.exp(-Math.pow(d / 3.6, 2)) * (0.75 + 0.25 * Math.sin(phase + k)));
+            }
+            alpha = Math.min(1, base + crest * 0.95 + gem);
+            mixT = clamp(0.4 + 0.4 * Math.sin(ang * 5 + phase) + 0.2 * crest, 0, 1);
+            hi = gem + innerBevel * 0.55;
             break;
           }
           case "prism": {
             const facet = Math.abs(Math.sin(ang * 6 + phase));
-            const rTarget = R_MID + 3.2 * (facet - 0.5);
-            const band = Math.exp(-Math.pow((r - rTarget) / 4.2, 2));
-            alpha = band * (0.68 + 0.32 * facet);
+            const rTarget = R_MID + 4.0 * (facet - 0.5);
+            const band = Math.exp(-Math.pow((r - rTarget) / 4.8, 2));
+            alpha = Math.min(1, band * (0.72 + 0.28 * facet) + innerBevel * 0.55);
             mixT = facet;
-            hi = Math.pow(facet, 6) * 0.7;
+            hi = Math.pow(facet, 5) * 0.78 + innerBevel * 0.3;
             break;
           }
           case "crystal": {
-            const spike = Math.pow(Math.abs(Math.cos(ang * 8 + phase * 0.5)), 2.2);
-            const rTarget = R_MID - 1.5 + 6.5 * spike;
-            const band = Math.exp(-Math.pow((r - rTarget) / 3.6, 2));
-            const innerRim = Math.exp(-Math.pow((r - (R_INNER + 3.5)) / 2.2, 2)) * 0.8;
-            alpha = Math.min(1, band * 0.92 + innerRim);
+            const spike = Math.pow(Math.abs(Math.cos(ang * 8 + phase * 0.5)), 1.9);
+            const rTarget = R_MID - 2.0 + 8.0 * spike;
+            const band = Math.exp(-Math.pow((r - rTarget) / 3.8, 2));
+            alpha = Math.min(1, band * 0.94 + innerBevel * 0.85);
             mixT = spike;
-            hi = Math.pow(spike, 4) * 0.85;
+            hi = Math.pow(spike, 3.5) * 0.88 + innerBevel * 0.4;
             break;
           }
           case "hex": {
             const seg = Math.sin(ang * 12 + phase) * Math.cos(ang * 6 - phase);
-            const r1 = Math.exp(-Math.pow((r - (R_MID - 2.0)) / 2.6, 2));
-            const r2 = Math.exp(-Math.pow((r - (R_MID + 3.5)) / 2.6, 2)) * smoothstep(-0.1, 0.5, seg);
-            alpha = Math.min(1, r1 * 0.85 + r2 * 0.95);
+            const r1 = Math.exp(-Math.pow((r - (R_MID - 2.8)) / 2.8, 2));
+            const r2 = Math.exp(-Math.pow((r - (R_MID + 4.4)) / 3.0, 2)) * smoothstep(-0.15, 0.45, seg);
+            alpha = Math.min(1, r1 * 0.88 + r2 * 0.98 + innerBevel * 0.4);
             mixT = 0.5 + 0.5 * seg;
-            hi = Math.max(0, seg) * 0.5;
+            hi = Math.max(0, seg) * 0.65;
             break;
           }
           case "wave": {
-            const w = Math.sin(ang * 5 + phase * 2) * 3.5;
-            const d1 = Math.exp(-Math.pow((r - (R_MID + w)) / 4.0, 2));
-            const d2 = Math.exp(-Math.pow((r - (R_MID - w)) / 3.4, 2)) * 0.75;
-            alpha = Math.min(1, d1 + d2);
+            const w = Math.sin(ang * 5 + phase * 2) * 4.5;
+            const d1 = Math.exp(-Math.pow((r - (R_MID + w)) / 4.2, 2));
+            const d2 = Math.exp(-Math.pow((r - (R_MID - w)) / 3.6, 2)) * 0.82;
+            alpha = Math.min(1, d1 + d2 + innerBevel * 0.45);
             mixT = d1 / (d1 + d2 + 0.001);
-            hi = Math.min(d1, d2) * 0.8;
+            hi = Math.min(d1, d2) * 0.9;
             break;
           }
           case "ticks": {
             const dash = Math.sin(ang * 18 + phase * 2);
-            const ring = Math.exp(-Math.pow((r - R_MID) / 4.4, 2)) * smoothstep(-0.2, 0.4, dash);
-            const thin = Math.exp(-Math.pow((r - (R_INNER + 3.2)) / 1.6, 2)) * 0.75;
-            alpha = Math.min(1, ring * 0.95 + thin);
+            const ring = Math.exp(-Math.pow((r - R_MID) / 4.6, 2)) * smoothstep(-0.25, 0.35, dash);
+            alpha = Math.min(1, ring * 0.96 + innerBevel * 0.82);
             mixT = 0.5 + 0.5 * Math.sin(ang * 3 - phase);
-            hi = Math.pow(Math.max(0, dash), 4) * 0.6;
+            hi = Math.pow(Math.max(0, dash), 3.5) * 0.68;
             break;
           }
           case "radar": {
             const rel = ((ang - phase) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
-            const trail = Math.exp(-rel * 1.4);
-            const band = Math.exp(-Math.pow((r - R_MID) / 4.5, 2));
-            const base = band * 0.28;
-            alpha = Math.min(1, base + band * trail * 0.95);
+            const trail = Math.exp(-rel * 1.25);
+            const band = Math.exp(-Math.pow((r - R_MID) / 4.8, 2));
+            alpha = Math.min(1, band * 0.34 + innerBevel * 0.45 + band * trail * 0.96);
             mixT = trail;
-            hi = Math.pow(trail, 5) * 0.95;
+            hi = Math.pow(trail, 4) * 0.98;
             break;
           }
           case "lightning": {
             const bolt = Math.sin(ang * 13 + phase * 3) * Math.sin(ang * 7 - phase * 2);
-            const d = r - (R_MID + bolt * 4.5);
-            const core = Math.exp(-Math.pow(d / 2.2, 2));
-            const glow = Math.exp(-Math.pow(d / 6.0, 2)) * 0.55;
-            alpha = Math.min(1, core + glow);
+            const d = r - (R_MID + bolt * 5.6);
+            const core = Math.exp(-Math.pow(d / 2.4, 2));
+            const glow = Math.exp(-Math.pow(d / 6.8, 2)) * 0.62;
+            alpha = Math.min(1, core + glow + innerBevel * 0.38);
             mixT = 0.5 + 0.5 * bolt;
-            hi = core * 0.85;
+            hi = core * 0.9;
             break;
           }
           case "rainbow": {
-            const band = Math.exp(-Math.pow((r - R_MID) / 5.2, 2));
+            const band = Math.exp(-Math.pow((r - R_MID) / 5.4, 2));
             const hue = (ang / (Math.PI * 2) + t + 1) % 1;
             const [rr, gg, bb] = hsvToRgb(hue, 0.88, 1.0);
-            const a = band * innerMask * outerMask * 0.95;
-            blendPixel(buf, idx, rr, gg, bb, a);
+            const spec = innerBevel * 0.5 + outerBevel * 0.4;
+            const a = Math.min(1, band * 0.95 + spec * 0.45) * innerMask * outerMask;
+            blendPixel(buf, idx, lerp(rr, 255, spec * 0.35), lerp(gg, 255, spec * 0.35), lerp(bb, 255, spec * 0.35), a);
             continue;
           }
           case "glitch": {
-            const slice = Math.sin(y * 0.25 + phase * 2) > 0.55 ? 2.5 : 0;
-            const band = Math.exp(-Math.pow((r - (R_MID + slice)) / 3.8, 2));
-            const a = band * innerMask * outerMask * 0.92;
+            const slice = Math.sin(y * 0.22 + phase * 2) > 0.5 ? 3.2 : 0;
+            const band = Math.exp(-Math.pow((r - (R_MID + slice)) / 4.2, 2));
+            const a = Math.min(1, band + innerBevel * 0.5) * innerMask * outerMask;
             const split = Math.sin(ang * 8 + phase * 3);
             const rr = split > 0 ? rgb2[0] : rgb1[0];
             const gg = split > 0 ? rgb2[1] : rgb1[1];
@@ -556,85 +575,87 @@ function renderFrameAPNG(spec) {
             continue;
           }
           case "eclipse": {
-            const glow = Math.exp(-Math.pow((r - R_MID) / 5.0, 2));
-            const flare = 0.45 + 0.55 * Math.pow(0.5 + 0.5 * Math.cos(ang - phase), 2);
-            alpha = glow * flare;
+            const glow = Math.exp(-Math.pow((r - R_MID) / 5.2, 2));
+            const flare = 0.48 + 0.52 * Math.pow(0.5 + 0.5 * Math.cos(ang - phase), 1.8);
+            alpha = Math.min(1, glow * flare + innerBevel * 0.55);
             mixT = flare;
-            hi = Math.pow(0.5 + 0.5 * Math.cos(ang - phase), 8) * 0.9;
+            hi = Math.pow(0.5 + 0.5 * Math.cos(ang - phase), 6) * 0.95;
             break;
           }
           case "spiral": {
-            const sp = Math.sin(ang * 4 + (r - R_INNER) * 0.35 - phase * 2);
-            const band = Math.exp(-Math.pow((r - R_MID) / 5.0, 2));
-            alpha = band * (0.45 + 0.55 * smoothstep(-0.3, 0.7, sp));
+            const sp = Math.sin(ang * 4 + (r - R_INNER) * 0.32 - phase * 2);
+            const band = Math.exp(-Math.pow((r - R_MID) / 5.4, 2));
+            alpha = Math.min(1, band * (0.5 + 0.5 * smoothstep(-0.3, 0.7, sp)) + innerBevel * 0.4);
             mixT = 0.5 + 0.5 * sp;
-            hi = Math.pow(Math.max(0, sp), 5) * 0.65;
+            hi = Math.pow(Math.max(0, sp), 4.5) * 0.72;
             break;
           }
           case "starburst": {
-            const rays = Math.pow(Math.abs(Math.sin(ang * 7 + phase)), 3);
-            const band = Math.exp(-Math.pow((r - (R_MID + rays * 4.5 - 1.5)) / 3.6, 2));
-            alpha = band * (0.65 + 0.35 * rays);
+            const rays = Math.pow(Math.abs(Math.sin(ang * 7 + phase)), 2.5);
+            const band = Math.exp(-Math.pow((r - (R_MID + rays * 5.8 - 1.8)) / 3.8, 2));
+            alpha = Math.min(1, band * (0.7 + 0.3 * rays) + innerBevel * 0.45);
             mixT = rays;
-            hi = Math.pow(rays, 3) * 0.75;
+            hi = Math.pow(rays, 2.5) * 0.85;
             break;
           }
           case "orbits": {
-            const ring = Math.exp(-Math.pow((r - R_MID) / 2.6, 2)) * 0.72;
+            const ring = Math.exp(-Math.pow((r - R_MID) / 2.8, 2)) * 0.78 + innerBevel * 0.4;
             let orb = 0;
             for (let k = 0; k < 4; k++) {
               const oa = phase + (k * Math.PI) / 2;
-              const ox = Math.cos(oa) * (R_MID + 1.5);
-              const oy = Math.sin(oa) * (R_MID + 1.5);
+              const ox = Math.cos(oa) * (R_MID + 2.0);
+              const oy = Math.sin(oa) * (R_MID + 2.0);
               const dist = Math.hypot(dx - ox, dy - oy);
-              orb = Math.max(orb, Math.exp(-Math.pow(dist / 5.2, 2)));
+              orb = Math.max(orb, Math.exp(-Math.pow(dist / 6.2, 2)));
             }
             alpha = Math.min(1, ring + orb);
             mixT = orb;
-            hi = Math.pow(orb, 2) * 0.9;
+            hi = Math.pow(orb, 2) * 0.92;
             break;
           }
           case "petals": {
-            const pet = Math.pow(Math.abs(Math.sin(ang * 5 + phase * 0.5)), 1.5);
-            const rTarget = R_MID - 1.5 + pet * 5.2;
-            const band = Math.exp(-Math.pow((r - rTarget) / 4.0, 2));
-            alpha = band * (0.6 + 0.4 * pet);
+            const pet = Math.pow(Math.abs(Math.sin(ang * 5 + phase * 0.5)), 1.35);
+            const rTarget = R_MID - 2.0 + pet * 6.5;
+            const band = Math.exp(-Math.pow((r - rTarget) / 4.2, 2));
+            alpha = Math.min(1, band * (0.68 + 0.32 * pet) + innerBevel * 0.5);
             mixT = pet;
-            hi = Math.pow(pet, 5) * 0.55;
+            hi = Math.pow(pet, 4) * 0.65;
             break;
           }
           case "cat_ears": {
-            // Cute cat ears on top-left & top-right + neon ring
-            const base = Math.exp(-Math.pow((r - (R_MID - 1.0)) / 3.8, 2)) * 0.88;
-            const leftEar = Math.exp(-Math.pow((ang + 2.28) / 0.24, 2)) * smoothstep(R_INNER + 1, R_OUTER - 1, r);
-            const rightEar = Math.exp(-Math.pow((ang + 0.86) / 0.24, 2)) * smoothstep(R_INNER + 1, R_OUTER - 1, r);
-            const ears = Math.max(leftEar, rightEar) * (0.85 + 0.15 * Math.sin(phase));
+            const base = Math.exp(-Math.pow((r - (R_INNER + 7.5)) / 4.4, 2)) * 0.92;
+            const earL = Math.exp(-Math.pow((ang + 2.24) / 0.21, 2)) * smoothstep(R_INNER + 1, R_OUTER - 1, r);
+            const earR = Math.exp(-Math.pow((ang + 0.90) / 0.21, 2)) * smoothstep(R_INNER + 1, R_OUTER - 1, r);
+            const innerTriL = Math.exp(-Math.pow((ang + 2.24) / 0.09, 2)) * Math.exp(-Math.pow((r - (R_OUTER - 8)) / 6.0, 2));
+            const innerTriR = Math.exp(-Math.pow((ang + 0.90) / 0.09, 2)) * Math.exp(-Math.pow((r - (R_OUTER - 8)) / 6.0, 2));
+            const ears = Math.max(earL, earR) * (0.88 + 0.12 * Math.sin(phase));
             alpha = Math.min(1, base + ears);
             mixT = ears > 0.3 ? 0.85 : (0.5 + 0.5 * Math.sin(ang * 2 + phase));
-            hi = ears * 0.5;
+            hi = Math.max(innerTriL, innerTriR) * 0.9 + ears * 0.35;
             break;
           }
           case "halo": {
-            const base = Math.exp(-Math.pow((r - R_MID) / 3.8, 2)) * (0.72 + 0.28 * Math.sin(ang * 2 - phase));
-            const topGlow = Math.exp(-Math.pow((ang + Math.PI / 2) / 0.75, 2)) *
-              Math.exp(-Math.pow((r - (R_MID + 2.5)) / 4.2, 2));
-            alpha = Math.min(1, base + topGlow * 0.9);
+            const base = Math.exp(-Math.pow((r - R_MID) / 4.2, 2)) * (0.76 + 0.24 * Math.sin(ang * 2 - phase));
+            const topGlow = Math.exp(-Math.pow((ang + Math.PI / 2) / 0.82, 2)) *
+              Math.exp(-Math.pow((r - (R_MID + 3.8)) / 4.5, 2));
+            alpha = Math.min(1, base + innerBevel * 0.55 + topGlow * 0.95);
             mixT = topGlow;
-            hi = topGlow * 0.9;
+            hi = Math.min(1, topGlow * 0.95 + innerBevel * 0.4);
             break;
           }
           case "horns": {
-            const base = Math.exp(-Math.pow((r - (R_MID - 1.0)) / 4.0, 2)) * 0.85;
-            const leftHorn = Math.exp(-Math.pow((ang + 2.15) / 0.18, 2)) * smoothstep(R_INNER, R_OUTER, r);
-            const rightHorn = Math.exp(-Math.pow((ang + 0.99) / 0.18, 2)) * smoothstep(R_INNER, R_OUTER, r);
-            const horns = Math.max(leftHorn, rightHorn) * (0.85 + 0.15 * Math.cos(phase));
+            const base = Math.exp(-Math.pow((r - (R_INNER + 7.5)) / 4.4, 2)) * 0.9;
+            const hornTilt = (r - R_INNER) * 0.008;
+            const leftHorn = Math.exp(-Math.pow((ang + 2.18 - hornTilt) / 0.17, 2)) * smoothstep(R_INNER, R_OUTER, r);
+            const rightHorn = Math.exp(-Math.pow((ang + 0.96 + hornTilt) / 0.17, 2)) * smoothstep(R_INNER, R_OUTER, r);
+            const horns = Math.max(leftHorn, rightHorn) * (0.88 + 0.12 * Math.cos(phase));
             alpha = Math.min(1, base + horns);
             mixT = 0.5 + 0.5 * Math.sin(ang * 3 + phase);
-            hi = horns * 0.65;
+            hi = horns * 0.72 + innerBevel * 0.3;
             break;
           }
           default: {
-            alpha = Math.exp(-Math.pow((r - R_MID) / 4.5, 2));
+            alpha = Math.min(1, Math.exp(-Math.pow((r - R_MID) / 4.6, 2)) + innerBevel * 0.5);
           }
         }
 
@@ -655,7 +676,7 @@ function renderFrameAPNG(spec) {
     frames.push(buf);
   }
 
-  return encodeAPNG(S, S, frames, 85, 1000);
+  return encodeAPNG(S, S, frames, 65, 1000);
 }
 
 // ============================================================
@@ -782,6 +803,11 @@ for (const spec of CUSTOM_FRAMES) {
 console.log(
   `Generated ${CUSTOM_FRAMES.length} custom animated APNG frames in assets/frames/ (${(totalFrameBytes / 1024 / 1024).toFixed(2)} MB total)`
 );
+
+if (process.argv.includes("--frames-only")) {
+  console.log("Frames-only mode: skipped app icon generation.");
+  process.exit(0);
+}
 
 // 2. Generate 12 custom app icons
 const defaultSrc = decodePNG(path.join(ROOT, "Telegram", "Telegram-iOS", "FullGramDefault.alticon", "FullGramDefault@3x.png"));

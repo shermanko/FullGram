@@ -195,21 +195,24 @@ func infoItems(
                 interaction.requestLayout(animated)
             }))
         }
-        if fullGramCanOpenAdmin(context: context) {
+        let isAdminUser = fullGramCanOpenAdmin(context: context)
+        let isOwnSponsorProfile = !isAdminUser && (user.id == context.account.peerId) && fullGramIsSelfSponsor(context: context)
+        if isAdminUser || isOwnSponsorProfile {
             let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
             let badgePeerId = user.id.toInt64()
             let badgeUsername = user.addressName
             let statusLabel = fullGramBadgeRowStatusLabel(peerId: badgePeerId, username: badgeUsername, russian: ru)
+            let sponsorMode = !isAdminUser && isOwnSponsorProfile
             items[currentPeerInfoSection]!.append(PeerInfoScreenDisclosureItem(
                 id: ItemFullGramBadge,
                 label: .text(statusLabel),
-                text: ru ? "Бейдж" : "Badge",
+                text: sponsorMode ? (ru ? "Спонсор (Бейдж и NFT)" : "Sponsor (Badge & NFT)") : (ru ? "Бейдж" : "Badge"),
                 icon: fullGramBadgeMenuIcon(),
                 action: {
                     guard let controller = interaction.getController() else {
                         return
                     }
-                    controller.push(fullGramBadgeDeskController(context: context, peer: .user(user), peerId: badgePeerId, username: badgeUsername))
+                    controller.push(fullGramBadgeDeskController(context: context, peer: .user(user), peerId: badgePeerId, username: badgeUsername, isSponsorSelfMode: sponsorMode))
                 }
             ))
         }

@@ -406,7 +406,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
         
         self.addSubnode(self.regularContentNode)
         self.fullGramProfileEffectView.isHidden = true
-        self.regularContentNode.view.insertSubview(self.fullGramProfileEffectView, at: 0)
+        self.backgroundBannerView.addSubview(self.fullGramProfileEffectView)
         
         if !isMediaOnly {
             self.regularContentNode.addSubnode(self.buttonsContainerNode)
@@ -2266,10 +2266,9 @@ final class PeerInfoHeaderNode: ASDisplayNode {
         let activeProfileEffect = (!isSearching && !state.isEditing)
             ? peer.flatMap { FullGramProfileEffects.effect(forPeerId: $0.id.toInt64(), selfPeerId: self.context.account.peerId.toInt64()) }
             : nil
-        self.fullGramProfileEffectView.frame = CGRect(x: 0.0, y: 0.0, width: width, height: max(280.0, backgroundHeight))
         self.fullGramProfileEffectView.configure(with: activeProfileEffect)
-        if activeProfileEffect != nil && self.regularContentNode.view.subviews.first !== self.fullGramProfileEffectView {
-            self.regularContentNode.view.sendSubviewToBack(self.fullGramProfileEffectView)
+        if activeProfileEffect != nil {
+            self.backgroundBannerView.bringSubviewToFront(self.fullGramProfileEffectView)
         }
         let buttonsTransitionDistanceNorm: CGFloat = 40.0
         
@@ -2505,6 +2504,13 @@ final class PeerInfoHeaderNode: ASDisplayNode {
         } else {
             transition.updateFrame(view: self.backgroundBannerView, frame: bannerFrame)
         }
+        let fullGramEffectHeight = max(320.0, backgroundDefaultHeight + bannerInset)
+        self.fullGramProfileEffectView.frame = CGRect(
+            x: bannerInset,
+            y: bannerFrame.height - fullGramEffectHeight,
+            width: width,
+            height: fullGramEffectHeight
+        )
                         
         let backgroundCoverSize = self.backgroundCover.update(
             transition: ComponentTransition(transition),
@@ -2526,7 +2532,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
         )
         if let backgroundCoverView = self.backgroundCover.view as? PeerInfoCoverComponent.View {
             if backgroundCoverView.superview == nil {
-                self.backgroundBannerView.addSubview(backgroundCoverView)
+                self.backgroundBannerView.insertSubview(backgroundCoverView, at: 0)
             }
             if additive {
                 transition.updateFrameAdditive(view: backgroundCoverView, frame: CGRect(origin: CGPoint(x: -bannerInset, y: bannerFrame.height - backgroundCoverSize.height), size: backgroundCoverSize))

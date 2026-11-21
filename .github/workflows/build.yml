@@ -191,12 +191,15 @@ jobs:
       - name: Run FullGram source and submodule checks
         run: python3 tools/ci_checks.py --require-submodules
 
-      - name: Restore Bazel disk cache
+      - name: Restore Bazel disk and repo caches
         id: bazel-cache
         if: inputs.skip_cache != true
         uses: actions/cache/restore@v4
         with:
-          path: /Users/Shared/bazel-disk-cache
+          path: |
+            /Users/Shared/bazel-disk-cache
+            /Users/Shared/bazel-repo-cache
+            ~/.ccache
           key: bazel-disk-xcode27-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('versions.json') }}-${{ github.sha }}
           restore-keys: |
             bazel-disk-xcode27-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('versions.json') }}-
@@ -207,7 +210,8 @@ jobs:
           set -euo pipefail
           sudo mkdir -p /Users/Shared
           sudo chown "$(whoami)" /Users/Shared
-          mkdir -p /Users/Shared/bazel-disk-cache
+          mkdir -p /Users/Shared/bazel-disk-cache /Users/Shared/bazel-repo-cache ~/.ccache
+          ccache --max-size=2G || true
           rm -rf /Users/Shared/telegram-ios
           cp -ac "$GITHUB_WORKSPACE" /Users/Shared/telegram-ios 2>/dev/null || cp -a "$GITHUB_WORKSPACE" /Users/Shared/telegram-ios
 
@@ -285,6 +289,8 @@ jobs:
               "build --//Telegram:disableProvisioningProfiles",
               "build --//Telegram:disableExtensions",
               "build --features=ayu_unsigned_compilation --features=disable_legacy_signing",
+              "build --repository_cache=/Users/Shared/bazel-repo-cache",
+              "fetch --repository_cache=/Users/Shared/bazel-repo-cache",
           ]
           # On small CI runners (e.g. 3-core / 7 GiB), 3 concurrent Swift WMO jobs x 2 threads
           # thrash CPU and RAM; capping Bazel jobs to 2 avoids swap pressure.
@@ -324,7 +330,7 @@ jobs:
           tmp_path = ipa_path.with_suffix(".ipa.tmp")
           orig_size = ipa_path.stat().st_size
           with zipfile.ZipFile(ipa_path, "r") as zin, zipfile.ZipFile(
-              tmp_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
+              tmp_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6
           ) as zout:
               for info in zin.infolist():
                   data = zin.read(info.filename)
@@ -449,11 +455,14 @@ jobs:
           print(f"Bazel disk cache size ready for save: {total / (1024 * 1024):.1f} MB")
           PY
 
-      - name: Save Bazel disk cache
+      - name: Save Bazel disk and repo caches
         if: (!cancelled()) && inputs.skip_cache != true && steps.bazel-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: /Users/Shared/bazel-disk-cache
+          path: |
+            /Users/Shared/bazel-disk-cache
+            /Users/Shared/bazel-repo-cache
+            ~/.ccache
           key: bazel-disk-xcode27-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('versions.json') }}-${{ github.sha }}
 
       - name: Create GitHub Release
@@ -473,5 +482,5 @@ jobs:
           fi
 
           gh release create "$TAG" "${FILES[@]}" \
-            --title "FullGram v1.5.5 (${APP_VERSION} • ${BUILD_NUMBER})" \
-            --notes "FullGram v1.5.5 (${APP_VERSION} • ${BUILD_NUMBER}) from commit ${GITHUB_SHA}: fixed profile NFT opening & B&W theme link contrast, redesigned paper-to-trash delete animation, added per-device power saving profiles, player night mode, custom/edited lyrics, mini-player live lyrics, ->A voice-to-text, chat screenshot editor, and round video camera switch fix."
+            --title "FullGram v1.6.0 (${APP_VERSION} • ${BUILD_NUMBER})" \
+            --notes "FullGram v1.6.0 (${APP_VERSION} • ${BUILD_NUMBER}) from commit ${GITHUB_SHA}: Saved Messages frame fix, universal cloud cosmetics sync & session auth, Sponsor self-service badge & NFT role, HD profile effect banners & scroll pinning, redesigned 288px custom APNG frames & non-blank preview decoder, new app & UI icons (zero plain-black icons), audio player header gap fix, Local Premium emoji status hiding, automatic font restart back to Fonts tab, unified Power Saving mode, and ccache/Bazel build optimizations."

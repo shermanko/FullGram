@@ -11,9 +11,13 @@ public final class FullGramAdmin: @unchecked Sendable {
     private let keychainService = "FullGram.Admin.Token"
     private let keychainAccount = "owner_token"
     private let initDataAccount = "telegram_init_data"
+    private let clientSessionTokenAccount = "client_session_token"
+    private let clientSessionUidAccount = "client_session_uid"
+    private let deviceSecretAccount = "device_secret"
     private let lock = NSLock()
     private var verifiedAdminUserId: Int64?
     private var verifiedAuthMethod: String?
+    private var pendingSessionCompletions: [Int64: [@Sendable (Result<String, Error>) -> Void]] = [:]
 
     private init() {}
 
@@ -134,6 +138,114 @@ public final class FullGramAdmin: @unchecked Sendable {
             applied = true
         }
         return applied
+    }
+
+    @discardableResult
+    public func applyClientOrAdminAuthHeaders(to request: inout URLRequest, preferredClientToken: String? = nil) -> Bool {
+        if self.applyAuthHeaders(to: &request) {
+            return true
+        }
+        if let preferredClientToken, !preferredClientToken.isEmpty {
+            request.setValue("Bearer \(preferredClientToken)", forHTTPHeaderField: "Authorization")
+            return true
+        }
+        if let storedClient = self.readKeychain(account: self.clientSessionTokenAccount), !storedClient.isEmpty {
+            request.setValue("Bearer \(storedClient)", forHTTPHeaderField: "Authorization")
+            return true
+        }
+        return false
+    }
+
+    private func getOrCreateDeviceSecret() -> String {
+        if let existing = self.readKeychain(account: self.deviceSecretAccount), existing.count >= 16 {
+            return existing
+        }
+        var bytes = [UInt8](repeating: 0, count: 32)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let secret: String
+        if status == errSecSuccess {
+            secret = bytes.map { String(format: "%02x", $0) }.joined()
+        } else {
+            secret = UUID().uuidString.replacingOccurrences(of: "-", with: "") + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        }
+        self.writeKeychain(secret, account: self.deviceSecretAccount)
+        return secret
+    }
+
+    public func clearClientSession() {
+        self.deleteKeychain(account: self.clientSessionTokenAccount)
+        self.deleteKeychain(account: self.clientSessionUidAccount)
+    }
+
+    public func ensureClientSession(
+        peerId: Int64,
+        forceRefresh: Bool = false,
+        completion: @escaping @Sendable (Result<String, Error>) -> Void
+    ) {
+        let normId = FullGramCloudCosmetics.normalizedPeerId(peerId)
+        guard normId > 0 else {
+            DispatchQueue.main.async {
+                completion(.failure(NSError(domain: "FullGramAdmin", code: 400, userInfo: [NSLocalizedDescriptionKey: "Некорректный ID пользователя."])))
+            }
+            return
+        }
+        if !forceRefresh,
+           let token = self.readKeychain(account: self.clientSessionTokenAccount),
+           !token.isEmpty,
+           let uid = self.readKeychain(account: self.clientSessionUidAccount),
+           uid == String(normId) {
+            completion(.success(token))
+            return
+        }
+
+        self.lock.lock()
+        if var list = self.pendingSessionCompletions[normId] {
+            list.append(completion)
+            self.pendingSessionCompletions[normId] = list
+            self.lock.unlock()
+            return
+        }
+        self.pendingSessionCompletions[normId] = [completion]
+        self.lock.unlock()
+
+        let finish: @Sendable (Result<String, Error>) -> Void = { result in
+            self.lock.lock()
+            let callbacks = self.pendingSessionCompletions.removeValue(forKey: normId) ?? []
+            self.lock.unlock()
+            for cb in callbacks {
+                cb(result)
+            }
+        }
+
+        guard let url = URL(string: Self.workerBaseURL + "/auth/session") else {
+            finish(.failure(NSError(domain: "FullGramAdmin", code: 400, userInfo: [NSLocalizedDescriptionKey: "Некорректный адрес сервера."])))
+            return
+        }
+        let secret = self.getOrCreateDeviceSecret()
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15.0
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "peerId": String(normId),
+            "deviceSecret": secret
+        ], options: [])
+
+        self.sendJSONRequest(request) { [weak self] result in
+            switch result {
+            case let .success(json):
+                if let token = json["token"] as? String, !token.isEmpty {
+                    self?.writeKeychain(token, account: self?.clientSessionTokenAccount ?? "client_session_token")
+                    self?.writeKeychain(String(normId), account: self?.clientSessionUidAccount ?? "client_session_uid")
+                    finish(.success(token))
+                } else {
+                    finish(.failure(NSError(domain: "FullGramAdmin", code: 500, userInfo: [NSLocalizedDescriptionKey: "Сервер не выдал токен сессии."])))
+                }
+            case let .failure(error):
+                finish(.failure(error))
+            }
+        }
     }
 
     // MARK: - Server-Side Verification & Telegram Auth Exchange
@@ -521,5 +633,338 @@ public final class FullGramAdmin: @unchecked Sendable {
                 completion(.failure(error))
             }
         }
+    }
+
+    // MARK: - Sponsors API (Owner & Sponsor Self-Service)
+
+    public func setSponsor(
+        peerId: Int64?,
+        username: String?,
+        enabled: Bool,
+        completion: @escaping @Sendable (Result<Int64, Error>) -> Void
+    ) {
+        var payload: [String: Any] = ["enabled": enabled]
+        if let peerId {
+            payload["peerId"] = String(FullGramCloudCosmetics.normalizedPeerId(peerId))
+        }
+        if let username, !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            payload["username"] = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let request: URLRequest
+        do {
+            request = try self.makeAdminRequest(path: "/admin/sponsor", method: "POST", body: payload)
+        } catch {
+            DispatchQueue.main.async { completion(.failure(error)) }
+            return
+        }
+        self.sendJSONRequest(request) { result in
+            switch result {
+            case let .success(json):
+                let resolvedId = (json["peerId"] as? String).flatMap { Int64($0) }
+                    ?? peerId.map { FullGramCloudCosmetics.normalizedPeerId($0) }
+                    ?? 0
+                if resolvedId != 0 {
+                    FullGramSponsors.shared.setLocalSponsor(peerId: resolvedId, enabled: enabled)
+                }
+                FullGramSponsors.shared.refreshNow { _ in }
+                FullGramBadges.shared.refreshNow { _ in }
+                completion(.success(resolvedId))
+            case let .failure(error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    public func updateSponsorSelfBadge(
+        peerId: Int64,
+        enabled: Bool,
+        roleId: String?,
+        customEmojiId: Int64?,
+        emoji: String?,
+        label: String?,
+        shortLabel: String?,
+        color: String?,
+        completion: @escaping @Sendable (Result<Void, Error>) -> Void
+    ) {
+        let normId = FullGramCloudCosmetics.normalizedPeerId(peerId)
+        var payload: [String: Any] = [
+            "enabled": enabled,
+            "peerId": String(normId)
+        ]
+        if let roleId, !roleId.isEmpty {
+            payload["roleId"] = roleId
+        }
+        if let customEmojiId {
+            payload["customEmojiId"] = String(customEmojiId)
+        }
+        if let emoji, !emoji.isEmpty {
+            payload["emoji"] = emoji
+        }
+        if let label, !label.isEmpty {
+            payload["label"] = label
+        }
+        if let shortLabel, !shortLabel.isEmpty {
+            payload["shortLabel"] = shortLabel
+        }
+        if let color, !color.isEmpty {
+            payload["color"] = color
+        }
+
+        self.sendClientSessionJSONRequest(path: "/sponsor/badge", peerId: normId, payload: payload, didRetry: false) { result in
+            switch result {
+            case .success:
+                FullGramBadges.shared.refreshNow { _ in
+                    completion(.success(()))
+                }
+            case let .failure(error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    public func grantSponsorSelfNFT(
+        peerId: Int64,
+        giftId: Int64,
+        title: String,
+        modelName: String,
+        backdropName: String,
+        backdropId: Int32?,
+        patternName: String,
+        number: Int32,
+        note: String = "",
+        pinned: Bool = true,
+        completion: @escaping @Sendable (Result<String, Error>) -> Void
+    ) {
+        let normId = FullGramCloudCosmetics.normalizedPeerId(peerId)
+        var payload: [String: Any] = [
+            "enabled": true,
+            "peerId": String(normId),
+            "giftId": String(giftId),
+            "title": title,
+            "modelName": modelName,
+            "backdropName": backdropName,
+            "patternName": patternName,
+            "number": Int(max(1, number)),
+            "note": note,
+            "pinned": pinned
+        ]
+        if let backdropId {
+            payload["backdropId"] = Int(backdropId)
+        }
+        self.sendClientSessionJSONRequest(path: "/sponsor/nft", peerId: normId, payload: payload, didRetry: false) { result in
+            switch result {
+            case let .success(json):
+                completion(.success((json["id"] as? String) ?? ""))
+            case let .failure(error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    public func revokeSponsorSelfNFT(
+        peerId: Int64,
+        entryId: String,
+        completion: @escaping @Sendable (Result<Void, Error>) -> Void
+    ) {
+        let normId = FullGramCloudCosmetics.normalizedPeerId(peerId)
+        let payload: [String: Any] = [
+            "enabled": false,
+            "peerId": String(normId),
+            "id": entryId
+        ]
+        self.sendClientSessionJSONRequest(path: "/sponsor/nft", peerId: normId, payload: payload, didRetry: false) { result in
+            switch result {
+            case .success:
+                completion(.success(()))
+            case let .failure(error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    private func sendClientSessionJSONRequest(
+        path: String,
+        peerId: Int64,
+        payload: [String: Any],
+        didRetry: Bool,
+        completion: @escaping @Sendable (Result<[String: Any], Error>) -> Void
+    ) {
+        self.ensureClientSession(peerId: peerId, forceRefresh: didRetry) { [weak self] sessionResult in
+            guard let self else { return }
+            switch sessionResult {
+            case let .failure(err):
+                DispatchQueue.main.async { completion(.failure(err)) }
+            case let .success(token):
+                guard let url = URL(string: Self.workerBaseURL + path),
+                      let bodyData = try? JSONSerialization.data(withJSONObject: payload, options: []) else {
+                    DispatchQueue.main.async {
+                        completion(.failure(NSError(domain: "FullGramAdmin", code: 400, userInfo: [NSLocalizedDescriptionKey: "Ошибка формирования запроса."])))
+                    }
+                    return
+                }
+                var req = URLRequest(url: url)
+                req.httpMethod = "POST"
+                req.timeoutInterval = 15.0
+                req.cachePolicy = .reloadIgnoringLocalCacheData
+                req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+                req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                req.httpBody = bodyData
+
+                URLSession.shared.dataTask(with: req) { [weak self] data, response, error in
+                    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    if status == 401 && !didRetry {
+                        self?.clearClientSession()
+                        self?.sendClientSessionJSONRequest(path: path, peerId: peerId, payload: payload, didRetry: true, completion: completion)
+                        return
+                    }
+                    if let error {
+                        DispatchQueue.main.async { completion(.failure(error)) }
+                        return
+                    }
+                    let parsed = data.flatMap { try? JSONSerialization.jsonObject(with: $0, options: []) as? [String: Any] } ?? [:]
+                    guard (200 ..< 300).contains(status), (parsed["ok"] as? Bool ?? true) else {
+                        let msg = (parsed["error"] as? String) ?? "HTTP \(status)"
+                        DispatchQueue.main.async {
+                            completion(.failure(NSError(domain: "FullGramAdmin", code: status, userInfo: [NSLocalizedDescriptionKey: msg])))
+                        }
+                        return
+                    }
+                    DispatchQueue.main.async { completion(.success(parsed)) }
+                }.resume()
+            }
+        }
+    }
+}
+
+public final class FullGramSponsors: @unchecked Sendable {
+    public static let shared = FullGramSponsors()
+    public static let didChangeNotification = Notification.Name("FullGram.SponsorsDidChange")
+
+    private static let sponsorsURL = FullGramAdmin.workerBaseURL + "/sponsors.json"
+    private static let lastSyncKey = "fullgram_sponsors_last_sync"
+
+    private let lock = NSLock()
+    private var sponsorIds: Set<Int64> = []
+    private var isRefreshing = false
+    private var pendingCompletions: [@Sendable (Bool) -> Void] = []
+
+    private var cacheFileURL: URL {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return dir.appendingPathComponent("fullgram_sponsors.json")
+    }
+
+    private init() {
+        self.loadCache()
+    }
+
+    private func loadCache() {
+        guard let data = try? Data(contentsOf: self.cacheFileURL),
+              let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
+              let sponsors = json["sponsors"] as? [String: Any] else {
+            return
+        }
+        var ids = Set<Int64>()
+        for key in sponsors.keys {
+            if let parsed = Int64(key), parsed != 0 {
+                ids.insert(FullGramCloudCosmetics.normalizedPeerId(parsed))
+            }
+        }
+        self.lock.lock()
+        self.sponsorIds = ids
+        self.lock.unlock()
+    }
+
+    public func isSponsor(peerId: Int64) -> Bool {
+        let norm = FullGramCloudCosmetics.normalizedPeerId(peerId)
+        self.lock.lock()
+        let result = self.sponsorIds.contains(norm)
+        self.lock.unlock()
+        return result
+    }
+
+    public func setLocalSponsor(peerId: Int64, enabled: Bool) {
+        let norm = FullGramCloudCosmetics.normalizedPeerId(peerId)
+        self.lock.lock()
+        if enabled {
+            self.sponsorIds.insert(norm)
+        } else {
+            self.sponsorIds.remove(norm)
+        }
+        self.lock.unlock()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        }
+    }
+
+    public func refreshIfNeeded(maxAge: TimeInterval = 45.0) {
+        let last = UserDefaults.standard.double(forKey: Self.lastSyncKey)
+        if Date().timeIntervalSince1970 - last < maxAge {
+            return
+        }
+        self.refreshNow(completion: nil)
+    }
+
+    public func refreshNow(completion: (@Sendable (Bool) -> Void)? = nil) {
+        guard let url = URL(string: Self.sponsorsURL) else {
+            completion?(false)
+            return
+        }
+        self.lock.lock()
+        if let completion {
+            self.pendingCompletions.append(completion)
+        }
+        if self.isRefreshing {
+            self.lock.unlock()
+            return
+        }
+        self.isRefreshing = true
+        self.lock.unlock()
+
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 12.0
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+
+        URLSession.shared.dataTask(with: req) { [weak self] data, response, _ in
+            guard let self else { return }
+            let finish: @Sendable (Bool) -> Void = { ok in
+                self.lock.lock()
+                self.isRefreshing = false
+                let callbacks = self.pendingCompletions
+                self.pendingCompletions.removeAll()
+                self.lock.unlock()
+                DispatchQueue.main.async {
+                    if ok {
+                        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+                    }
+                    for cb in callbacks {
+                        cb(ok)
+                    }
+                }
+            }
+
+            guard let http = response as? HTTPURLResponse,
+                  (200 ..< 300).contains(http.statusCode),
+                  let data,
+                  let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
+                  let sponsors = json["sponsors"] as? [String: Any] else {
+                finish(false)
+                return
+            }
+
+            try? data.write(to: self.cacheFileURL, options: .atomic)
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastSyncKey)
+
+            var ids = Set<Int64>()
+            for key in sponsors.keys {
+                if let parsed = Int64(key), parsed != 0 {
+                    ids.insert(FullGramCloudCosmetics.normalizedPeerId(parsed))
+                }
+            }
+            self.lock.lock()
+            self.sponsorIds = ids
+            self.lock.unlock()
+            finish(true)
+        }.resume()
     }
 }

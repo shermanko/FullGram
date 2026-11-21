@@ -905,6 +905,9 @@ public class ChatListControllerImpl: TelegramBaseController, ChatListController 
     
     private var previousEmojiSetupTimestamp: Double?
     func openStatusSetup(sourceView: UIView) {
+        if FullGramLocalPremium.isLocalOnlyPremium(peerId: self.context.account.peerId) {
+            return
+        }
         let currentTimestamp = CACurrentMediaTime()
         if let previousTimestamp = self.previousEmojiSetupTimestamp, currentTimestamp < previousTimestamp + 1.0 {
             return
@@ -6944,7 +6947,7 @@ private final class ChatListLocationContext {
                 }
                 if let emojiStatus = user.emojiStatus {
                     return .emoji(emojiStatus)
-                } else if user.isPremium {
+                } else if user.isServerPremium {
                     return .premium
                 } else {
                     return nil

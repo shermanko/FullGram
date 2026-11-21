@@ -262,6 +262,10 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
     private var contextValue: AuthorizedApplicationContext?
     private let context = Promise<AuthorizedApplicationContext?>()
     private let contextDisposable = MetaDisposable()
+    private let fullGramRestartGeneration = ValuePromise<Int>(0, ignoreRepeated: false)
+    private var fullGramRestartGenerationValue: Int = 0
+    private var fullGramFontRestartObserver: NSObjectProtocol?
+    private var fullGramRestartOverlayView: UIView?
     
     private var authContextValue: UnauthorizedApplicationContext?
     private let authContext = Promise<UnauthorizedApplicationContext?>()
@@ -1027,19 +1031,13 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
                     PresentationAppIcon(name: "BlueIcon", imageName: "BlueIcon"),
                     PresentationAppIcon(name: "New2", imageName: "New2"),
                     PresentationAppIcon(name: "New1", imageName: "New1"),
-                    PresentationAppIcon(name: "BlackIcon", imageName: "BlackIcon"),
                     PresentationAppIcon(name: "BlueClassicIcon", imageName: "BlueClassicIcon"),
-                    PresentationAppIcon(name: "BlackClassicIcon", imageName: "BlackClassicIcon"),
                     PresentationAppIcon(name: "BlueFilledIcon", imageName: "BlueFilledIcon"),
-                    PresentationAppIcon(name: "BlackFilledIcon", imageName: "BlackFilledIcon")
+                    PresentationAppIcon(name: "WhiteFilledIcon", imageName: "WhiteFilledIcon")
                 ]
-                if buildConfig.isInternalBuild {
-                    icons.append(PresentationAppIcon(name: "WhiteFilledIcon", imageName: "WhiteFilledIcon"))
-                }
                 
                 icons.append(PresentationAppIcon(name: "Premium", imageName: "Premium", isPremium: true))
                 icons.append(PresentationAppIcon(name: "PremiumTurbo", imageName: "PremiumTurbo", isPremium: true))
-                icons.append(PresentationAppIcon(name: "PremiumBlack", imageName: "PremiumBlack", isPremium: true))
                 
                 return icons
             } else {
@@ -1307,9 +1305,38 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
             return .single(sharedApplicationContext)
         })
             
-        self.context.set(self.sharedContextPromise.get()
+        self.fullGramFontRestartObserver = NotificationCenter.default.addObserver(forName: FullGramFonts.didRequestAppRestartNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else {
+                return
+            }
+            if let existing = self.fullGramRestartOverlayView {
+                existing.removeFromSuperview()
+                self.fullGramRestartOverlayView = nil
+            }
+            let hostView = self.mainWindow.hostView.containerView
+            let overlay = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
+            overlay.frame = hostView.bounds
+            overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            overlay.alpha = 0.0
+            let indicator = UIActivityIndicatorView(style: .large)
+            indicator.center = CGPoint(x: overlay.bounds.midX, y: overlay.bounds.midY)
+            indicator.autoresizingMask = [.flexibleLeftMargin, .flexibleRightMargin, .flexibleTopMargin, .flexibleBottomMargin]
+            indicator.startAnimating()
+            overlay.contentView.addSubview(indicator)
+            hostView.addSubview(overlay)
+            self.fullGramRestartOverlayView = overlay
+            UIView.animate(withDuration: 0.14, animations: {
+                overlay.alpha = 1.0
+            }, completion: { [weak self] _ in
+                guard let self else { return }
+                self.fullGramRestartGenerationValue += 1
+                self.fullGramRestartGeneration.set(self.fullGramRestartGenerationValue)
+            })
+        }
+
+        self.context.set(combineLatest(queue: .mainQueue(), self.sharedContextPromise.get(), self.fullGramRestartGeneration.get())
         |> deliverOnMainQueue
-        |> mapToSignal { sharedApplicationContext -> Signal<AuthorizedApplicationContext?, NoError> in
+        |> mapToSignal { sharedApplicationContext, _ -> Signal<AuthorizedApplicationContext?, NoError> in
             return sharedApplicationContext.sharedContext.activeAccountContexts
             |> map { primary, _, _ -> AccountContext? in
                 return primary
@@ -1448,6 +1475,18 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
 
                     self.mainWindow.debugAction = nil
                     self.mainWindow.viewController = context.rootController
+                    if FullGramFonts.reopenFontsAfterRestart {
+                        FullGramFonts.reopenFontsAfterRestart = false
+                        context.rootController.openFullGramFonts()
+                    }
+                    if let overlay = self.fullGramRestartOverlayView {
+                        self.fullGramRestartOverlayView = nil
+                        UIView.animate(withDuration: 0.22, animations: {
+                            overlay.alpha = 0.0
+                        }, completion: { _ in
+                            overlay.removeFromSuperview()
+                        })
+                    }
                     
                     #if DEBUG
                     if firstTime {

@@ -2273,7 +2273,10 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
             
             var previousTimestamp: Double?
             self.headerNode.displayPremiumIntro = { [weak self] sourceView, _, _, _ in
-                guard let strongSelf = self else {
+                guard let strongSelf = self, let peer = strongSelf.data?.peer else {
+                    return
+                }
+                if case let .user(user) = peer, !user.isServerPremium {
                     return
                 }
                 let currentTimestamp = CACurrentMediaTime()

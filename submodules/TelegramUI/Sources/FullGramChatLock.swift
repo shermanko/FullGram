@@ -17,7 +17,7 @@ final class FullGramChatLockView: UIView {
         self.addSubview(blur)
 
         let icon = UIImageView(image: UIImage(systemName: "lock.fill", withConfiguration: UIImage.SymbolConfiguration(pointSize: 40.0, weight: .medium)))
-        icon.tintColor = .label
+        icon.tintColor = UIColor(rgb: 0x007AFF)
         let button = UIButton(type: .system)
         let ru = Locale.preferredLanguages.first?.hasPrefix("ru") == true
         button.setTitle(ru ? "Разблокировать" : "Unlock", for: .normal)

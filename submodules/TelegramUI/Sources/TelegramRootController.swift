@@ -923,6 +923,11 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
         self.pushViewController(contactsController)
     }
         
+    public func openFullGramFonts() {
+        self.openSettings(edit: false)
+        fullGramOpenFontsStack(context: self.context, in: self)
+    }
+
     public func openSettings(edit: Bool) {
         guard let rootTabController = self.rootTabController else {
             return

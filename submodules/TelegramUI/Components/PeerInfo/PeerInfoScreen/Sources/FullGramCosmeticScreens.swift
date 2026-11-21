@@ -207,7 +207,8 @@ private final class FullGramAvatarFramesViewController: ViewController, UITextFi
         self.searchContainer.clipsToBounds = true
 
         self.searchIconView.translatesAutoresizingMaskIntoConstraints = false
-        self.searchIconView.image = UIImage(systemName: "magnifyingglass")
+        self.searchIconView.image = UIImage(systemName: "magnifyingglass")?.withRenderingMode(.alwaysTemplate)
+        self.searchIconView.tintColor = UIColor(rgb: 0x8E8E93)
         self.searchIconView.tintColor = theme.list.itemSecondaryTextColor
         self.searchIconView.contentMode = .scaleAspectFit
         self.searchContainer.addSubview(self.searchIconView)
@@ -561,10 +562,17 @@ private final class FullGramAvatarFramesViewController: ViewController, UITextFi
 
     func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
         picker.dismiss(animated: true)
+        var pickedData: Data?
+        var isGif = false
         if let fileURL = info[.imageURL] as? URL, let rawData = try? Data(contentsOf: fileURL), !rawData.isEmpty {
-            FullGramAvatarFrames.saveCustomLocalFrame(data: rawData, forPeerId: self.selfPeerId)
+            pickedData = rawData
+            isGif = rawData.prefix(3) == Data([0x47, 0x49, 0x46])
         } else if let img = info[.originalImage] as? UIImage, let png = img.pngData() {
-            FullGramAvatarFrames.saveCustomLocalFrame(data: png, forPeerId: self.selfPeerId)
+            pickedData = png
+        }
+        if let pickedData {
+            FullGramAvatarFrames.saveCustomLocalFrame(data: pickedData, forPeerId: self.selfPeerId)
+            FullGramCloudCosmetics.shared.uploadCustomFrame(peerId: self.selfPeerId, data: pickedData, isGif: isGif) { _ in }
         }
         self.refreshPreview()
         self.updateVisibleCellSelectionStates()
@@ -687,13 +695,13 @@ extension FullGramAvatarFramesViewController: UICollectionViewDataSourcePrefetch
     func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
         if self.activeTab == .frames {
             for indexPath in indexPaths where indexPath.item < self.filteredFrames.count {
-                FullGramAnimatedImageDecoder.prefetchThumbnail(for: self.filteredFrames[indexPath.item], maxPixelSize: 112)
+                FullGramAnimatedImageDecoder.prefetchThumbnail(for: self.filteredFrames[indexPath.item], maxPixelSize: 180)
             }
         } else {
             for indexPath in indexPaths where indexPath.item < self.filteredEffects.count {
                 let effect = self.filteredEffects[indexPath.item]
-                if let urlString = effect.layerURLs.first {
-                    FullGramAnimatedImageDecoder.prefetchProfileEffectThumbnail(effectId: effect.id, urlString: urlString, maxPixelSize: 160)
+                if !effect.layerURLs.isEmpty {
+                    FullGramAnimatedImageDecoder.prefetchProfileEffectThumbnail(effectId: effect.id, layerURLs: effect.layerURLs, maxPixelSize: 320)
                 }
             }
         }
@@ -703,6 +711,7 @@ extension FullGramAvatarFramesViewController: UICollectionViewDataSourcePrefetch
 private final class FullGramFrameGridCell: UICollectionViewCell {
     private let avatarCircle = UIView()
     private let frameView = FullGramAvatarFrameView()
+    private let loadingSpinner = UIActivityIndicatorView(style: .medium)
     private let titleLabel = UILabel()
     private let catLabel = UILabel()
 
@@ -718,6 +727,19 @@ private final class FullGramFrameGridCell: UICollectionViewCell {
 
         self.frameView.translatesAutoresizingMaskIntoConstraints = false
         self.avatarCircle.addSubview(self.frameView)
+
+        self.loadingSpinner.translatesAutoresizingMaskIntoConstraints = false
+        self.loadingSpinner.transform = CGAffineTransform(scaleX: 0.72, y: 0.72)
+        self.loadingSpinner.hidesWhenStopped = true
+        self.avatarCircle.addSubview(self.loadingSpinner)
+        self.frameView.onLoadingStateChanged = { [weak self] loading in
+            guard let self else { return }
+            if loading {
+                self.loadingSpinner.startAnimating()
+            } else {
+                self.loadingSpinner.stopAnimating()
+            }
+        }
 
         self.titleLabel.translatesAutoresizingMaskIntoConstraints = false
         self.titleLabel.font = UIFont.systemFont(ofSize: 11.0, weight: .semibold)
@@ -741,6 +763,9 @@ private final class FullGramFrameGridCell: UICollectionViewCell {
             self.frameView.leadingAnchor.constraint(equalTo: self.avatarCircle.leadingAnchor),
             self.frameView.trailingAnchor.constraint(equalTo: self.avatarCircle.trailingAnchor),
 
+            self.loadingSpinner.centerXAnchor.constraint(equalTo: self.avatarCircle.centerXAnchor),
+            self.loadingSpinner.centerYAnchor.constraint(equalTo: self.avatarCircle.centerYAnchor),
+
             self.titleLabel.topAnchor.constraint(equalTo: self.avatarCircle.bottomAnchor, constant: 9.0),
             self.titleLabel.leadingAnchor.constraint(equalTo: self.contentView.leadingAnchor, constant: 4.0),
             self.titleLabel.trailingAnchor.constraint(equalTo: self.contentView.trailingAnchor, constant: -4.0),
@@ -759,10 +784,12 @@ private final class FullGramFrameGridCell: UICollectionViewCell {
     override func prepareForReuse() {
         super.prepareForReuse()
         self.frameView.cancelPendingLoad()
+        self.loadingSpinner.stopAnimating()
     }
 
     func cancelLoads() {
         self.frameView.cancelPendingLoad()
+        self.loadingSpinner.stopAnimating()
     }
 
     func configure(preset: FullGramAvatarFramePreset, selected: Bool, theme: PresentationTheme) {
@@ -784,6 +811,7 @@ private final class FullGramFrameGridCell: UICollectionViewCell {
 private final class FullGramProfileEffectGridCell: UICollectionViewCell {
     private let previewBox = UIView()
     private let effectView = FullGramProfileEffectOverlayView()
+    private let loadingSpinner = UIActivityIndicatorView(style: .medium)
     private let titleLabel = UILabel()
     private let catLabel = UILabel()
 
@@ -802,6 +830,19 @@ private final class FullGramProfileEffectGridCell: UICollectionViewCell {
 
         self.effectView.translatesAutoresizingMaskIntoConstraints = false
         self.previewBox.addSubview(self.effectView)
+
+        self.loadingSpinner.translatesAutoresizingMaskIntoConstraints = false
+        self.loadingSpinner.color = .white
+        self.loadingSpinner.hidesWhenStopped = true
+        self.previewBox.addSubview(self.loadingSpinner)
+        self.effectView.onLoadingStateChanged = { [weak self] loading in
+            guard let self else { return }
+            if loading {
+                self.loadingSpinner.startAnimating()
+            } else {
+                self.loadingSpinner.stopAnimating()
+            }
+        }
 
         self.titleLabel.translatesAutoresizingMaskIntoConstraints = false
         self.titleLabel.font = UIFont.systemFont(ofSize: 11.0, weight: .semibold)
@@ -825,6 +866,9 @@ private final class FullGramProfileEffectGridCell: UICollectionViewCell {
             self.effectView.leadingAnchor.constraint(equalTo: self.previewBox.leadingAnchor),
             self.effectView.trailingAnchor.constraint(equalTo: self.previewBox.trailingAnchor),
 
+            self.loadingSpinner.centerXAnchor.constraint(equalTo: self.previewBox.centerXAnchor),
+            self.loadingSpinner.centerYAnchor.constraint(equalTo: self.previewBox.centerYAnchor),
+
             self.titleLabel.topAnchor.constraint(equalTo: self.previewBox.bottomAnchor, constant: 5.0),
             self.titleLabel.leadingAnchor.constraint(equalTo: self.contentView.leadingAnchor, constant: 4.0),
             self.titleLabel.trailingAnchor.constraint(equalTo: self.contentView.trailingAnchor, constant: -4.0),
@@ -843,10 +887,12 @@ private final class FullGramProfileEffectGridCell: UICollectionViewCell {
     override func prepareForReuse() {
         super.prepareForReuse()
         self.effectView.cancelPendingLoad()
+        self.loadingSpinner.stopAnimating()
     }
 
     func cancelLoads() {
         self.effectView.cancelPendingLoad()
+        self.loadingSpinner.stopAnimating()
     }
 
     func configure(preset: FullGramProfileEffectPreset, selected: Bool, theme: PresentationTheme) {

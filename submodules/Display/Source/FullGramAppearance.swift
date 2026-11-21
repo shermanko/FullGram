@@ -137,6 +137,20 @@ public enum FullGramFonts {
     public static let options: [Option] = builtInOptions + remoteOptions
 
     public static let didChangeNotification = Notification.Name("FullGram.FontChanged")
+    public static let didRequestAppRestartNotification = Notification.Name("FullGramDidRequestAppRestartNotification")
+
+    private static let reopenFontsAfterRestartKey = "fullgram_reopen_fonts_after_restart"
+
+    public static var reopenFontsAfterRestart: Bool {
+        get { UserDefaults.standard.bool(forKey: self.reopenFontsAfterRestartKey) }
+        set { UserDefaults.standard.set(newValue, forKey: self.reopenFontsAfterRestartKey) }
+    }
+
+    public static func reloadActiveFont() {
+        self.registerActiveFontIfNeeded()
+        Font.clearCache()
+        NotificationCenter.default.post(name: self.didChangeNotification, object: nil)
+    }
     private static let key = "fullgram.appearance.fontId"
     private static let psKeyPrefix = "fullgram.appearance.fontPS."
 
@@ -197,14 +211,24 @@ public enum FullGramFonts {
         return psName
     }
 
+    public static func selectAndRestart(optionId: String) {
+        if let option = self.options.first(where: { $0.id == optionId }) {
+            _ = self.registerFontFileIfNeeded(option: option)
+        }
+        self.selectedId = optionId
+        self.reopenFontsAfterRestart = true
+        self.reloadActiveFont()
+        NotificationCenter.default.post(name: self.didRequestAppRestartNotification, object: nil)
+    }
+
     public static func downloadAndSelect(option: Option, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         guard let fileName = option.fileName, let destURL = cachedFileURL(for: option) else {
-            self.selectedId = option.id
+            self.selectAndRestart(optionId: option.id)
             DispatchQueue.main.async { completion(.success(())) }
             return
         }
         if FileManager.default.fileExists(atPath: destURL.path), self.registerFontFileIfNeeded(option: option) != nil {
-            self.selectedId = option.id
+            self.selectAndRestart(optionId: option.id)
             DispatchQueue.main.async { completion(.success(())) }
             return
         }
@@ -224,7 +248,7 @@ public enum FullGramFonts {
                         return
                     }
                     DispatchQueue.main.async {
-                        self.selectedId = option.id
+                        self.selectAndRestart(optionId: option.id)
                         completion(.success(()))
                     }
                 } catch {

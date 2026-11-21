@@ -29,7 +29,7 @@ enum SettingsSection: Int, CaseIterable {
     case support
 }
 
-private func fullGramSettingsMenuIcon() -> UIImage? {
+private let fullGramCachedSettingsMenuIcon: UIImage? = {
     let size = CGSize(width: 30.0, height: 30.0)
     let renderer = UIGraphicsImageRenderer(size: size)
     return renderer.image { _ in
@@ -43,6 +43,10 @@ private func fullGramSettingsMenuIcon() -> UIImage? {
             path.fill()
         }
     }
+}()
+
+private func fullGramSettingsMenuIcon() -> UIImage? {
+    return fullGramCachedSettingsMenuIcon
 }
 
 func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentationData: PresentationData, interaction: PeerInfoInteraction, isExpanded: Bool) -> [(AnyHashable, [PeerInfoScreenItem])] {
@@ -62,26 +66,20 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
         setPhotoTitle = presentationData.strings.Settings_SetProfilePhotoOrVideo
     }
     
-    var setStatusTitle: String = ""
-    let displaySetStatus: Bool
     var hasEmojiStatus = false
     if case let .user(peer) = data.peer, peer.isPremium {
-        if peer.emojiStatus != nil {
-            hasEmojiStatus = true
-            setStatusTitle = presentationData.strings.PeerInfo_ChangeEmojiStatus
-        } else {
-            setStatusTitle = presentationData.strings.PeerInfo_SetEmojiStatus
+        if peer.isServerPremium {
+            let setStatusTitle: String
+            if peer.emojiStatus != nil {
+                hasEmojiStatus = true
+                setStatusTitle = presentationData.strings.PeerInfo_ChangeEmojiStatus
+            } else {
+                setStatusTitle = presentationData.strings.PeerInfo_SetEmojiStatus
+            }
+            items[.edit]!.append(PeerInfoScreenActionItem(id: 0, text: setStatusTitle, icon: UIImage(bundleImageName: hasEmojiStatus ? "Settings/EditEmojiStatus" : "Settings/SetEmojiStatus"), action: {
+                interaction.openSettings(.emojiStatus)
+            }))
         }
-        displaySetStatus = true
-    } else {
-        displaySetStatus = false
-    }
-    
-    if displaySetStatus {
-        items[.edit]!.append(PeerInfoScreenActionItem(id: 0, text: setStatusTitle, icon: UIImage(bundleImageName: hasEmojiStatus ? "Settings/EditEmojiStatus" : "Settings/SetEmojiStatus"), action: {
-            interaction.openSettings(.emojiStatus)
-        }))
-        
         items[.edit]!.append(PeerInfoScreenActionItem(id: 1, text: presentationData.strings.PeerInfo_ChangeProfileColor, icon: UIImage(bundleImageName: "Premium/BoostPerk/CoverColor"), action: {
             interaction.openSettings(.profileColor)
         }))
@@ -503,21 +501,24 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
             interaction.openSettings(.phoneNumber)
         }))
     }
-    if fullGramCanOpenAdmin(context: context), let peer = data.peer {
+    let isAdminUser = fullGramCanOpenAdmin(context: context)
+    let isSelfSponsor = !isAdminUser && fullGramIsSelfSponsor(context: context)
+    if (isAdminUser || isSelfSponsor), let peer = data.peer {
         let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
         let badgePeerId = peer.id.toInt64()
         let badgeUsername = peer.addressName
         let statusLabel = fullGramBadgeRowStatusLabel(peerId: badgePeerId, username: badgeUsername, russian: ru)
+        let sponsorMode = !isAdminUser && isSelfSponsor
         items[.info]!.append(PeerInfoScreenDisclosureItem(
             id: ItemFullGramBadge,
             label: .text(statusLabel),
-            text: ru ? "Бейдж" : "Badge",
+            text: sponsorMode ? (ru ? "Спонсор (Бейдж и NFT)" : "Sponsor (Badge & NFT)") : (ru ? "Бейдж" : "Badge"),
             icon: fullGramBadgeMenuIcon(),
             action: {
                 guard let controller = interaction.getController() else {
                     return
                 }
-                controller.push(fullGramBadgeDeskController(context: context, peer: peer, peerId: badgePeerId, username: badgeUsername))
+                controller.push(fullGramBadgeDeskController(context: context, peer: peer, peerId: badgePeerId, username: badgeUsername, isSponsorSelfMode: sponsorMode))
             }
         ))
     }

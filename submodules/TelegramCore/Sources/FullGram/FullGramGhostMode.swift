@@ -574,6 +574,14 @@ public enum FullGramDisplayOptions {
 }
 
 public enum FullGramLocalPremium {
+    public static func isLocalOnlyPremium(peerId: PeerId) -> Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        if let state = self.states[peerId] {
+            return (state.local || FullGramExtras.shared.localPremium) && !state.server
+        }
+        return FullGramExtras.shared.localPremium
+    }
     private struct State {
         var local = false
         var server = false

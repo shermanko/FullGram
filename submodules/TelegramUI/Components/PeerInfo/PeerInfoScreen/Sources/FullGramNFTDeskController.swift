@@ -16,14 +16,16 @@ public func fullGramNFTCatalogController(
     context: AccountContext,
     targetPeerId: Int64,
     targetDisplayName: String,
-    targetEnginePeerId: EnginePeer.Id? = nil
+    targetEnginePeerId: EnginePeer.Id? = nil,
+    isSponsorSelfMode: Bool = false
 ) -> ViewController {
     let cleanId = FullGramGrantedNFTStore.normalizedTelegramId(for: targetPeerId)
     return FullGramNFTCatalogViewController(
         context: context,
         targetPeerId: cleanId,
         targetDisplayName: targetDisplayName,
-        targetEnginePeerId: targetEnginePeerId
+        targetEnginePeerId: targetEnginePeerId,
+        isSponsorSelfMode: isSponsorSelfMode
     )
 }
 
@@ -32,6 +34,7 @@ private final class FullGramNFTCatalogViewController: ViewController, UICollecti
     private let targetPeerId: Int64
     private let targetDisplayName: String
     private let targetEnginePeerId: EnginePeer.Id?
+    private let isSponsorSelfMode: Bool
     private var presentationData: PresentationData
 
     private let searchBar = UISearchBar()
@@ -49,12 +52,14 @@ private final class FullGramNFTCatalogViewController: ViewController, UICollecti
         context: AccountContext,
         targetPeerId: Int64,
         targetDisplayName: String,
-        targetEnginePeerId: EnginePeer.Id?
+        targetEnginePeerId: EnginePeer.Id?,
+        isSponsorSelfMode: Bool = false
     ) {
         self.context = context
         self.targetPeerId = targetPeerId
         self.targetDisplayName = targetDisplayName
         self.targetEnginePeerId = targetEnginePeerId
+        self.isSponsorSelfMode = isSponsorSelfMode
         self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
         super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: self.presentationData))
         self.isOpaqueWhenInOverlay = true
@@ -241,7 +246,8 @@ private final class FullGramNFTCatalogViewController: ViewController, UICollecti
             targetPeerId: self.targetPeerId,
             targetDisplayName: self.targetDisplayName,
             targetEnginePeerId: self.targetEnginePeerId,
-            gift: gift
+            gift: gift,
+            isSponsorSelfMode: self.isSponsorSelfMode
         )
         self.push(studio)
     }
@@ -268,6 +274,7 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
     private let targetDisplayName: String
     private let targetEnginePeerId: EnginePeer.Id?
     private let gift: StarGift.Gift
+    private let isSponsorSelfMode: Bool
     private var presentationData: PresentationData
 
     private var models: [StarGift.UniqueGift.Attribute] = []
@@ -307,13 +314,15 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
         targetPeerId: Int64,
         targetDisplayName: String,
         targetEnginePeerId: EnginePeer.Id?,
-        gift: StarGift.Gift
+        gift: StarGift.Gift,
+        isSponsorSelfMode: Bool = false
     ) {
         self.context = context
         self.targetPeerId = targetPeerId
         self.targetDisplayName = targetDisplayName
         self.targetEnginePeerId = targetEnginePeerId
         self.gift = gift
+        self.isSponsorSelfMode = isSponsorSelfMode
         self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
         super.init(navigationBarPresentationData: NavigationBarPresentationData(presentationData: self.presentationData))
         self.isOpaqueWhenInOverlay = true

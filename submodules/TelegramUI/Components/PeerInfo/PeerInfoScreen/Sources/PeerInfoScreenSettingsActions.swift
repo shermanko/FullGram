@@ -278,7 +278,16 @@ extension PeerInfoScreenNode {
             }
             push(controller)
         case .emojiStatus:
-            self.headerNode.invokeDisplayPremiumIntro()
+            guard !FullGramLocalPremium.isLocalOnlyPremium(peerId: self.context.account.peerId) else {
+                return
+            }
+            let _ = (self.context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: self.context.account.peerId))
+            |> deliverOnMainQueue).startStandalone(next: { [weak self] peer in
+                guard let self, peer?.isServerPremium == true else {
+                    return
+                }
+                self.headerNode.invokeDisplayPremiumIntro()
+            })
         case .profileColor:
             self.interaction.editingOpenNameColorSetup()
         case .powerSaving:

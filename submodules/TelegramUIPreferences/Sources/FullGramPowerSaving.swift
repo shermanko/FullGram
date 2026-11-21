@@ -72,11 +72,21 @@ public enum FullGramPowerSaving {
 
     public static let didChangeNotification = Notification.Name("FullGram.PowerSavingDidChange")
 
+    private static let cacheLock = NSLock()
+    private static var cachedProfile: Profile?
+
     private static func key(_ suffix: String) -> String {
         return "fullgram.powerSaving.\(suffix)"
     }
 
     public static func profile() -> Profile {
+        self.cacheLock.lock()
+        if let cached = self.cachedProfile {
+            self.cacheLock.unlock()
+            return cached
+        }
+        self.cacheLock.unlock()
+
         let d = UserDefaults.standard
         let def = Profile.default
         let modeRaw = d.object(forKey: key("mode")) as? Int ?? def.mode.rawValue
@@ -88,29 +98,51 @@ public enum FullGramPowerSaving {
         if let rawLimits = d.stringArray(forKey: key("limits")) {
             limits = Set(rawLimits.compactMap { Limit(rawValue: $0) })
         }
-        return Profile(
+        let resolved = Profile(
             mode: mode,
             threshold: threshold,
             followLowPowerMode: followLPM,
             onBatteryOnly: onBattery,
             limits: limits
         )
+        self.cacheLock.lock()
+        self.cachedProfile = resolved
+        self.cacheLock.unlock()
+        return resolved
     }
 
     public static func setProfile(_ profile: Profile) {
+        let normalized = Profile(
+            mode: profile.mode,
+            threshold: min(95, max(5, profile.threshold)),
+            followLowPowerMode: profile.followLowPowerMode,
+            onBatteryOnly: profile.onBatteryOnly,
+            limits: profile.limits
+        )
+        self.cacheLock.lock()
+        self.cachedProfile = normalized
+        self.cacheLock.unlock()
+
         let d = UserDefaults.standard
-        d.set(profile.mode.rawValue, forKey: key("mode"))
-        d.set(min(95, max(5, profile.threshold)), forKey: key("threshold"))
-        d.set(profile.followLowPowerMode, forKey: key("followLPM"))
-        d.set(profile.onBatteryOnly, forKey: key("onBattery"))
-        d.set(profile.limits.map(\.rawValue).sorted(), forKey: key("limits"))
+        d.set(normalized.mode.rawValue, forKey: key("mode"))
+        d.set(normalized.threshold, forKey: key("threshold"))
+        d.set(normalized.followLowPowerMode, forKey: key("followLPM"))
+        d.set(normalized.onBatteryOnly, forKey: key("onBattery"))
+        d.set(normalized.limits.map(\.rawValue).sorted(), forKey: key("limits"))
         NotificationCenter.default.post(name: didChangeNotification, object: nil)
     }
 
     public static func reset() {
+        self.cacheLock.lock()
+        self.cachedProfile = nil
+        self.cacheLock.unlock()
+
         let d = UserDefaults.standard
         for suffix in ["mode", "threshold", "followLPM", "onBattery", "limits"] {
             d.removeObject(forKey: key(suffix))
+            for device in ["phone", "tablet", "mac"] {
+                d.removeObject(forKey: "fullgram.powerSaving.\(device).\(suffix)")
+            }
         }
         NotificationCenter.default.post(name: didChangeNotification, object: nil)
     }

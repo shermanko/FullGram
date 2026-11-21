@@ -18,6 +18,12 @@ const DEFAULT_BADGES = {
       emoji: "🛡",
       color: "#007AFF"
     },
+    sponsor: {
+      label: "Спонсор FullGram",
+      shortLabel: "SPONSOR",
+      emoji: "💎",
+      color: "#5856D6"
+    },
     premium: {
       label: "FullGram+",
       shortLabel: "FG+",
@@ -1278,6 +1284,132 @@ async function saveFeatureFlags(env, flagsObj) {
   await env.FULLGRAM_KV.put("feature_flags.json", JSON.stringify(flagsObj, null, 2));
 }
 
+async function loadSponsors(env) {
+  if (!env.FULLGRAM_KV) return { version: 1, updatedAt: new Date().toISOString(), sponsors: {} };
+  const raw = await env.FULLGRAM_KV.get("sponsors_v1");
+  if (!raw) return { version: 1, updatedAt: new Date().toISOString(), sponsors: {} };
+  try {
+    const parsed = JSON.parse(raw);
+    const rawSponsors = parsed.sponsors && typeof parsed.sponsors === "object" ? parsed.sponsors : {};
+    const sponsors = {};
+    for (const [k, v] of Object.entries(rawSponsors)) {
+      const nid = normalizePeerId(k);
+      if (nid) sponsors[nid] = v;
+    }
+    return {
+      version: Number(parsed.version || 1),
+      updatedAt: String(parsed.updatedAt || new Date().toISOString()),
+      sponsors
+    };
+  } catch {
+    return { version: 1, updatedAt: new Date().toISOString(), sponsors: {} };
+  }
+}
+
+async function saveSponsors(env, data) {
+  if (!env.FULLGRAM_KV) throw new Error("FULLGRAM_KV binding not configured");
+  const payload = {
+    version: Number(data.version || 1) + 1,
+    updatedAt: new Date().toISOString(),
+    sponsors: data.sponsors || {}
+  };
+  await env.FULLGRAM_KV.put("sponsors_v1", JSON.stringify(payload));
+  return payload;
+}
+
+async function isSponsorUser(env, userId) {
+  const nid = normalizePeerId(userId);
+  if (!nid) return false;
+  const data = await loadSponsors(env);
+  return Boolean(data.sponsors && data.sponsors[nid]);
+}
+
+async function applySponsorChange(env, body, actingUserId) {
+  const enabled = body.enabled !== false && body.action !== "remove" && body.action !== "revoke";
+  const rawPeer = body.peerId ? normalizePeerId(body.peerId) : "";
+  const cleanUser = body.username ? String(body.username).trim().replace(/^@/, "").toLowerCase() : "";
+  let targetPeerId = rawPeer;
+  if (!targetPeerId && cleanUser) {
+    const badges = await loadBadges(env);
+    if (badges.usernames && badges.usernames[cleanUser]) {
+      targetPeerId = normalizePeerId(badges.usernames[cleanUser]);
+    }
+  }
+  if (!targetPeerId) {
+    throw new Error("Valid peerId or known @username is required");
+  }
+  const data = await loadSponsors(env);
+  if (!data.sponsors) data.sponsors = {};
+  if (enabled) {
+    data.sponsors[targetPeerId] = {
+      addedAt: Date.now(),
+      addedBy: String(actingUserId || ""),
+      label: String(body.label || "Спонсор FullGram")
+    };
+  } else {
+    delete data.sponsors[targetPeerId];
+  }
+  const saved = await saveSponsors(env, data);
+  const badges = await loadBadges(env);
+  const existingRole = badges.users && badges.users[targetPeerId];
+  const existingRoleId = typeof existingRole === "string" ? existingRole : null;
+  if (enabled && (!existingRoleId || existingRoleId === "premium" || existingRoleId === "sponsor")) {
+    await applyBadgeChange(env, { peerId: targetPeerId, enabled: true, roleId: "sponsor" });
+  } else if (!enabled && existingRoleId === "sponsor") {
+    await applyBadgeChange(env, { peerId: targetPeerId, enabled: false });
+  }
+  return { peerId: targetPeerId, enabled, sponsors: saved.sponsors };
+}
+
+async function applyNftChange(env, body, grantedBy) {
+  const peerId = normalizePeerId(body.peerId != null ? String(body.peerId).trim() : "");
+  if (!peerId || !/^-?\d{1,20}$/.test(peerId)) {
+    throw new Error("Invalid peerId");
+  }
+  const nfts = await loadNfts(env);
+  if (!nfts.users) nfts.users = {};
+  const list = Array.isArray(nfts.users[peerId]) ? nfts.users[peerId] : [];
+  const entryId = body.id != null && String(body.id).trim()
+    ? String(body.id).trim().slice(0, 64)
+    : (body.nftId != null && String(body.nftId).trim()
+      ? String(body.nftId).trim().slice(0, 64)
+      : `fg_nft_${Date.now()}_${Math.floor(Math.random() * 10000)}`);
+
+  const action = String(body.action || "").toLowerCase();
+  if (body.enabled === false || action === "revoke" || action === "remove" || action === "delete") {
+    nfts.users[peerId] = list.filter((item) => item.id !== entryId);
+    if (!nfts.users[peerId].length) delete nfts.users[peerId];
+  } else {
+    const giftId = body.giftId != null ? String(body.giftId).trim() : "";
+    if (!/^-?\d{1,20}$/.test(giftId)) {
+      throw new Error("Invalid giftId");
+    }
+    const rawNum = Number(body.number);
+    const number = Number.isFinite(rawNum) && rawNum >= 1 ? Math.min(9999999, Math.floor(rawNum)) : 1;
+    const rawBackdropId = body.backdropId != null ? Number(body.backdropId) : null;
+    const entry = {
+      id: entryId,
+      giftId,
+      title: typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 64) : "NFT",
+      modelName: typeof body.modelName === "string" ? body.modelName.trim().slice(0, 64) : "",
+      backdropName: typeof body.backdropName === "string" ? body.backdropName.trim().slice(0, 64) : "",
+      backdropId: Number.isFinite(rawBackdropId) ? Math.floor(rawBackdropId) : null,
+      patternName: typeof body.patternName === "string" ? body.patternName.trim().slice(0, 64) : "",
+      number,
+      note: typeof body.note === "string" ? body.note.trim().slice(0, 120) : "",
+      pinned: body.pinned !== false,
+      grantedBy: String(grantedBy || ""),
+      grantedAt: Math.floor(Date.now() / 1000)
+    };
+    const idx = list.findIndex((item) => item.id === entryId);
+    if (idx >= 0) list[idx] = entry;
+    else list.unshift(entry);
+    nfts.users[peerId] = list.slice(0, 50);
+  }
+  await saveNfts(env, nfts);
+  return { id: entryId, peerId, items: nfts.users[peerId] || [] };
+}
+
 async function loadNfts(env) {
   const empty = { version: 1, users: {} };
   if (!env.FULLGRAM_KV) return empty;
@@ -1337,9 +1469,15 @@ async function loadCosmetics(env) {
   if (!raw) return empty;
   try {
     const parsed = JSON.parse(raw);
+    const rawUsers = parsed.users && typeof parsed.users === "object" ? parsed.users : {};
+    const users = {};
+    for (const [k, v] of Object.entries(rawUsers)) {
+      const nid = normalizePeerId(k);
+      if (nid) users[nid] = v;
+    }
     return {
       version: parsed.version || 1,
-      users: parsed.users && typeof parsed.users === "object" ? parsed.users : {}
+      users
     };
   } catch {
     return empty;
@@ -1352,7 +1490,7 @@ async function saveCosmetics(env, cosmetics) {
 }
 
 async function applyCosmeticChange(env, body) {
-  const peerId = body.peerId != null ? String(body.peerId).trim() : "";
+  const peerId = normalizePeerId(body.peerId != null ? String(body.peerId).trim() : "");
   if (!/^-?\d{1,20}$/.test(peerId)) {
     throw new Error("Invalid peerId");
   }
@@ -1909,6 +2047,36 @@ async function handleTelegramWebhook(request, env, origin) {
     return jsonResponse({ ok: true });
   }
 
+  if (text.startsWith("/sponsor ")) {
+    if (!isAdminUserId(senderId, env)) {
+      await sendTelegramMessage(env, chatId, "⛔ Команда /sponsor доступна только владельцу FullGram.");
+      return jsonResponse({ ok: true });
+    }
+    const parts = text.slice("/sponsor ".length).trim().split(/\s+/);
+    const target = parts[0] || "";
+    const mode = (parts[1] || "on").toLowerCase();
+    const enabled = mode !== "off" && mode !== "remove" && mode !== "0";
+    try {
+      const numericId = /^-?\d+$/.test(target) ? target : "";
+      const res = await applySponsorChange(env, {
+        peerId: numericId || undefined,
+        username: numericId ? undefined : target,
+        enabled
+      }, senderId);
+      await sendTelegramMessage(
+        env,
+        chatId,
+        enabled
+          ? `💎 Пользователь <code>${escapeHtml(res.peerId)}</code> назначен спонсором FullGram (доступ к своему бейджу и своим NFT).`
+          : `🗑 С пользователя <code>${escapeHtml(res.peerId)}</code> снят статус спонсора FullGram.`,
+        { parse_mode: "HTML" }
+      );
+    } catch (err) {
+      await sendTelegramMessage(env, chatId, `❌ Ошибка /sponsor: ${err.message}`);
+    }
+    return jsonResponse({ ok: true });
+  }
+
   if (text.startsWith("/badge ")) {
     const parts = text.slice(7).trim().split(/\s+/);
     if (parts.length < 2) {
@@ -1942,7 +2110,7 @@ async function handleTelegramWebhook(request, env, origin) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
     const origin = url.origin;
@@ -1962,6 +2130,53 @@ export default {
       return jsonResponse({ ok: true, service: "fullgram-worker" });
     }
 
+    if (request.method === "POST" && path === "/auth/session") {
+      try {
+        const body = await request.json();
+        const peerId = normalizePeerId(body.peerId ?? body.userId ?? "");
+        const deviceSecret = String(body.deviceSecret || "").trim();
+        if (!peerId || deviceSecret.length < 16) {
+          return jsonResponse({ ok: false, error: "Valid peerId and deviceSecret (min 16 chars) required" }, 400);
+        }
+        const secretHash = await sha256Hex(deviceSecret);
+        if (env.FULLGRAM_KV) {
+          const kvKey = `fg_device_session:${peerId}`;
+          let entry = { hashes: [] };
+          const raw = await env.FULLGRAM_KV.get(kvKey);
+          if (raw) {
+            try {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed.hashes)) entry.hashes = parsed.hashes;
+            } catch {}
+          }
+          if (!entry.hashes.includes(secretHash)) {
+            if (isAdminUserId(peerId, env) && entry.hashes.length >= 4) {
+              // Keep owner device slots bounded while permitting legitimate reinstalls on fresh non-admin accounts.
+              entry.hashes = entry.hashes.slice(-3);
+            } else if (entry.hashes.length >= 6) {
+              entry.hashes = entry.hashes.slice(-5);
+            }
+            entry.hashes.push(secretHash);
+            entry.updatedAt = new Date().toISOString();
+            await env.FULLGRAM_KV.put(kvKey, JSON.stringify(entry));
+          }
+        }
+        const issued = await issueSessionToken(peerId, "user", env, 30 * 24 * 60 * 60);
+        return jsonResponse({
+          ok: true,
+          token: issued.token,
+          expiresAt: issued.expiresAt,
+          uid: peerId,
+          userId: peerId,
+          role: "user",
+          isAdmin: false,
+          expiresIn: 30 * 24 * 60 * 60
+        });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err.message }, 400);
+      }
+    }
+
     if (request.method === "GET" && path === "/casino") {
       return new Response(CASINO_HTML, {
         status: 200,
@@ -1974,6 +2189,29 @@ export default {
 
     if (request.method === "GET" && path === "/config.json") {
       return jsonResponse(await loadFeatureFlags(env));
+    }
+
+    if (request.method === "GET" && path === "/sponsors.json") {
+      return privateJsonResponse(await loadSponsors(env));
+    }
+
+    if (request.method === "GET" && path.startsWith("/frames/")) {
+      const fileName = path.slice("/frames/".length).replace(/[^a-zA-Z0-9._-]/g, "");
+      if (!fileName || !env.FULLGRAM_KV) {
+        return new Response("Not found", { status: 404 });
+      }
+      const raw = await env.FULLGRAM_KV.get(`custom_frame:${fileName}`, "arrayBuffer");
+      if (!raw) {
+        return new Response("Not found", { status: 404 });
+      }
+      return new Response(raw, {
+        status: 200,
+        headers: {
+          "Content-Type": fileName.endsWith(".gif") ? "image/gif" : "image/png",
+          "Cache-Control": "public, max-age=604800",
+          "X-Content-Type-Options": "nosniff"
+        }
+      });
     }
 
     if (request.method === "GET" && path === "/auth/me") {
@@ -2071,12 +2309,13 @@ export default {
         const body = await request.json();
         const rawIds = Array.isArray(body.peerIds) ? body.peerIds : [];
         const peerIds = Array.from(new Set(
-          rawIds.map((v) => String(v || "").trim()).filter((v) => /^-?\d{1,20}$/.test(v))
+          rawIds.map((v) => normalizePeerId(String(v || "").trim())).filter((v) => /^-?\d{1,20}$/.test(v))
         )).slice(0, 100);
-        const [badges, cosmetics, nfts] = await Promise.all([
+        const [badges, cosmetics, nfts, sponsorsData] = await Promise.all([
           loadBadges(env),
           loadCosmetics(env),
-          loadNfts(env)
+          loadNfts(env),
+          loadSponsors(env)
         ]);
         const users = {};
         for (const id of peerIds) {
@@ -2084,8 +2323,9 @@ export default {
           const badge = roleId && badges.roles[roleId] ? { roleId, ...badges.roles[roleId] } : null;
           const cosmetic = cosmetics.users[id] || null;
           const userNfts = Array.isArray(nfts.users[id]) ? nfts.users[id] : [];
-          if (badge || cosmetic || userNfts.length) {
-            users[id] = { badge, cosmetics: cosmetic, nfts: userNfts };
+          const isSponsor = Boolean(sponsorsData.sponsors && sponsorsData.sponsors[id]);
+          if (badge || cosmetic || userNfts.length || isSponsor) {
+            users[id] = { badge, cosmetics: cosmetic, nfts: userNfts, isSponsor };
           }
         }
         return jsonResponse({ ok: true, version: 1, users });
@@ -2101,12 +2341,99 @@ export default {
       }
       try {
         const body = await request.json();
-        const requestedPeerId = body.peerId != null ? String(body.peerId).trim() : "";
-        if (!auth.isAdmin && requestedPeerId !== auth.uid) {
+        const requestedRaw = body.peerId != null ? String(body.peerId).trim() : (body.userId != null ? String(body.userId).trim() : String(auth.uid));
+        const requestedPeerId = normalizePeerId(requestedRaw);
+        const authPeerId = normalizePeerId(String(auth.uid || ""));
+        if (!requestedPeerId || (!auth.isAdmin && requestedPeerId !== authPeerId)) {
           return jsonResponse({ ok: false, error: "Forbidden: can only modify your own cosmetics" }, 403);
         }
-        const user = await applyCosmeticChange(env, body);
+        const user = await applyCosmeticChange(env, { ...body, peerId: requestedPeerId });
         return jsonResponse({ ok: true, user });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err.message }, 400);
+      }
+    }
+
+    if (request.method === "POST" && path === "/cosmetics/upload-frame") {
+      const auth = await authenticateRequest(request, env);
+      if (!auth) {
+        return jsonResponse({ ok: false, error: "Unauthorized: valid session token required" }, 401);
+      }
+      if (!env.FULLGRAM_KV) {
+        return jsonResponse({ ok: false, error: "Storage unavailable" }, 503);
+      }
+      try {
+        const body = await request.json();
+        const requestedPeerId = normalizePeerId(body.peerId != null ? String(body.peerId).trim() : String(auth.uid));
+        const authPeerId = normalizePeerId(String(auth.uid || ""));
+        if (!requestedPeerId || (!auth.isAdmin && requestedPeerId !== authPeerId)) {
+          return jsonResponse({ ok: false, error: "Forbidden" }, 403);
+        }
+        const b64 = String(body.imageBase64 || "").trim();
+        if (!b64) {
+          return jsonResponse({ ok: false, error: "imageBase64 required" }, 400);
+        }
+        const binStr = atob(b64);
+        if (binStr.length < 32 || binStr.length > 1600 * 1024) {
+          return jsonResponse({ ok: false, error: "Frame file too large or empty (max 1.5 MB)" }, 400);
+        }
+        const bytes = new Uint8Array(binStr.length);
+        for (let i = 0; i < binStr.length; i++) {
+          bytes[i] = binStr.charCodeAt(i);
+        }
+        const ext = String(body.ext || "png").toLowerCase() === "gif" ? "gif" : "png";
+        const keyId = `u_${requestedPeerId}_${Date.now().toString(36)}.${ext}`;
+        await env.FULLGRAM_KV.put(`custom_frame:${keyId}`, bytes.buffer);
+        const frameUrl = `${url.origin}/frames/${keyId}`;
+        const user = await applyCosmeticChange(env, { peerId: requestedPeerId, frameId: "custom", customFrameUrl: frameUrl });
+        return jsonResponse({ ok: true, url: frameUrl, user });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err.message }, 400);
+      }
+    }
+
+    if (request.method === "POST" && path === "/sponsor/badge") {
+      const auth = await authenticateRequest(request, env);
+      if (!auth) {
+        return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
+      }
+      const sponsorAllowed = auth.isAdmin || (await isSponsorUser(env, auth.uid));
+      if (!sponsorAllowed) {
+        return jsonResponse({ ok: false, error: "Forbidden: sponsor access required" }, 403);
+      }
+      try {
+        const body = await request.json();
+        const reqRole = String(body.roleId || "sponsor").trim().toLowerCase();
+        const disallowedRoles = new Set(["creator", "official", "admin", "owner"]);
+        const safeRole = disallowedRoles.has(reqRole) ? "sponsor" : reqRole;
+        const badges = await applyBadgeChange(env, {
+          ...body,
+          peerId: normalizePeerId(String(auth.uid)),
+          username: null,
+          roleId: safeRole
+        });
+        return jsonResponse({
+          ok: true,
+          usersCount: Object.keys(badges.users).length + Object.keys(badges.usernames).length
+        });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err.message }, 400);
+      }
+    }
+
+    if (request.method === "POST" && path === "/sponsor/nft") {
+      const auth = await authenticateRequest(request, env);
+      if (!auth) {
+        return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
+      }
+      const sponsorAllowed = auth.isAdmin || (await isSponsorUser(env, auth.uid));
+      if (!sponsorAllowed) {
+        return jsonResponse({ ok: false, error: "Forbidden: sponsor access required" }, 403);
+      }
+      try {
+        const body = await request.json();
+        const result = await applyNftChange(env, { ...body, peerId: normalizePeerId(String(auth.uid)) }, auth.uid);
+        return jsonResponse({ ok: true, ...result });
       } catch (err) {
         return jsonResponse({ ok: false, error: err.message }, 400);
       }
@@ -2183,53 +2510,25 @@ export default {
         }
       }
 
+      if (request.method === "GET" && path === "/admin/sponsors") {
+        return jsonResponse({ ok: true, ...(await loadSponsors(env)) });
+      }
+
+      if (request.method === "POST" && path === "/admin/sponsor") {
+        try {
+          const body = await request.json();
+          const result = await applySponsorChange(env, body, auth.uid);
+          return jsonResponse({ ok: true, ...result });
+        } catch (err) {
+          return jsonResponse({ ok: false, error: err.message }, 400);
+        }
+      }
+
       if (request.method === "POST" && path === "/admin/nft") {
         try {
           const body = await request.json();
-          const peerId = body.peerId != null ? String(body.peerId).trim() : "";
-          if (!/^-?\d{1,20}$/.test(peerId)) {
-            throw new Error("Invalid peerId");
-          }
-          const nfts = await loadNfts(env);
-          const list = Array.isArray(nfts.users[peerId]) ? nfts.users[peerId] : [];
-          const entryId = body.id != null && String(body.id).trim()
-            ? String(body.id).trim().slice(0, 64)
-            : (body.nftId != null && String(body.nftId).trim()
-              ? String(body.nftId).trim().slice(0, 64)
-              : `fg_nft_${Date.now()}_${Math.floor(Math.random() * 10000)}`);
-
-          if (body.enabled === false) {
-            nfts.users[peerId] = list.filter((item) => item.id !== entryId);
-            if (!nfts.users[peerId].length) delete nfts.users[peerId];
-          } else {
-            const giftId = body.giftId != null ? String(body.giftId).trim() : "";
-            if (!/^-?\d{1,20}$/.test(giftId)) {
-              throw new Error("Invalid giftId");
-            }
-            const rawNum = Number(body.number);
-            const number = Number.isFinite(rawNum) && rawNum >= 1 ? Math.min(9999999, Math.floor(rawNum)) : 1;
-            const rawBackdropId = body.backdropId != null ? Number(body.backdropId) : null;
-            const entry = {
-              id: entryId,
-              giftId,
-              title: typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 64) : "NFT",
-              modelName: typeof body.modelName === "string" ? body.modelName.trim().slice(0, 64) : "",
-              backdropName: typeof body.backdropName === "string" ? body.backdropName.trim().slice(0, 64) : "",
-              backdropId: Number.isFinite(rawBackdropId) ? Math.floor(rawBackdropId) : null,
-              patternName: typeof body.patternName === "string" ? body.patternName.trim().slice(0, 64) : "",
-              number,
-              note: typeof body.note === "string" ? body.note.trim().slice(0, 120) : "",
-              pinned: body.pinned !== false,
-              grantedBy: auth.uid,
-              grantedAt: Math.floor(Date.now() / 1000)
-            };
-            const idx = list.findIndex((item) => item.id === entryId);
-            if (idx >= 0) list[idx] = entry;
-            else list.unshift(entry);
-            nfts.users[peerId] = list.slice(0, 50);
-          }
-          await saveNfts(env, nfts);
-          return jsonResponse({ ok: true, id: entryId, items: nfts.users[peerId] || [] });
+          const result = await applyNftChange(env, body, auth.uid);
+          return jsonResponse({ ok: true, ...result });
         } catch (err) {
           return jsonResponse({ ok: false, error: err.message }, 400);
         }

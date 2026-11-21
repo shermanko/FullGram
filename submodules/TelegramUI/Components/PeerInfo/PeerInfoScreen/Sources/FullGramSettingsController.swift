@@ -223,21 +223,24 @@ public enum FullGramCategory: Int32, CaseIterable {
 private final class FullGramSettingsControllerArguments {
     let context: AccountContext
     let openSearch: () -> Void
-    let openCategory: (FullGramCategory) -> Void
     let openAdmin: () -> Void
+    let openSponsorPanel: () -> Void
+    let openCategory: (FullGramCategory) -> Void
     let openLink: (String) -> Void
 
     init(
         context: AccountContext,
         openSearch: @escaping () -> Void,
-        openCategory: @escaping (FullGramCategory) -> Void,
         openAdmin: @escaping () -> Void,
+        openSponsorPanel: @escaping () -> Void,
+        openCategory: @escaping (FullGramCategory) -> Void,
         openLink: @escaping (String) -> Void
     ) {
         self.context = context
         self.openSearch = openSearch
-        self.openCategory = openCategory
         self.openAdmin = openAdmin
+        self.openSponsorPanel = openSponsorPanel
+        self.openCategory = openCategory
         self.openLink = openLink
     }
 }
@@ -254,6 +257,7 @@ private enum FullGramSettingsEntry: ItemListNodeEntry {
     case header(PresentationTheme)
     case search(PresentationTheme)
     case adminPanel(PresentationTheme, String)
+    case sponsorPanel(PresentationTheme, String)
     case categoriesHeader(PresentationTheme, String)
     case category(Int32, PresentationTheme, FullGramCategory)
     case linksHeader(PresentationTheme, String)
@@ -265,7 +269,7 @@ private enum FullGramSettingsEntry: ItemListNodeEntry {
             return FullGramSettingsSection.header.rawValue
         case .search:
             return FullGramSettingsSection.search.rawValue
-        case .adminPanel:
+        case .adminPanel, .sponsorPanel:
             return FullGramSettingsSection.admin.rawValue
         case .categoriesHeader, .category:
             return FullGramSettingsSection.categories.rawValue
@@ -282,10 +286,12 @@ private enum FullGramSettingsEntry: ItemListNodeEntry {
             return 1
         case .adminPanel:
             return 2
-        case .categoriesHeader:
+        case .sponsorPanel:
             return 3
+        case .categoriesHeader:
+            return 4
         case let .category(index, _, _):
-            return 4 + index
+            return 5 + index
         case .linksHeader:
             return 100
         case let .link(index, _, _, _, _, _):
@@ -307,6 +313,11 @@ private enum FullGramSettingsEntry: ItemListNodeEntry {
             return false
         case let .adminPanel(lhsTheme, lhsTitle):
             if case let .adminPanel(rhsTheme, rhsTitle) = rhs {
+                return lhsTheme === rhsTheme && lhsTitle == rhsTitle
+            }
+            return false
+        case let .sponsorPanel(lhsTheme, lhsTitle):
+            if case let .sponsorPanel(rhsTheme, rhsTitle) = rhs {
                 return lhsTheme === rhsTheme && lhsTitle == rhsTitle
             }
             return false
@@ -369,6 +380,21 @@ private enum FullGramSettingsEntry: ItemListNodeEntry {
                 disclosureStyle: .arrow,
                 action: {
                     arguments.openAdmin()
+                }
+            )
+        case let .sponsorPanel(_, title):
+            let icon = FullGramSettingsIcons.symbol("sparkles.rectangle.stack.fill", color: UIColor(rgb: 0x5856D6))
+            return ItemListDisclosureItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                icon: icon,
+                title: title,
+                label: "",
+                sectionId: self.section,
+                style: .blocks,
+                disclosureStyle: .arrow,
+                action: {
+                    arguments.openSponsorPanel()
                 }
             )
         case let .categoriesHeader(_, text):
@@ -502,7 +528,7 @@ private final class FullGramHeaderItemNode: ListViewItemNode {
 
             let (versionLayout, versionApply) = makeVersionLayout(TextNodeLayoutArguments(
                 attributedString: NSAttributedString(
-                    string: "1.5.5",
+                    string: "1.6.0",
                     font: Font.regular(15.0),
                     textColor: item.theme.list.itemSecondaryTextColor
                 ),
@@ -553,15 +579,56 @@ private final class FullGramHeaderItemNode: ListViewItemNode {
     }
 }
 
-func fullGramSettingsController(context: AccountContext) -> ViewController {
+public func fullGramOpenFontsStack(context: AccountContext, in navigationController: NavigationController?) {
+    guard let navigationController else {
+        return
+    }
+    let rootControllers: [ViewController]
+    if let first = navigationController.viewControllers.first {
+        rootControllers = [first]
+    } else {
+        rootControllers = []
+    }
+    let stack = rootControllers + [
+        fullGramSettingsController(context: context),
+        fullGramAppearanceCategoryController(context: context),
+        fullGramFontsController(context: context)
+    ]
+    navigationController.setViewControllers(stack, animated: false)
+}
+
+public func fullGramSettingsController(context: AccountContext) -> ViewController {
     FullGramDesignWatchdog.markUIVerified()
     var pushControllerImpl: ((ViewController) -> Void)?
     var navigationControllerImpl: (() -> NavigationController?)?
+
+    let sponsorsTick = ValuePromise<Int>(0, ignoreRepeated: false)
+    let sponsorsCounter = Atomic<Int>(value: 0)
+    let sponsorsObserver = NotificationCenter.default.addObserver(forName: FullGramSponsors.didChangeNotification, object: nil, queue: .main) { _ in
+        sponsorsTick.set(sponsorsCounter.modify { $0 + 1 })
+    }
+    FullGramSponsors.shared.refreshIfNeeded(maxAge: 20.0)
 
     let arguments = FullGramSettingsControllerArguments(
         context: context,
         openSearch: {
             pushControllerImpl?(fullGramSettingsSearchController(context: context))
+        },
+        openAdmin: {
+            pushControllerImpl?(fullGramAdminController(context: context))
+        },
+        openSponsorPanel: {
+            let _ = (context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: context.account.peerId))
+            |> deliverOnMainQueue).startStandalone(next: { peer in
+                guard let peer else { return }
+                pushControllerImpl?(fullGramBadgeDeskController(
+                    context: context,
+                    peer: peer,
+                    peerId: peer.id.toInt64(),
+                    username: peer.addressName,
+                    isSponsorSelfMode: true
+                ))
+            })
         },
         openCategory: { category in
             switch category {
@@ -585,9 +652,6 @@ func fullGramSettingsController(context: AccountContext) -> ViewController {
                 pushControllerImpl?(fullGramAIAssistantController(context: context))
             }
         },
-        openAdmin: {
-            pushControllerImpl?(fullGramAdminController(context: context))
-        },
         openLink: { url in
             let presentationData = context.sharedContext.currentPresentationData.with { $0 }
             context.sharedContext.openExternalUrl(
@@ -602,9 +666,8 @@ func fullGramSettingsController(context: AccountContext) -> ViewController {
         }
     )
 
-    let signal = context.sharedContext.presentationData
-    |> deliverOnMainQueue
-    |> map { presentationData -> (ItemListControllerState, (ItemListNodeState, Any)) in
+    let signal = combineLatest(queue: .mainQueue(), context.sharedContext.presentationData, sponsorsTick.get())
+    |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         var entries: [FullGramSettingsEntry] = [
             .header(presentationData.theme),
             .search(presentationData.theme)
@@ -612,6 +675,9 @@ func fullGramSettingsController(context: AccountContext) -> ViewController {
         if fullGramCanOpenAdmin(context: context) {
             let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
             entries.append(.adminPanel(presentationData.theme, ru ? "Админ-панель FullGram" : "FullGram Admin"))
+        } else if fullGramIsSelfSponsor(context: context) {
+            let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+            entries.append(.sponsorPanel(presentationData.theme, ru ? "Панель спонсора (Бейдж и NFT)" : "Sponsor Panel (Badge & NFT)"))
         }
         entries.append(.categoriesHeader(presentationData.theme, "КАТЕГОРИИ"))
 
@@ -639,6 +705,9 @@ func fullGramSettingsController(context: AccountContext) -> ViewController {
             style: .blocks
         )
         return (controllerState, (listState, arguments))
+    }
+    |> afterDisposed {
+        NotificationCenter.default.removeObserver(sponsorsObserver)
     }
 
     let controller = ItemListController(context: context, state: signal)
@@ -3440,7 +3509,7 @@ private enum FullGramAppearanceCategoryEntry: ItemListNodeEntry {
     }
 }
 
-func fullGramAppearanceCategoryController(context: AccountContext) -> ViewController {
+public func fullGramAppearanceCategoryController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
     let cosmeticsTick = ValuePromise<Int>(0, ignoreRepeated: false)
     let tickCounter = Atomic<Int>(value: 0)
@@ -3660,13 +3729,13 @@ private enum FullGramOtherCategoryEntry: ItemListNodeEntry {
         case let .generalLink(title):
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.dataAndStorage, title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openGeneral)
         case let .powerSavingLink(title, value):
-            let icon = UIImage(systemName: "bolt.batteryblock.fill")?.withTintColor(UIColor(rgb: 0x34c759), renderingMode: .alwaysOriginal) ?? PresentationResourcesSettings.powerSaving
+            let icon = FullGramSettingsIcons.symbol("bolt.batteryblock.fill", color: UIColor(rgb: 0x34c759)) ?? PresentationResourcesSettings.powerSaving
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openPowerSaving)
         case let .aiAssistantLink(title, value):
-            let icon = UIImage(systemName: "sparkles")?.withTintColor(UIColor(rgb: 0x5856d6), renderingMode: .alwaysOriginal) ?? PresentationResourcesSettings.stickers
+            let icon = FullGramSettingsIcons.symbol("sparkles", color: UIColor(rgb: 0x5856d6)) ?? PresentationResourcesSettings.stickers
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openAIAssistant)
         case let .badgesLink(title, value):
-            let icon = UIImage(systemName: "checkmark.seal.fill")?.withTintColor(UIColor(rgb: 0x007aff), renderingMode: .alwaysOriginal) ?? PresentationResourcesSettings.stickers
+            let icon = FullGramSettingsIcons.symbol("checkmark.seal.fill", color: UIColor(rgb: 0x007aff)) ?? PresentationResourcesSettings.stickers
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openBadges)
         case let .backupHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
@@ -3792,7 +3861,7 @@ func fullGramOtherCategoryController(context: AccountContext) -> ViewController 
         let powerStatus = FullGramPowerSaving.profile().mode.title
         var entries: [FullGramOtherCategoryEntry] = [
             .localPremium(FullGramExtras.shared.localPremium),
-            .localPremiumInfo("Открывает клиентские возможности Telegram Premium только на этом устройстве."),
+            .localPremiumInfo("Открывает клиентские возможности Telegram Premium только на этом устройстве (без серверного эмодзи-статуса)."),
             .generalLink("Основное"),
             .powerSavingLink("Энергосбережение", powerStatus),
             .aiAssistantLink("ИИ Ассистент и свой агент", aiStatus)

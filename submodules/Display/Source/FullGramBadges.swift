@@ -81,6 +81,7 @@ public final class FullGramBadges {
     public static let builtInRoles: [String: FullGramBadgeRole] = [
         "creator": FullGramBadgeRole(label: "Создатель FullGram", shortLabel: "CREATOR", emoji: "👑", color: "#FF9500"),
         "official": FullGramBadgeRole(label: "Официальный ресурс FullGram", shortLabel: "FULLGRAM", emoji: "🛡", color: "#007AFF"),
+        "sponsor": FullGramBadgeRole(label: "Спонсор FullGram", shortLabel: "SPONSOR", emoji: "💎", color: "#5856D6"),
         "premium": FullGramBadgeRole(label: "FullGram+", shortLabel: "FG+", emoji: "💎", color: "#AF52DE"),
         "dev": FullGramBadgeRole(label: "Разработчик", shortLabel: "DEV", emoji: "⚡", color: "#34C759")
     ]
@@ -291,7 +292,7 @@ public final class FullGramBadges {
     public func refreshIfNeeded() {
         guard !self.badgesURL.isEmpty else { return }
         let last = self.defaults.double(forKey: self.lastSyncKey)
-        if Date().timeIntervalSince1970 - last < 1800.0 {
+        if Date().timeIntervalSince1970 - last < 60.0 {
             return
         }
         self.refreshNow(completion: nil)

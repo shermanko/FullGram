@@ -4,6 +4,37 @@
 
 ---
 
+## [1.6.0] — 2026-11-21
+
+### Исправленные баги
+- **Рамка аватара на чате «Избранное» и системных иконках**:
+  - `AvatarNode` теперь подавляет отображение рамки при наличии `overrideImage` (Избранное, Архив, Удалённые аккаунты) и в `setCustomLetters` ([AvatarNode.swift](../submodules/AvatarNode/Sources/AvatarNode.swift)).
+- **Видимость косметики других пользователей**:
+  - На сервере Cloudflare Worker добавлен `POST /auth/session`, загрузка кастомных рамок из фотоплёнки (`POST /cosmetics/upload-frame`, `GET /frames/<id>.png`), нормализация `peerId` во всех маршрутах и `ctx.waitUntil` ([index.js](../tools/cloudflare-worker/src/index.js)).
+  - Клиент автоматически получает сессионный токен устройства через Keychain (`FullGramAdmin.ensureClientSession`), загружает кастомные рамки в облако и обновляет косметику при запуске и возвращении в приложение ([FullGramAdmin.swift](../submodules/Display/Source/FullGramAdmin.swift), [FullGramCosmetics.swift](../submodules/Display/Source/FullGramCosmetics.swift), [SharedAccountContext.swift](../submodules/TelegramUI/Sources/SharedAccountContext.swift)).
+- **Локальный Telegram Premium и Эмодзи-статус**:
+  - При включении только локального Premium скрыты элементы выбора/редактирования эмодзи-статуса в настройках, списке чатов и шапке профиля ([PeerInfoSettingsItems.swift](../submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift), [ChatListController.swift](../submodules/ChatListUI/Sources/ChatListController.swift), [PeerInfoScreen.swift](../submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift)).
+- **Привязка эффекта профиля к шапке при скролле**:
+  - `FullGramProfileEffectOverlayView` перенесён внутрь `backgroundBannerView` с фиксированной высотой, чтобы баннер профиля не смещался и не прыгал при прокрутке ([PeerInfoHeaderNode.swift](../submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift)).
+- **Загрузка, качество баннеров и превью рамок**:
+  - Перерисованы все 50 кастомных APNG-рамок (`288×288`, 16 кадров, прозрачный центр) и зарегистрированы в клиенте ([generate_custom_cosmetics.mjs](../tools/generate_custom_cosmetics.mjs), [FullGramAvatarFrames.swift](../submodules/Display/Source/FullGramAvatarFrames.swift)).
+  - Повышено разрешение декодирования баннеров профиля (`960px`, `60` кадров, Retina `.trilinear`), добавлен поиск первого видимого кадра (`isImageVisiblyOpaque`), предпочтение ambient-слоя `layer_1` и зеркало `raw.githubusercontent.com`.
+  - Исправлен ключ анимации `"fg.apng"`, увеличены лимиты кэшей и добавлен индикатор загрузки на ячейках ([FullGramCosmeticScreens.swift](../submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramCosmeticScreens.swift)).
+- **Графический баг (щель) в аудиоплеере**:
+  - Высота `historyFrameTopOverlayNode` под шапкой плейлиста синхронизирована с реальной высотой `topOverlayFrame.height` ([OverlayAudioPlayerControllerNode.swift](../submodules/TelegramUI/Sources/OverlayAudioPlayerControllerNode.swift)).
+
+### Новые возможности и оптимизация
+- **Система спонсоров FullGram**:
+  - Владелец может назначать/снимать спонсоров в Desk бейджей профиля, админ-панели и командой `/sponsor` в Telegram-боте; спонсоры получают панель самообслуживания для настройки собственного бейджа (без ролей `creator`/`official`) и выдачи/удаления себе NFT без админ-токена ([FullGramBadgeDeskController.swift](../submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramBadgeDeskController.swift), [FullGramNFTDeskController.swift](../submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramNFTDeskController.swift)).
+- **Удобное переключение шрифтов**:
+  - Убран текст-превью из строк списка шрифтов; при смене шрифта приложение автоматически перезагружает интерфейс и открывает сразу вкладку «Шрифты» ([Font.swift](../submodules/Display/Source/Font.swift), [FullGramAppearance.swift](../submodules/Display/Source/FullGramAppearance.swift), [AppDelegate.swift](../submodules/TelegramUI/Sources/AppDelegate.swift)).
+- **Новые иконки и удаление чисто чёрных иконок**:
+  - Обновлены основная и альтернативные иконки приложения (иконки маскота не затронуты), удалены чисто чёрные варианты иконок и тонированы тёмные системные иконки интерфейса.
+- **Энергосбережение и оптимизация проекта / CI**:
+  - Упрощено энергосбережение без профилей по устройствам и системного профиля, добавлено кэширование `FullGramPowerSaving` и поиск, кэш иконок меню, а также `ccache` + Bazel `--repository_cache` в [build.yml](../.github/workflows/build.yml).
+
+---
+
 ## [1.5.5] — 2026-11-20
 
 ### Исправленные баги

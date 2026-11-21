@@ -465,9 +465,43 @@ public enum FullGramAvatarFrames {
         FullGramAvatarFramePreset(id: "fg_arctic_chrome", title: "FG Arctic Chrome", category: "FullGram", fileName: "fg_arctic_chrome", accentHex: 0x67E8F9, isBundled: false),
         FullGramAvatarFramePreset(id: "fg_cyber_hex", title: "Cyber Hex Grid", category: "Кибер", fileName: "fg_cyber_hex", accentHex: 0x00E5FF, isBundled: false),
         FullGramAvatarFramePreset(id: "fg_synthwave_ring", title: "Synthwave Sunset", category: "Неон", fileName: "fg_synthwave_ring", accentHex: 0xFF2A85, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_matrix_code", title: "Matrix Digital", category: "Кибер", fileName: "fg_matrix_code", accentHex: 0x00FF66, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_laser_scan", title: "Laser Scanner", category: "Кибер", fileName: "fg_laser_scan", accentHex: 0xFF0055, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_plasma_arc", title: "Plasma Arc", category: "Неон", fileName: "fg_plasma_arc", accentHex: 0xC084FC, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_holo_ring", title: "Hologram Prism", category: "Неон", fileName: "fg_holo_ring", accentHex: 0x38BDF8, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_glitch_pulse", title: "Glitch Pulse", category: "Кибер", fileName: "fg_glitch_pulse", accentHex: 0xFF2A85, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_turbo_rpm", title: "Turbo RPM", category: "Кибер", fileName: "fg_turbo_rpm", accentHex: 0xF97316, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_circuit_flow", title: "Circuit Flow", category: "Кибер", fileName: "fg_circuit_flow", accentHex: 0x10B981, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_vapor_wave", title: "Vaporwave 1984", category: "Неон", fileName: "fg_vapor_wave", accentHex: 0xF472B6, isBundled: false),
         FullGramAvatarFramePreset(id: "fg_inferno_ring", title: "Inferno Flame", category: "Стихия", fileName: "fg_inferno_ring", accentHex: 0xFF4500, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_frost_crystal", title: "Frost Crystals", category: "Стихия", fileName: "fg_frost_crystal", accentHex: 0x60A5FA, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_thunder_bolt", title: "Thunder Storm", category: "Стихия", fileName: "fg_thunder_bolt", accentHex: 0xFACC15, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_toxic_venom", title: "Toxic Venom", category: "Стихия", fileName: "fg_toxic_venom", accentHex: 0x84CC16, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_blood_moon", title: "Blood Moon", category: "Стихия", fileName: "fg_blood_moon", accentHex: 0xDC2626, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_emerald_aura", title: "Emerald Aura", category: "Стихия", fileName: "fg_emerald_aura", accentHex: 0x34D399, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_ocean_tide", title: "Ocean Tide", category: "Стихия", fileName: "fg_ocean_tide", accentHex: 0x0EA5E9, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_magma_crack", title: "Magma Core", category: "Стихия", fileName: "fg_magma_crack", accentHex: 0xEA580C, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_wind_vortex", title: "Wind Vortex", category: "Стихия", fileName: "fg_wind_vortex", accentHex: 0xA5F3FC, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_arcane_runes", title: "Arcane Runes", category: "Стихия", fileName: "fg_arcane_runes", accentHex: 0x8B5CF6, isBundled: false),
         FullGramAvatarFramePreset(id: "fg_nebula_swirl", title: "Nebula Swirl", category: "Космос", fileName: "fg_nebula_swirl", accentHex: 0x818CF8, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_supernova", title: "Supernova Burst", category: "Космос", fileName: "fg_supernova", accentHex: 0xFBBF24, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_saturn_orbit", title: "Orbital Moons", category: "Космос", fileName: "fg_saturn_orbit", accentHex: 0x38BDF8, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_starlight_halo", title: "Starlight Halo", category: "Космос", fileName: "fg_starlight_halo", accentHex: 0xE0E7FF, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_aurora_borealis", title: "Aurora Borealis", category: "Космос", fileName: "fg_aurora_borealis", accentHex: 0x2DD4BF, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_black_hole", title: "Event Horizon", category: "Космос", fileName: "fg_black_hole", accentHex: 0xF97316, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_comet_trail", title: "Comet Trail", category: "Космос", fileName: "fg_comet_trail", accentHex: 0x67E8F9, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_zodiac_gold", title: "Celestial Astrolabe", category: "Космос", fileName: "fg_zodiac_gold", accentHex: 0xF59E0B, isBundled: false),
         FullGramAvatarFramePreset(id: "fg_sakura_petals", title: "Sakura Petals", category: "Аниме", fileName: "fg_sakura_petals", accentHex: 0xFF85B3, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_neko_neon", title: "Neko Neon Ears", category: "Милые", fileName: "fg_neko_neon", accentHex: 0xF472B6, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_pastel_hearts", title: "Pastel Hearts", category: "Милые", fileName: "fg_pastel_hearts", accentHex: 0xFB7185, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_angel_halo", title: "Angelic Halo", category: "Милые", fileName: "fg_angel_halo", accentHex: 0xFDE68A, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_devil_horns", title: "Crimson Horns", category: "Аниме", fileName: "fg_devil_horns", accentHex: 0xEF4444, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_butterfly_glow", title: "Neon Butterflies", category: "Природа", fileName: "fg_butterfly_glow", accentHex: 0xC084FC, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_lotus_bloom", title: "Lotus Bloom", category: "Природа", fileName: "fg_lotus_bloom", accentHex: 0xEC4899, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_rainbow_prism", title: "Rainbow Prism", category: "Неон", fileName: "fg_rainbow_prism", accentHex: 0xFF6B9D, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_candy_swirl", title: "Candy Swirl", category: "Милые", fileName: "fg_candy_swirl", accentHex: 0xF472B6, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_emerald_vine", title: "Emerald Vine", category: "Природа", fileName: "fg_emerald_vine", accentHex: 0x22C55E, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_fireflies", title: "Night Fireflies", category: "Природа", fileName: "fg_fireflies", accentHex: 0xFACC15, isBundled: false),
         FullGramAvatarFramePreset(id: "fg_diamond_lux", title: "Diamond Luxury", category: "FullGram", fileName: "fg_diamond_lux", accentHex: 0xE0F2FE, isBundled: false)
     ]
 
@@ -504,14 +538,29 @@ public enum FullGramAvatarFrames {
     }
 
     public static func remoteURLs(for preset: FullGramAvatarFramePreset) -> [URL] {
-        if !preset.remoteURLs.isEmpty {
-            return preset.remoteURLs.compactMap { URL(string: $0) }
+        var strings = preset.remoteURLs
+        if strings.isEmpty {
+            let file = "\(preset.fileName).png"
+            strings = [
+                self.cdnBaseURL + file,
+                self.rawBaseURL + file
+            ]
         }
-        let file = "\(preset.fileName).png"
-        return [
-            URL(string: self.cdnBaseURL + file),
-            URL(string: self.rawBaseURL + file)
-        ].compactMap { $0 }
+        var seen = Set<String>()
+        var urls: [URL] = []
+        let appendUnique: (String) -> Void = { s in
+            guard !s.isEmpty, !seen.contains(s), let u = URL(string: s) else { return }
+            seen.insert(s)
+            urls.append(u)
+        }
+        for s in strings {
+            appendUnique(s)
+            if s.hasPrefix("https://cdn.jsdelivr.net/gh/JulesZYTB/discord-collectibles-downloader@main/") {
+                let tail = String(s.dropFirst("https://cdn.jsdelivr.net/gh/JulesZYTB/discord-collectibles-downloader@main/".count))
+                appendUnique("https://raw.githubusercontent.com/JulesZYTB/discord-collectibles-downloader/main/" + tail)
+            }
+        }
+        return urls
     }
 
     public static func thumbnailRemoteURLs(for preset: FullGramAvatarFramePreset) -> [URL] {
@@ -780,19 +829,20 @@ public final class FullGramAnimatedFrameSequence: @unchecked Sendable {
 public final class FullGramAnimatedImageDecoder {
     private static let sequenceCache: NSCache<NSString, FullGramAnimatedFrameSequence> = {
         let c = NSCache<NSString, FullGramAnimatedFrameSequence>()
-        c.countLimit = 24
+        c.countLimit = 48
+        c.totalCostLimit = 96 * 1024 * 1024
         return c
     }()
     private static let thumbnailCache: NSCache<NSString, CGImage> = {
         let c = NSCache<NSString, CGImage>()
-        c.countLimit = 260
+        c.countLimit = 400
         return c
     }()
     private static let decodeOpQueue: OperationQueue = {
         let q = OperationQueue()
         q.name = "FullGram.AvatarFrameDecode"
         q.qualityOfService = .userInitiated
-        q.maxConcurrentOperationCount = 6
+        q.maxConcurrentOperationCount = 4
         return q
     }()
     private static let ioQueue = DispatchQueue(label: "FullGram.AvatarFrameIO", qos: .userInitiated, attributes: .concurrent)
@@ -802,13 +852,77 @@ public final class FullGramAnimatedImageDecoder {
     private static var cancelledTokens: Set<UUID> = []
     private static let session: URLSession = {
         let cfg = URLSessionConfiguration.default
-        cfg.timeoutIntervalForRequest = 8.0
-        cfg.timeoutIntervalForResource = 18.0
+        cfg.timeoutIntervalForRequest = 10.0
+        cfg.timeoutIntervalForResource = 25.0
         cfg.httpMaximumConnectionsPerHost = 12
         cfg.requestCachePolicy = .returnCacheDataElseLoad
-        cfg.urlCache = URLCache(memoryCapacity: 16 * 1024 * 1024, diskCapacity: 128 * 1024 * 1024)
+        cfg.urlCache = URLCache(memoryCapacity: 32 * 1024 * 1024, diskCapacity: 128 * 1024 * 1024)
         return URLSession(configuration: cfg)
     }()
+
+    private static func mirrorURLs(for urlStrings: [String]) -> [URL] {
+        var seen = Set<String>()
+        var urls: [URL] = []
+        let appendUnique: (String) -> Void = { str in
+            guard !str.isEmpty, !seen.contains(str), let u = URL(string: str) else { return }
+            seen.insert(str)
+            urls.append(u)
+        }
+        for raw in urlStrings {
+            appendUnique(raw)
+            if raw.hasPrefix("https://cdn.jsdelivr.net/gh/JulesZYTB/discord-collectibles-downloader@main/") {
+                let tail = String(raw.dropFirst("https://cdn.jsdelivr.net/gh/JulesZYTB/discord-collectibles-downloader@main/".count))
+                appendUnique("https://raw.githubusercontent.com/JulesZYTB/discord-collectibles-downloader/main/" + tail)
+            } else if raw.hasPrefix("https://cdn.jsdelivr.net/gh/shermanko/FullGram@") {
+                let tail = String(raw.dropFirst("https://cdn.jsdelivr.net/gh/shermanko/FullGram@".count))
+                if let slashIdx = tail.firstIndex(of: "/") {
+                    let branch = String(tail[..<slashIdx])
+                    let rest = String(tail[tail.index(after: slashIdx)...])
+                    appendUnique("https://raw.githubusercontent.com/shermanko/FullGram/\(branch)/\(rest)")
+                }
+            }
+        }
+        return urls
+    }
+
+    private static func isImageVisiblyOpaque(_ image: CGImage) -> Bool {
+        let w = 16
+        let h = 16
+        var pixels = [UInt8](repeating: 0, count: w * h * 4)
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(
+                  data: &pixels,
+                  width: w,
+                  height: h,
+                  bitsPerComponent: 8,
+                  bytesPerRow: w * 4,
+                  space: colorSpace,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else {
+            return true
+        }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        var visibleCount = 0
+        var i = 3
+        while i < pixels.count {
+            if pixels[i] >= 20 {
+                visibleCount += 1
+                if visibleCount >= 3 {
+                    return true
+                }
+            }
+            i += 4
+        }
+        return false
+    }
+
+    private static func writeThumbnailPNG(_ image: CGImage, to url: URL) {
+        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {
+            return
+        }
+        CGImageDestinationAddImage(dest, image, nil)
+        CGImageDestinationFinalize(dest)
+    }
 
     public static func invalidate(cacheKey: String) {
         self.sequenceCache.removeObject(forKey: cacheKey as NSString)
@@ -840,14 +954,15 @@ public final class FullGramAnimatedImageDecoder {
         return flag
     }
 
-    public static func prefetchThumbnail(for preset: FullGramAvatarFramePreset, maxPixelSize: Int = 112) {
+    public static func prefetchThumbnail(for preset: FullGramAvatarFramePreset, maxPixelSize: Int = 180) {
         if self.cachedThumbnail(cacheKey: preset.id) != nil || self.cachedSequence(for: preset) != nil {
             return
         }
         self.ioQueue.async {
             if let localURL = FullGramAvatarFrames.frameURL(for: preset) {
+                let thumbDst = (!preset.isBundled && preset.localCustomPath == nil) ? FullGramAvatarFrames.cachedThumbnailDiskURL(for: preset) : nil
                 self.decodeOpQueue.addOperation {
-                    _ = self.decodeStaticThumbnail(url: localURL, cacheKey: preset.id, maxPixelSize: maxPixelSize)
+                    _ = self.decodeStaticThumbnail(url: localURL, cacheKey: preset.id, maxPixelSize: maxPixelSize, diskCacheURL: thumbDst)
                 }
                 return
             }
@@ -862,68 +977,84 @@ public final class FullGramAnimatedImageDecoder {
             self.downloadRemoteImage(urls: FullGramAvatarFrames.thumbnailRemoteURLs(for: preset), dst: thumbDst) { ok in
                 guard ok else { return }
                 self.decodeOpQueue.addOperation {
-                    _ = self.decodeStaticThumbnail(url: thumbDst, cacheKey: preset.id, maxPixelSize: maxPixelSize)
+                    _ = self.decodeStaticThumbnail(url: thumbDst, cacheKey: preset.id, maxPixelSize: maxPixelSize, diskCacheURL: thumbDst)
                 }
             }
         }
     }
 
-    public static func prefetchProfileEffectThumbnail(effectId: String, urlString: String, maxPixelSize: Int = 160) {
-        let cacheKey = "pe_\(effectId)_0"
-        if self.cachedThumbnail(cacheKey: cacheKey) != nil || self.sequenceCache.object(forKey: cacheKey as NSString) != nil {
+    public static func prefetchProfileEffectThumbnail(effectId: String, layerURLs: [String], maxPixelSize: Int = 320) {
+        let cacheKey = "pe_\(effectId)_thumb"
+        if self.cachedThumbnail(cacheKey: cacheKey) != nil {
             return
         }
-        guard let url = URL(string: urlString) else { return }
-        let diskURL = FullGramProfileEffects.cachedLayerURL(effectId: effectId, layerIndex: 0)
+        let orderedIndices: [Int] = layerURLs.count > 1 ? [1, 0] : (layerURLs.isEmpty ? [] : [0])
+        guard !orderedIndices.isEmpty else { return }
+        let thumbDiskURL = FullGramProfileEffects.cacheDirectory().appendingPathComponent("\(effectId)_thumb.png")
         self.ioQueue.async {
-            if FileManager.default.fileExists(atPath: diskURL.path) {
-                self.decodeOpQueue.addOperation {
-                    _ = self.decodeStaticThumbnail(url: diskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize)
-                }
+            if FileManager.default.fileExists(atPath: thumbDiskURL.path),
+               let img = self.decodeStaticThumbnail(url: thumbDiskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize) {
+                let _ = img
                 return
             }
-            self.downloadRemoteImage(urls: [url], dst: diskURL) { ok in
+            for idx in orderedIndices {
+                let layerURL = FullGramProfileEffects.cachedLayerURL(effectId: effectId, layerIndex: idx)
+                if FileManager.default.fileExists(atPath: layerURL.path) {
+                    if self.decodeStaticThumbnail(url: layerURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize, diskCacheURL: thumbDiskURL) != nil {
+                        return
+                    }
+                }
+            }
+            let primaryIdx = orderedIndices[0]
+            let primaryDiskURL = FullGramProfileEffects.cachedLayerURL(effectId: effectId, layerIndex: primaryIdx)
+            let urls = self.mirrorURLs(for: [layerURLs[primaryIdx]])
+            self.downloadRemoteImage(urls: urls, dst: primaryDiskURL) { ok in
                 guard ok else { return }
                 self.decodeOpQueue.addOperation {
-                    _ = self.decodeStaticThumbnail(url: diskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize)
+                    _ = self.decodeStaticThumbnail(url: primaryDiskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize, diskCacheURL: thumbDiskURL)
                 }
             }
         }
+    }
+
+    public static func prefetchProfileEffectThumbnail(effectId: String, urlString: String, maxPixelSize: Int = 320) {
+        self.prefetchProfileEffectThumbnail(effectId: effectId, layerURLs: [urlString], maxPixelSize: maxPixelSize)
     }
 
     @discardableResult
     public static func thumbnailAsync(
         for preset: FullGramAvatarFramePreset,
-        maxPixelSize: Int = 112,
+        maxPixelSize: Int = 180,
         completion: @escaping @Sendable (CGImage?) -> Void
     ) -> UUID? {
         if let cached = self.cachedThumbnail(cacheKey: preset.id) {
             completion(cached)
             return nil
         }
-        if let seq = self.cachedSequence(for: preset), let first = seq.frames.first {
-            self.thumbnailCache.setObject(first, forKey: ("thumb_" + preset.id) as NSString)
-            completion(first)
+        if let seq = self.cachedSequence(for: preset), let visible = seq.frames.first(where: { self.isImageVisiblyOpaque($0) }) ?? seq.frames.first {
+            self.thumbnailCache.setObject(visible, forKey: ("thumb_" + preset.id) as NSString)
+            completion(visible)
             return nil
         }
 
         let token = UUID()
         self.ioQueue.async {
             guard !self.isCancelled(token) else { return }
+            let thumbDst = (!preset.isBundled && preset.localCustomPath == nil) ? FullGramAvatarFrames.cachedThumbnailDiskURL(for: preset) : nil
             if let localURL = FullGramAvatarFrames.frameURL(for: preset) {
                 self.decodeOpQueue.addOperation {
                     guard !self.isCancelled(token) else { return }
-                    let img = self.decodeStaticThumbnail(url: localURL, cacheKey: preset.id, maxPixelSize: maxPixelSize)
+                    let img = self.decodeStaticThumbnail(url: localURL, cacheKey: preset.id, maxPixelSize: maxPixelSize, diskCacheURL: thumbDst)
                     guard !self.isCancelled(token) else { return }
                     DispatchQueue.main.async { completion(img) }
                 }
                 return
             }
-            let thumbDst = FullGramAvatarFrames.cachedThumbnailDiskURL(for: preset)
-            if FileManager.default.fileExists(atPath: thumbDst.path) {
+            let diskThumb = FullGramAvatarFrames.cachedThumbnailDiskURL(for: preset)
+            if FileManager.default.fileExists(atPath: diskThumb.path) {
                 self.decodeOpQueue.addOperation {
                     guard !self.isCancelled(token) else { return }
-                    let img = self.decodeStaticThumbnail(url: thumbDst, cacheKey: preset.id, maxPixelSize: maxPixelSize)
+                    let img = self.decodeStaticThumbnail(url: diskThumb, cacheKey: preset.id, maxPixelSize: maxPixelSize)
                     guard !self.isCancelled(token) else { return }
                     DispatchQueue.main.async { completion(img) }
                 }
@@ -933,7 +1064,7 @@ public final class FullGramAnimatedImageDecoder {
                 DispatchQueue.main.async { completion(nil) }
                 return
             }
-            self.downloadRemoteImage(urls: FullGramAvatarFrames.thumbnailRemoteURLs(for: preset), dst: thumbDst) { ok in
+            self.downloadRemoteImage(urls: FullGramAvatarFrames.thumbnailRemoteURLs(for: preset), dst: diskThumb) { ok in
                 guard !self.isCancelled(token) else { return }
                 guard ok else {
                     DispatchQueue.main.async { completion(nil) }
@@ -941,7 +1072,7 @@ public final class FullGramAnimatedImageDecoder {
                 }
                 self.decodeOpQueue.addOperation {
                     guard !self.isCancelled(token) else { return }
-                    let img = self.decodeStaticThumbnail(url: thumbDst, cacheKey: preset.id, maxPixelSize: maxPixelSize)
+                    let img = self.decodeStaticThumbnail(url: diskThumb, cacheKey: preset.id, maxPixelSize: maxPixelSize, diskCacheURL: diskThumb)
                     guard !self.isCancelled(token) else { return }
                     DispatchQueue.main.async { completion(img) }
                 }
@@ -953,58 +1084,176 @@ public final class FullGramAnimatedImageDecoder {
     @discardableResult
     public static func profileEffectThumbnailAsync(
         effectId: String,
-        urlString: String,
-        maxPixelSize: Int = 160,
+        layerURLs: [String],
+        maxPixelSize: Int = 320,
         completion: @escaping @Sendable (CGImage?) -> Void
     ) -> UUID? {
-        let cacheKey = "pe_\(effectId)_0"
+        let cacheKey = "pe_\(effectId)_thumb"
         if let cached = self.cachedThumbnail(cacheKey: cacheKey) {
             completion(cached)
             return nil
         }
-        if let seq = self.sequenceCache.object(forKey: cacheKey as NSString), let first = seq.frames.first {
-            self.thumbnailCache.setObject(first, forKey: ("thumb_" + cacheKey) as NSString)
-            completion(first)
-            return nil
+        let orderedIndices: [Int] = layerURLs.count > 1 ? [1, 0] : (layerURLs.isEmpty ? [] : [0])
+        for idx in orderedIndices {
+            let layerKey = "pe_\(effectId)_\(idx)" as NSString
+            if let seq = self.sequenceCache.object(forKey: layerKey),
+               let visible = seq.frames.first(where: { self.isImageVisiblyOpaque($0) }) ?? seq.frames.first {
+                self.thumbnailCache.setObject(visible, forKey: ("thumb_" + cacheKey) as NSString)
+                completion(visible)
+                return nil
+            }
         }
-        guard let url = URL(string: urlString) else {
+        guard !orderedIndices.isEmpty else {
             DispatchQueue.main.async { completion(nil) }
             return nil
         }
 
         let token = UUID()
-        let diskURL = FullGramProfileEffects.cachedLayerURL(effectId: effectId, layerIndex: 0)
+        let thumbDiskURL = FullGramProfileEffects.cacheDirectory().appendingPathComponent("\(effectId)_thumb.png")
         self.ioQueue.async {
             guard !self.isCancelled(token) else { return }
-            if FileManager.default.fileExists(atPath: diskURL.path) {
+            if FileManager.default.fileExists(atPath: thumbDiskURL.path) {
                 self.decodeOpQueue.addOperation {
                     guard !self.isCancelled(token) else { return }
-                    let img = self.decodeStaticThumbnail(url: diskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize)
-                    guard !self.isCancelled(token) else { return }
-                    DispatchQueue.main.async { completion(img) }
+                    if let img = self.decodeStaticThumbnail(url: thumbDiskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize) {
+                        DispatchQueue.main.async { completion(img) }
+                    } else {
+                        try? FileManager.default.removeItem(at: thumbDiskURL)
+                        self.resolveProfileEffectThumbnailFromLayers(
+                            effectId: effectId,
+                            layerURLs: layerURLs,
+                            orderedIndices: orderedIndices,
+                            cacheKey: cacheKey,
+                            maxPixelSize: maxPixelSize,
+                            thumbDiskURL: thumbDiskURL,
+                            token: token,
+                            completion: completion
+                        )
+                    }
                 }
                 return
             }
-            self.downloadRemoteImage(urls: [url], dst: diskURL) { ok in
-                guard !self.isCancelled(token) else { return }
-                guard ok else {
-                    DispatchQueue.main.async { completion(nil) }
-                    return
-                }
-                self.decodeOpQueue.addOperation {
-                    guard !self.isCancelled(token) else { return }
-                    let img = self.decodeStaticThumbnail(url: diskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize)
-                    guard !self.isCancelled(token) else { return }
-                    DispatchQueue.main.async { completion(img) }
-                }
-            }
+            self.resolveProfileEffectThumbnailFromLayers(
+                effectId: effectId,
+                layerURLs: layerURLs,
+                orderedIndices: orderedIndices,
+                cacheKey: cacheKey,
+                maxPixelSize: maxPixelSize,
+                thumbDiskURL: thumbDiskURL,
+                token: token,
+                completion: completion
+            )
         }
         return token
     }
 
-    private static func decodeStaticThumbnail(url: URL, cacheKey: String, maxPixelSize: Int) -> CGImage? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              CGImageSourceGetCount(source) > 0 else {
+    @discardableResult
+    public static func profileEffectThumbnailAsync(
+        effectId: String,
+        urlString: String,
+        maxPixelSize: Int = 320,
+        completion: @escaping @Sendable (CGImage?) -> Void
+    ) -> UUID? {
+        return self.profileEffectThumbnailAsync(effectId: effectId, layerURLs: [urlString], maxPixelSize: maxPixelSize, completion: completion)
+    }
+
+    private static func resolveProfileEffectThumbnailFromLayers(
+        effectId: String,
+        layerURLs: [String],
+        orderedIndices: [Int],
+        cacheKey: String,
+        maxPixelSize: Int,
+        thumbDiskURL: URL,
+        token: UUID,
+        completion: @escaping @Sendable (CGImage?) -> Void
+    ) {
+        guard !self.isCancelled(token), let firstIdx = orderedIndices.first else {
+            if !self.isCancelled(token) {
+                DispatchQueue.main.async { completion(nil) }
+            }
+            return
+        }
+        let restIndices = Array(orderedIndices.dropFirst())
+        let diskURL = FullGramProfileEffects.cachedLayerURL(effectId: effectId, layerIndex: firstIdx)
+        if FileManager.default.fileExists(atPath: diskURL.path) {
+            self.decodeOpQueue.addOperation {
+                guard !self.isCancelled(token) else { return }
+                if let img = self.decodeStaticThumbnail(url: diskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize, diskCacheURL: thumbDiskURL),
+                   self.isImageVisiblyOpaque(img) {
+                    DispatchQueue.main.async { completion(img) }
+                } else if !restIndices.isEmpty {
+                    self.resolveProfileEffectThumbnailFromLayers(
+                        effectId: effectId,
+                        layerURLs: layerURLs,
+                        orderedIndices: restIndices,
+                        cacheKey: cacheKey,
+                        maxPixelSize: maxPixelSize,
+                        thumbDiskURL: thumbDiskURL,
+                        token: token,
+                        completion: completion
+                    )
+                } else {
+                    let fallbackImg = self.decodeStaticThumbnail(url: diskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize)
+                    DispatchQueue.main.async { completion(fallbackImg) }
+                }
+            }
+            return
+        }
+        let urls = self.mirrorURLs(for: [layerURLs[firstIdx]])
+        self.downloadRemoteImage(urls: urls, dst: diskURL) { ok in
+            guard !self.isCancelled(token) else { return }
+            guard ok else {
+                if !restIndices.isEmpty {
+                    self.resolveProfileEffectThumbnailFromLayers(
+                        effectId: effectId,
+                        layerURLs: layerURLs,
+                        orderedIndices: restIndices,
+                        cacheKey: cacheKey,
+                        maxPixelSize: maxPixelSize,
+                        thumbDiskURL: thumbDiskURL,
+                        token: token,
+                        completion: completion
+                    )
+                } else {
+                    DispatchQueue.main.async { completion(nil) }
+                }
+                return
+            }
+            self.decodeOpQueue.addOperation {
+                guard !self.isCancelled(token) else { return }
+                if let img = self.decodeStaticThumbnail(url: diskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize, diskCacheURL: thumbDiskURL),
+                   self.isImageVisiblyOpaque(img) {
+                    DispatchQueue.main.async { completion(img) }
+                } else if !restIndices.isEmpty {
+                    self.resolveProfileEffectThumbnailFromLayers(
+                        effectId: effectId,
+                        layerURLs: layerURLs,
+                        orderedIndices: restIndices,
+                        cacheKey: cacheKey,
+                        maxPixelSize: maxPixelSize,
+                        thumbDiskURL: thumbDiskURL,
+                        token: token,
+                        completion: completion
+                    )
+                } else {
+                    let fallbackImg = self.decodeStaticThumbnail(url: diskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize)
+                    DispatchQueue.main.async { completion(fallbackImg) }
+                }
+            }
+        }
+    }
+
+    private static func decodeStaticThumbnail(
+        url: URL,
+        cacheKey: String,
+        maxPixelSize: Int,
+        diskCacheURL: URL? = nil
+    ) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            return nil
+        }
+        let rawCount = CGImageSourceGetCount(source)
+        guard rawCount > 0 else {
             return nil
         }
         let thumbOptions: [CFString: Any] = [
@@ -1013,17 +1262,43 @@ public final class FullGramAnimatedImageDecoder {
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceShouldCacheImmediately: true
         ]
-        guard let img = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOptions as CFDictionary)
-            ?? CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+
+        var candidateIndices: [Int] = [0]
+        if rawCount > 1 {
+            let extra = [rawCount / 3, rawCount / 2, (rawCount * 2) / 3, max(0, rawCount - 1)]
+            for idx in extra where idx >= 0 && idx < rawCount && !candidateIndices.contains(idx) {
+                candidateIndices.append(idx)
+            }
+        }
+
+        var firstDecoded: CGImage?
+        var chosen: CGImage?
+        for idx in candidateIndices {
+            guard let img = CGImageSourceCreateThumbnailAtIndex(source, idx, thumbOptions as CFDictionary)
+                ?? CGImageSourceCreateImageAtIndex(source, idx, nil) else {
+                continue
+            }
+            if firstDecoded == nil {
+                firstDecoded = img
+            }
+            if self.isImageVisiblyOpaque(img) {
+                chosen = img
+                break
+            }
+        }
+        guard let finalImg = chosen ?? firstDecoded else {
             return nil
         }
-        self.thumbnailCache.setObject(img, forKey: ("thumb_" + cacheKey) as NSString)
-        return img
+        self.thumbnailCache.setObject(finalImg, forKey: ("thumb_" + cacheKey) as NSString)
+        if rawCount > 1, let diskCacheURL, diskCacheURL != url || !FileManager.default.fileExists(atPath: diskCacheURL.path) {
+            self.writeThumbnailPNG(finalImg, to: diskCacheURL)
+        }
+        return finalImg
     }
 
     public static func sequenceAsync(
         for preset: FullGramAvatarFramePreset,
-        maxPixelSize: Int = 220,
+        maxPixelSize: Int = 288,
         completion: @escaping @Sendable (FullGramAnimatedFrameSequence?) -> Void
     ) {
         if let cached = self.cachedSequence(for: preset) {
@@ -1080,7 +1355,7 @@ public final class FullGramAnimatedImageDecoder {
         effectId: String,
         layerIndex: Int,
         urlString: String,
-        maxPixelSize: Int = 380,
+        maxPixelSize: Int = 960,
         completion: @escaping @Sendable (FullGramAnimatedFrameSequence?) -> Void
     ) {
         let cacheKey = "pe_\(effectId)_\(layerIndex)"
@@ -1088,7 +1363,8 @@ public final class FullGramAnimatedImageDecoder {
             completion(cached)
             return
         }
-        guard let url = URL(string: urlString) else {
+        let urls = self.mirrorURLs(for: [urlString])
+        guard !urls.isEmpty else {
             DispatchQueue.main.async { completion(nil) }
             return
         }
@@ -1118,17 +1394,17 @@ public final class FullGramAnimatedImageDecoder {
         self.ioQueue.async {
             if FileManager.default.fileExists(atPath: diskURL.path) {
                 self.decodeOpQueue.addOperation {
-                    finish(self.decodeFile(url: diskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize, maxFrames: 45))
+                    finish(self.decodeFile(url: diskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize, maxFrames: 60))
                 }
                 return
             }
-            self.downloadRemoteImage(urls: [url], dst: diskURL) { ok in
+            self.downloadRemoteImage(urls: urls, dst: diskURL) { ok in
                 guard ok else {
                     finish(nil)
                     return
                 }
                 self.decodeOpQueue.addOperation {
-                    finish(self.decodeFile(url: diskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize, maxFrames: 45))
+                    finish(self.decodeFile(url: diskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize, maxFrames: 60))
                 }
             }
         }
@@ -1197,7 +1473,7 @@ public final class FullGramAnimatedImageDecoder {
         }.resume()
     }
 
-    public static func sequence(for preset: FullGramAvatarFramePreset, maxPixelSize: Int = 220) -> FullGramAnimatedFrameSequence? {
+    public static func sequence(for preset: FullGramAvatarFramePreset, maxPixelSize: Int = 288) -> FullGramAnimatedFrameSequence? {
         if let cached = self.sequenceCache.object(forKey: preset.id as NSString) {
             return cached
         }
@@ -1264,7 +1540,8 @@ public final class FullGramAnimatedImageDecoder {
         keyTimes.append(NSNumber(value: 1.0))
 
         let seq = FullGramAnimatedFrameSequence(frames: images, keyTimes: keyTimes, totalDuration: totalDuration)
-        self.sequenceCache.setObject(seq, forKey: cacheKey as NSString, cost: images.count * maxPixelSize)
+        let byteCost = images.reduce(0) { $0 + ($1.bytesPerRow * $1.height) }
+        self.sequenceCache.setObject(seq, forKey: cacheKey as NSString, cost: max(1024, byteCost))
         return seq
     }
 
@@ -1299,6 +1576,7 @@ public final class FullGramAvatarFrameView: UIView {
     private var currentFrameId: String?
     private var pendingFrameId: String?
     private var activeThumbToken: UUID?
+    public var onLoadingStateChanged: ((Bool) -> Void)?
 
     public override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1306,6 +1584,9 @@ public final class FullGramAvatarFrameView: UIView {
         self.backgroundColor = .clear
         self.clipsToBounds = false
         self.frameLayer.contentsGravity = .resizeAspect
+        self.frameLayer.contentsScale = UIScreen.main.scale
+        self.frameLayer.minificationFilter = .trilinear
+        self.frameLayer.magnificationFilter = .trilinear
         self.layer.addSublayer(self.frameLayer)
     }
 
@@ -1335,6 +1616,7 @@ public final class FullGramAvatarFrameView: UIView {
         self.currentFrameId = nil
         self.frameLayer.removeAllAnimations()
         self.frameLayer.contents = nil
+        self.onLoadingStateChanged?(false)
     }
 
     public func configureThumbnail(with preset: FullGramAvatarFramePreset?) {
@@ -1346,10 +1628,12 @@ public final class FullGramAvatarFrameView: UIView {
             self.frameLayer.removeAllAnimations()
             self.frameLayer.contents = nil
             self.isHidden = true
+            self.onLoadingStateChanged?(false)
             return
         }
         self.isHidden = false
         if self.currentFrameId == preset.id && self.frameLayer.contents != nil {
+            self.onLoadingStateChanged?(false)
             return
         }
         self.currentFrameId = nil
@@ -1360,15 +1644,18 @@ public final class FullGramAvatarFrameView: UIView {
         if let cached = FullGramAnimatedImageDecoder.cachedThumbnail(cacheKey: preset.id) {
             self.currentFrameId = preset.id
             self.frameLayer.contents = cached
+            self.onLoadingStateChanged?(false)
             return
         }
+        self.onLoadingStateChanged?(true)
         let targetId = preset.id
-        self.activeThumbToken = FullGramAnimatedImageDecoder.thumbnailAsync(for: preset, maxPixelSize: 112) { [weak self] img in
+        self.activeThumbToken = FullGramAnimatedImageDecoder.thumbnailAsync(for: preset, maxPixelSize: 180) { [weak self] img in
             Task { @MainActor in
                 guard let self, self.pendingFrameId == targetId else { return }
                 self.activeThumbToken = nil
                 self.currentFrameId = targetId
                 self.frameLayer.contents = img
+                self.onLoadingStateChanged?(false)
             }
         }
     }
@@ -1385,7 +1672,7 @@ public final class FullGramAvatarFrameView: UIView {
             return
         }
         self.isHidden = false
-        if self.currentFrameId == preset.id && self.frameLayer.contents != nil && self.frameLayer.animation(forKey: "fg_frame_anim") != nil {
+        if self.currentFrameId == preset.id && self.frameLayer.contents != nil && self.frameLayer.animation(forKey: "fg.apng") != nil {
             return
         }
         self.currentFrameId = nil
@@ -1441,6 +1728,7 @@ public final class FullGramProfileEffectOverlayView: UIView {
     private var currentEffectId: String?
     private var pendingEffectId: String?
     private var activeThumbToken: UUID?
+    public var onLoadingStateChanged: ((Bool) -> Void)?
 
     public override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1448,7 +1736,13 @@ public final class FullGramProfileEffectOverlayView: UIView {
         self.backgroundColor = .clear
         self.clipsToBounds = true
         self.introLayer.contentsGravity = .resizeAspectFill
+        self.introLayer.contentsScale = UIScreen.main.scale
+        self.introLayer.minificationFilter = .trilinear
+        self.introLayer.magnificationFilter = .trilinear
         self.ambientLayer.contentsGravity = .resizeAspectFill
+        self.ambientLayer.contentsScale = UIScreen.main.scale
+        self.ambientLayer.minificationFilter = .trilinear
+        self.ambientLayer.magnificationFilter = .trilinear
         self.layer.addSublayer(self.ambientLayer)
         self.layer.addSublayer(self.introLayer)
     }
@@ -1473,12 +1767,13 @@ public final class FullGramProfileEffectOverlayView: UIView {
         self.introLayer.contents = nil
         self.ambientLayer.removeAllAnimations()
         self.ambientLayer.contents = nil
+        self.onLoadingStateChanged?(false)
     }
 
     public func configureThumbnail(with preset: FullGramProfileEffectPreset?) {
         FullGramAnimatedImageDecoder.cancelThumbnail(token: self.activeThumbToken)
         self.activeThumbToken = nil
-        guard let preset, let firstURL = preset.layerURLs.first else {
+        guard let preset, !preset.layerURLs.isEmpty else {
             self.currentEffectId = nil
             self.pendingEffectId = nil
             self.introLayer.removeAllAnimations()
@@ -1486,10 +1781,12 @@ public final class FullGramProfileEffectOverlayView: UIView {
             self.ambientLayer.removeAllAnimations()
             self.ambientLayer.contents = nil
             self.isHidden = true
+            self.onLoadingStateChanged?(false)
             return
         }
         self.isHidden = false
         if self.currentEffectId == preset.id && self.introLayer.contents != nil {
+            self.onLoadingStateChanged?(false)
             return
         }
         self.currentEffectId = nil
@@ -1499,23 +1796,26 @@ public final class FullGramProfileEffectOverlayView: UIView {
         self.ambientLayer.removeAllAnimations()
         self.ambientLayer.contents = nil
 
-        let cacheKey = "pe_\(preset.id)_0"
+        let cacheKey = "pe_\(preset.id)_thumb"
         if let cached = FullGramAnimatedImageDecoder.cachedThumbnail(cacheKey: cacheKey) {
             self.currentEffectId = preset.id
             self.introLayer.contents = cached
+            self.onLoadingStateChanged?(false)
             return
         }
+        self.onLoadingStateChanged?(true)
         let targetId = preset.id
         self.activeThumbToken = FullGramAnimatedImageDecoder.profileEffectThumbnailAsync(
             effectId: targetId,
-            urlString: firstURL,
-            maxPixelSize: 160
+            layerURLs: preset.layerURLs,
+            maxPixelSize: 320
         ) { [weak self] img in
             Task { @MainActor in
                 guard let self, self.pendingEffectId == targetId else { return }
                 self.activeThumbToken = nil
                 self.currentEffectId = targetId
                 self.introLayer.contents = img
+                self.onLoadingStateChanged?(false)
             }
         }
     }

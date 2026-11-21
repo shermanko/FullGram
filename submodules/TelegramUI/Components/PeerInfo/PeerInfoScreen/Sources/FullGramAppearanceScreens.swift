@@ -81,7 +81,7 @@ private enum FullGramFontsEntry: ItemListNodeEntry {
             return ItemListCheckboxItem(
                 presentationData: presentationData,
                 systemStyle: .glass,
-                title: "\(option.title)  —  \(option.sample)",
+                title: option.title,
                 style: .right,
                 checked: selected,
                 zeroSeparatorInsets: false,
@@ -120,7 +120,7 @@ private enum FullGramFontsEntry: ItemListNodeEntry {
     }
 }
 
-func fullGramFontsController(context: AccountContext) -> ViewController {
+public func fullGramFontsController(context: AccountContext) -> ViewController {
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
     let dlState = FullGramFontDownloadState()
@@ -137,8 +137,10 @@ func fullGramFontsController(context: AccountContext) -> ViewController {
     let args = FullGramFontsArguments(
         select: { option in
             if !option.isRemote || FullGramFonts.isDownloaded(option) {
-                _ = FullGramFonts.registerFontFileIfNeeded(option: option)
-                FullGramFonts.selectedId = option.id
+                if FullGramFonts.selectedId == option.id {
+                    return
+                }
+                FullGramFonts.selectAndRestart(optionId: option.id)
                 return
             }
             guard dlState.downloadingId == nil else { return }
@@ -865,31 +867,27 @@ private let fullGramStandardIcons: [FullGramIconPreset] = [
     FullGramIconPreset(iconName: nil, title: "Стандартная (FullGram)", isMonochrome: false, previewResource: "FullGramIcon_FullGramDefault"),
     FullGramIconPreset(iconName: "BlueClassicIcon", title: "Классическая синяя", isMonochrome: false, previewResource: nil),
     FullGramIconPreset(iconName: "BlueFilledIcon", title: "Синяя заливка", isMonochrome: false, previewResource: nil),
-    FullGramIconPreset(iconName: "BlackIcon", title: "Чёрная", isMonochrome: true, previewResource: nil),
-    FullGramIconPreset(iconName: "BlackClassicIcon", title: "Классическая чёрная", isMonochrome: true, previewResource: nil),
-    FullGramIconPreset(iconName: "BlackFilledIcon", title: "Чёрная заливка", isMonochrome: true, previewResource: nil),
     FullGramIconPreset(iconName: "WhiteFilledIcon", title: "Белая (монохромная)", isMonochrome: true, previewResource: nil),
     FullGramIconPreset(iconName: "New1", title: "Ночь", isMonochrome: true, previewResource: nil),
     FullGramIconPreset(iconName: "New2", title: "Рассвет", isMonochrome: false, previewResource: nil),
     FullGramIconPreset(iconName: "Premium", title: "Премиум", isMonochrome: false, previewResource: nil),
-    FullGramIconPreset(iconName: "PremiumBlack", title: "Премиум чёрная", isMonochrome: true, previewResource: nil),
     FullGramIconPreset(iconName: "PremiumTurbo", title: "Премиум турбо", isMonochrome: false, previewResource: nil)
 ]
 
 private let fullGramCustomIcons: [FullGramIconPreset] = [
-    FullGramIconPreset(iconName: "FullGramDefault", title: "FullGram Chrome", isMonochrome: false, previewResource: "FullGramIcon_FullGramDefault"),
-    FullGramIconPreset(iconName: "FullGramRed", title: "FullGram Red", isMonochrome: false, previewResource: "FullGramIcon_FullGramRed"),
-    FullGramIconPreset(iconName: "FullGramOrange", title: "FullGram Orange", isMonochrome: false, previewResource: "FullGramIcon_FullGramOrange"),
-    FullGramIconPreset(iconName: "FullGramCyan", title: "Cyan Neon", isMonochrome: false, previewResource: "FullGramIcon_FullGramCyan"),
-    FullGramIconPreset(iconName: "FullGramPurple", title: "Violet Plasma", isMonochrome: false, previewResource: "FullGramIcon_FullGramPurple"),
-    FullGramIconPreset(iconName: "FullGramGold", title: "Royal Gold", isMonochrome: false, previewResource: "FullGramIcon_FullGramGold"),
-    FullGramIconPreset(iconName: "FullGramEmerald", title: "Toxic Matrix", isMonochrome: false, previewResource: "FullGramIcon_FullGramEmerald"),
-    FullGramIconPreset(iconName: "FullGramSakura", title: "Sakura Pink", isMonochrome: false, previewResource: "FullGramIcon_FullGramSakura"),
-    FullGramIconPreset(iconName: "FullGramArctic", title: "Arctic Ice", isMonochrome: false, previewResource: "FullGramIcon_FullGramArctic"),
-    FullGramIconPreset(iconName: "FullGramVapor", title: "Vaporwave", isMonochrome: false, previewResource: "FullGramIcon_FullGramVapor"),
-    FullGramIconPreset(iconName: "FullGramMidnight", title: "Stealth Carbon", isMonochrome: true, previewResource: "FullGramIcon_FullGramMidnight"),
-    FullGramIconPreset(iconName: "FullGramSunset", title: "Sunset Glow", isMonochrome: false, previewResource: "FullGramIcon_FullGramSunset"),
-    FullGramIconPreset(iconName: "FullGramHolo", title: "Holographic", isMonochrome: false, previewResource: "FullGramIcon_FullGramHolo"),
+    FullGramIconPreset(iconName: "FullGramDefault", title: "FullGram Белая", isMonochrome: false, previewResource: "FullGramIcon_FullGramDefault"),
+    FullGramIconPreset(iconName: "FullGramRed", title: "FullGram Красная", isMonochrome: false, previewResource: "FullGramIcon_FullGramRed"),
+    FullGramIconPreset(iconName: "FullGramOrange", title: "FullGram Оранжевая", isMonochrome: false, previewResource: "FullGramIcon_FullGramOrange"),
+    FullGramIconPreset(iconName: "FullGramCyan", title: "FullGram Неон", isMonochrome: false, previewResource: "FullGramIcon_FullGramCyan"),
+    FullGramIconPreset(iconName: "FullGramPurple", title: "FullGram Розовая", isMonochrome: false, previewResource: "FullGramIcon_FullGramPurple"),
+    FullGramIconPreset(iconName: "FullGramGold", title: "FullGram Жёлтая", isMonochrome: false, previewResource: "FullGramIcon_FullGramGold"),
+    FullGramIconPreset(iconName: "FullGramEmerald", title: "FullGram Зелёная", isMonochrome: false, previewResource: "FullGramIcon_FullGramEmerald"),
+    FullGramIconPreset(iconName: "FullGramSakura", title: "FullGram Сакура", isMonochrome: false, previewResource: "FullGramIcon_FullGramSakura"),
+    FullGramIconPreset(iconName: "FullGramArctic", title: "FullGram Синяя", isMonochrome: false, previewResource: "FullGramIcon_FullGramArctic"),
+    FullGramIconPreset(iconName: "FullGramVapor", title: "FullGram Вапор", isMonochrome: false, previewResource: "FullGramIcon_FullGramVapor"),
+    FullGramIconPreset(iconName: "FullGramMidnight", title: "FullGram Индиго", isMonochrome: true, previewResource: "FullGramIcon_FullGramMidnight"),
+    FullGramIconPreset(iconName: "FullGramSunset", title: "FullGram Закат", isMonochrome: false, previewResource: "FullGramIcon_FullGramSunset"),
+    FullGramIconPreset(iconName: "FullGramHolo", title: "FullGram Голограмма", isMonochrome: false, previewResource: "FullGramIcon_FullGramHolo"),
     FullGramIconPreset(iconName: "FullGramMascot", title: "Mascot Classic", isMonochrome: false, previewResource: "FullGramIcon_FullGramMascot"),
     FullGramIconPreset(iconName: "FullGramMascotNeon", title: "Mascot Cyber", isMonochrome: false, previewResource: "FullGramIcon_FullGramMascotNeon"),
     FullGramIconPreset(iconName: "FullGramMascotGold", title: "Mascot Royal", isMonochrome: false, previewResource: "FullGramIcon_FullGramMascotGold")
@@ -1022,7 +1020,7 @@ func fullGramAppIconsController(context: AccountContext) -> ViewController {
             if value, UIApplication.shared.supportsAlternateIcons {
                 let current = UIApplication.shared.alternateIconName
                 if fullGramStandardIcons.first(where: { $0.iconName == current })?.isMonochrome != true {
-                    UIApplication.shared.setAlternateIconName("BlackIcon") { _ in
+                    UIApplication.shared.setAlternateIconName("WhiteFilledIcon") { _ in
                         DispatchQueue.main.async {
                             changed.set(version.modify { $0 + 1 })
                         }

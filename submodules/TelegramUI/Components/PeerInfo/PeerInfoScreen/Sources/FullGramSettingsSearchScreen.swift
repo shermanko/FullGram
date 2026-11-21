@@ -400,8 +400,15 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
             id: 34,
             title: "Иконки приложения",
             subtitle: "Оформление",
-            keywords: "иконка приложения mascot красная оранжевая монохромная",
+            keywords: "иконка приложения mascot красная зелёная синяя жёлтая розовая белая цветная",
             destination: { fullGramAppIconsController(context: $0) }
+        ),
+        FullGramSearchItem(
+            id: 36,
+            title: "Энергосбережение",
+            subtitle: "Прочее",
+            keywords: "энергосбережение батарея заряд экономия анимации автовоспроизведение",
+            destination: { fullGramPowerSavingController(context: $0) }
         ),
 
         // Безопасность и Анти-скам

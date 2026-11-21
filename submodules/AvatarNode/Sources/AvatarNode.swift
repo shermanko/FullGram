@@ -1227,6 +1227,7 @@ public final class AvatarNode: ASDisplayNode {
     private var fullGramFrameView: FullGramAvatarFrameView?
     private var fullGramFrameObserver: NSObjectProtocol?
     private var fullGramIsSelfPeer: Bool = false
+    private var fullGramSuppressFrame: Bool = false
     private var fullGramPeerId: Int64?
     private var fullGramAccountPeerId: Int64? {
         didSet {
@@ -1335,6 +1336,11 @@ public final class AvatarNode: ASDisplayNode {
 
     private func updateFullGramFrame() {
         guard self.isNodeLoaded else { return }
+        guard !self.fullGramSuppressFrame else {
+            self.fullGramFrameView?.isHidden = true
+            self.fullGramFrameView?.stop()
+            return
+        }
         guard let peerId = self.fullGramPeerId, peerId != 0 else {
             if let existing = self.fullGramFrameView, !existing.isHidden {
                 existing.configure(with: nil)
@@ -1400,9 +1406,15 @@ public final class AvatarNode: ASDisplayNode {
     ) {
         let acctId = accountPeerId.toInt64()
         FullGramCloudCosmetics.shared.setActiveSelfPeerId(acctId)
-        self.fullGramIsSelfPeer = (peer?.id == accountPeerId)
-        self.fullGramPeerId = peer?.id.toInt64()
+        let suppressFrame = (overrideImage != nil)
+        self.fullGramSuppressFrame = suppressFrame
+        self.fullGramIsSelfPeer = !suppressFrame && (peer?.id == accountPeerId)
+        self.fullGramPeerId = suppressFrame ? nil : peer?.id.toInt64()
         self.fullGramAccountPeerId = acctId
+        if !suppressFrame, peer?.id != accountPeerId {
+            FullGramCloudCosmetics.shared.refreshIfNeeded(maxAge: 45.0)
+        }
+        self.updateFullGramFrame()
         self.contentNode.setPeer(
             accountPeerId: accountPeerId,
             postbox: postbox,
@@ -1434,9 +1446,15 @@ public final class AvatarNode: ASDisplayNode {
     ) {
         let acctId = genericContext.account.peerId.toInt64()
         FullGramCloudCosmetics.shared.setActiveSelfPeerId(acctId)
-        self.fullGramIsSelfPeer = (peer?.id == genericContext.account.peerId)
-        self.fullGramPeerId = peer?.id.toInt64()
+        let suppressFrame = (overrideImage != nil)
+        self.fullGramSuppressFrame = suppressFrame
+        self.fullGramIsSelfPeer = !suppressFrame && (peer?.id == genericContext.account.peerId)
+        self.fullGramPeerId = suppressFrame ? nil : peer?.id.toInt64()
         self.fullGramAccountPeerId = acctId
+        if !suppressFrame, peer?.id != genericContext.account.peerId {
+            FullGramCloudCosmetics.shared.refreshIfNeeded(maxAge: 45.0)
+        }
+        self.updateFullGramFrame()
         self.contentNode.setPeerV2(
             context: genericContext,
             theme: theme,
@@ -1468,9 +1486,15 @@ public final class AvatarNode: ASDisplayNode {
         let acctPeerId = account?.peerId ?? context.account.peerId
         let acctId = acctPeerId.toInt64()
         FullGramCloudCosmetics.shared.setActiveSelfPeerId(acctId)
-        self.fullGramIsSelfPeer = (peer?.id == acctPeerId)
-        self.fullGramPeerId = peer?.id.toInt64()
+        let suppressFrame = (overrideImage != nil)
+        self.fullGramSuppressFrame = suppressFrame
+        self.fullGramIsSelfPeer = !suppressFrame && (peer?.id == acctPeerId)
+        self.fullGramPeerId = suppressFrame ? nil : peer?.id.toInt64()
         self.fullGramAccountPeerId = acctId
+        if !suppressFrame, peer?.id != acctPeerId {
+            FullGramCloudCosmetics.shared.refreshIfNeeded(maxAge: 45.0)
+        }
+        self.updateFullGramFrame()
         self.contentNode.setPeer(
             context: context,
             account: account,
@@ -1488,7 +1512,11 @@ public final class AvatarNode: ASDisplayNode {
     }
     
     public func setCustomLetters(_ letters: [String], explicitColor: AvatarNodeColorOverride? = nil, icon: AvatarNodeExplicitIcon? = nil) {
+        self.fullGramSuppressFrame = true
+        self.fullGramIsSelfPeer = false
+        self.fullGramPeerId = nil
         self.contentNode.setCustomLetters(letters, explicitColor: explicitColor, icon: icon)
+        self.updateFullGramFrame()
     }
     
     public func setStoryStats(storyStats: StoryStats?, presentationParams: StoryPresentationParams, transition: ComponentTransition) {

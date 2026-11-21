@@ -135,6 +135,12 @@ public struct Font {
     private final class Cache {
         private var lock: pthread_rwlock_t
         private var fonts: [String: UIFont] = [:]
+
+        func clear() {
+            pthread_rwlock_wrlock(&self.lock)
+            self.fonts.removeAll()
+            pthread_rwlock_unlock(&self.lock)
+        }
         
         init() {
             self.lock = pthread_rwlock_t()
@@ -158,6 +164,10 @@ public struct Font {
     }
 
     private static let cache = Cache()
+
+    public static func clearCache() {
+        Self.cache.clear()
+    }
     
     private static func fullGramCustomFont(_ size: CGFloat) -> UIFont? {
         guard let name = FullGramFonts.launchFontName else { return nil }

@@ -312,6 +312,8 @@ public final class SharedAccountContextImpl: SharedAccountContext {
     }
     private var experimentalUISettingsDisposable: Disposable?
     private var fullGramExtrasObserver: NSObjectProtocol?
+    private var fullGramPowerSavingObserver: NSObjectProtocol?
+    private var fullGramForegroundObserver: NSObjectProtocol?
     
     public var presentGlobalController: (ViewController, Any?) -> Void = { _, _ in }
     public var presentCrossfadeController: () -> Void = {}
@@ -612,11 +614,22 @@ public final class SharedAccountContextImpl: SharedAccountContext {
                 return nil
             }
         }
-        let _ = NotificationCenter.default.addObserver(forName: FullGramPowerSaving.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+        self.fullGramPowerSavingObserver = NotificationCenter.default.addObserver(forName: FullGramPowerSaving.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
             guard let strongSelf = self else { return }
             let next = strongSelf.currentAutomaticMediaDownloadSettings
             let lpm = automaticEnergyUsageShouldBeOnNow(settings: next)
             strongSelf.energyUsageSettings = FullGramPowerSaving.apply(to: next.energyUsageSettings, isSystemLowPowerMode: lpm)
+        }
+        FullGramCloudCosmetics.shared.refreshIfNeeded(maxAge: 10.0)
+        FullGramBadges.shared.refreshIfNeeded()
+        FullGramSponsors.shared.refreshIfNeeded(maxAge: 10.0)
+        FullGramDiscordCosmeticsCatalog.shared.refreshIfNeeded(maxAge: 21600.0)
+        self.fullGramForegroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { _ in
+            FullGramCloudCosmetics.shared.refreshIfNeeded(maxAge: 20.0)
+            FullGramBadges.shared.refreshIfNeeded()
+            FullGramSponsors.shared.refreshIfNeeded(maxAge: 20.0)
+            FullGramGrantedNFTStore.shared.refreshIfNeeded(maxAge: 20.0)
+            FullGramDiscordCosmeticsCatalog.shared.refreshIfNeeded(maxAge: 21600.0)
         }
         self.automaticMediaDownloadSettingsDisposable.set(self._automaticMediaDownloadSettings.get().start(next: { [weak self] next in
             if let strongSelf = self {
@@ -1185,6 +1198,12 @@ public final class SharedAccountContextImpl: SharedAccountContext {
         self.registeredNotificationTokensDisposable.dispose()
         self.presentationDataDisposable.dispose()
         if let observer = self.fullGramExtrasObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = self.fullGramPowerSavingObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = self.fullGramForegroundObserver {
             NotificationCenter.default.removeObserver(observer)
         }
         self.automaticMediaDownloadSettingsDisposable.dispose()

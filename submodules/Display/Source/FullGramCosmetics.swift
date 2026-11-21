@@ -240,7 +240,7 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.65, execute: item)
     }
 
-    private func performPushToCloud(peerId norm: Int64, entry: FullGramUserCosmetics, generation: Int) {
+    private func performPushToCloud(peerId norm: Int64, entry: FullGramUserCosmetics, generation: Int, didRetry: Bool = false) {
         self.lock.lock()
         let isLatest = (self.pushGeneration == generation)
         self.lock.unlock()
@@ -257,19 +257,118 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
         ]
 
         guard let data = try? JSONSerialization.data(withJSONObject: body, options: []) else { return }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
-        _ = FullGramAdmin.shared.applyAuthHeaders(to: &req)
-        req.httpBody = data
-        Self.session.dataTask(with: req) { _, response, _ in
-            if let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) {
-                UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastSyncKey)
+
+        FullGramAdmin.shared.ensureClientSession(peerId: norm, forceRefresh: didRetry) { [weak self] sessionResult in
+            guard let self else { return }
+            self.lock.lock()
+            let stillLatest = (self.pushGeneration == generation)
+            self.lock.unlock()
+            guard stillLatest else { return }
+
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.timeoutInterval = 15.0
+            req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+            let clientToken = (try? sessionResult.get())
+            guard FullGramAdmin.shared.applyClientOrAdminAuthHeaders(to: &req, preferredClientToken: clientToken) else {
+                return
             }
-        }.resume()
+            req.httpBody = data
+            Self.session.dataTask(with: req) { [weak self] _, response, _ in
+                guard let self else { return }
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                if status == 401 && !didRetry {
+                    FullGramAdmin.shared.clearClientSession()
+                    self.performPushToCloud(peerId: norm, entry: entry, generation: generation, didRetry: true)
+                    return
+                }
+                if (200 ..< 300).contains(status) {
+                    UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastSyncKey)
+                }
+            }.resume()
+        }
     }
 
-    public func refreshIfNeeded(maxAge: TimeInterval = 90.0) {
+    public func uploadCustomFrame(
+        peerId: Int64,
+        data: Data,
+        isGif: Bool = false,
+        didRetry: Bool = false,
+        completion: (@Sendable (Result<String, Error>) -> Void)? = nil
+    ) {
+        let norm = Self.normalizedPeerId(peerId)
+        guard norm > 0, !data.isEmpty else {
+            completion?(.failure(NSError(domain: "FullGramCloudCosmetics", code: 400, userInfo: [NSLocalizedDescriptionKey: "Invalid frame data"])))
+            return
+        }
+        var preparedData = data
+        if !isGif, preparedData.count > 1_200_000, let uiImg = UIImage(data: preparedData) {
+            let targetSize = CGSize(width: 320.0, height: 320.0)
+            let renderer = UIGraphicsImageRenderer(size: targetSize)
+            let resized = renderer.image { _ in
+                uiImg.draw(in: CGRect(origin: .zero, size: targetSize))
+            }
+            if let png = resized.pngData(), !png.isEmpty {
+                preparedData = png
+            }
+        }
+        guard let uploadURL = URL(string: FullGramAdmin.workerBaseURL + "/cosmetics/upload-frame") else {
+            completion?(.failure(NSError(domain: "FullGramCloudCosmetics", code: 400, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])))
+            return
+        }
+
+        FullGramAdmin.shared.ensureClientSession(peerId: norm, forceRefresh: didRetry) { [weak self] sessionResult in
+            guard let self else { return }
+            switch sessionResult {
+            case let .failure(err):
+                DispatchQueue.main.async { completion?(.failure(err)) }
+            case let .success(token):
+                let payload: [String: Any] = [
+                    "peerId": String(norm),
+                    "imageBase64": preparedData.base64EncodedString(),
+                    "ext": isGif ? "gif" : "png"
+                ]
+                guard let bodyData = try? JSONSerialization.data(withJSONObject: payload, options: []) else {
+                    DispatchQueue.main.async {
+                        completion?(.failure(NSError(domain: "FullGramCloudCosmetics", code: 400, userInfo: [NSLocalizedDescriptionKey: "Encoding error"])))
+                    }
+                    return
+                }
+                var req = URLRequest(url: uploadURL)
+                req.httpMethod = "POST"
+                req.timeoutInterval = 25.0
+                req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+                _ = FullGramAdmin.shared.applyClientOrAdminAuthHeaders(to: &req, preferredClientToken: token)
+                req.httpBody = bodyData
+
+                Self.session.dataTask(with: req) { [weak self] respData, response, error in
+                    guard let self else { return }
+                    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    if status == 401 && !didRetry {
+                        FullGramAdmin.shared.clearClientSession()
+                        self.uploadCustomFrame(peerId: norm, data: data, isGif: isGif, didRetry: true, completion: completion)
+                        return
+                    }
+                    if let error {
+                        DispatchQueue.main.async { completion?(.failure(error)) }
+                        return
+                    }
+                    let json = respData.flatMap { try? JSONSerialization.jsonObject(with: $0, options: []) as? [String: Any] } ?? [:]
+                    if (200 ..< 300).contains(status), let remoteUrl = json["url"] as? String, !remoteUrl.isEmpty {
+                        self.setFrame(forPeerId: norm, frameId: "custom", customFrameUrl: remoteUrl)
+                        DispatchQueue.main.async { completion?(.success(remoteUrl)) }
+                    } else {
+                        let msg = (json["error"] as? String) ?? "HTTP \(status)"
+                        DispatchQueue.main.async {
+                            completion?(.failure(NSError(domain: "FullGramCloudCosmetics", code: status, userInfo: [NSLocalizedDescriptionKey: msg])))
+                        }
+                    }
+                }.resume()
+            }
+        }
+    }
+
+    public func refreshIfNeeded(maxAge: TimeInterval = 25.0) {
         let last = UserDefaults.standard.double(forKey: Self.lastSyncKey)
         if Date().timeIntervalSince1970 - last < maxAge {
             return
