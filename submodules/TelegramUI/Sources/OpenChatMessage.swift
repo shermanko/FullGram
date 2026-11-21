@@ -279,6 +279,61 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                             presentDocumentPreviewController(rootController: rootController, theme: presentationData.theme, strings: presentationData.strings, postbox: params.context.account.postbox, file: file, canShare: canShare)
                         }
                     }
+                    let openFullGramViewerIfSupported: () -> Bool = {
+                        let ext = (file.fileName as NSString?)?.pathExtension.lowercased() ?? ""
+                        let mime = file.mimeType.lowercased()
+                        let isDoc = ext == "pdf" || ext == "docx" || ext == "xlsx"
+                            || mime == "application/pdf"
+                            || mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            || mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        let isArchive = ext == "zip" || ext == "rar"
+                            || mime == "application/zip"
+                            || mime == "application/x-zip-compressed"
+                            || mime == "application/vnd.rar"
+                            || mime == "application/x-rar-compressed"
+                        guard isDoc || isArchive else {
+                            return false
+                        }
+                        let canShare = !params.message.isCopyProtected() && !params.copyProtected
+                        let resolvedName: String
+                        if let name = file.fileName, !name.isEmpty {
+                            resolvedName = name
+                        } else if mime.contains("pdf") {
+                            resolvedName = "document.pdf"
+                        } else if mime.contains("wordprocessingml") {
+                            resolvedName = "document.docx"
+                        } else if mime.contains("spreadsheetml") {
+                            resolvedName = "document.xlsx"
+                        } else if mime.contains("rar") {
+                            resolvedName = "archive.rar"
+                        } else {
+                            resolvedName = "archive.zip"
+                        }
+                        let _ = messageMediaFileInteractiveFetched(context: params.context, message: params.message, file: file, userInitiated: true).startStandalone()
+                        let _ = (params.context.engine.resources.data(id: EngineMediaResource.Id(file.resource.id))
+                        |> filter { $0.isComplete }
+                        |> take(1)
+                        |> deliverOnMainQueue).startStandalone(next: { data in
+                            let fileURL = URL(fileURLWithPath: data.path)
+                            let viewer: ViewController
+                            if isArchive {
+                                viewer = FullGramArchivePreviewController(fileURL: fileURL, fileName: resolvedName)
+                            } else {
+                                viewer = FullGramDocumentViewerController(fileURL: fileURL, fileName: resolvedName, canShare: canShare)
+                            }
+                            if let navigationController = params.navigationController {
+                                navigationController.pushViewController(viewer)
+                            } else {
+                                params.present(viewer, nil, .window(.root))
+                            }
+                        })
+                        return true
+                    }
+                    let openProceed = {
+                        if !openFullGramViewerIfSupported() {
+                            proceed()
+                        }
+                    }
                     let lowerExt = (file.fileName as NSString?)?.pathExtension.lowercased() ?? ""
                     if lowerExt == "lua" || lowerExt == "py" {
                         let pluginFileName = file.fileName ?? "plugin.\(lowerExt)"
@@ -314,15 +369,15 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                         ]), nil, .window(.root))
                     } else if file.mimeType.contains("image/svg") {
                         let presentationData = params.context.sharedContext.currentPresentationData.with { $0 }
-                        params.present(textAlertController(context: params.context, title: nil, text: presentationData.strings.OpenFile_PotentiallyDangerousContentAlert, actions: [TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {}), TextAlertAction(type: .defaultAction, title: presentationData.strings.OpenFile_Proceed, action: { proceed() })] ), nil, .window(.root))
+                        params.present(textAlertController(context: params.context, title: nil, text: presentationData.strings.OpenFile_PotentiallyDangerousContentAlert, actions: [TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {}), TextAlertAction(type: .defaultAction, title: presentationData.strings.OpenFile_Proceed, action: { openProceed() })] ), nil, .window(.root))
                     } else if let dangerReason = FullGramAntiScam.shared.inspectFileName(file.fileName) {
                         FullGramAntiScam.shared.recordDetection()
                         params.present(textAlertController(context: params.context, title: "Анти-скам: опасный файл", text: dangerReason, actions: [
                             TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_Cancel, action: {}),
-                            TextAlertAction(type: .destructiveAction, title: "Всё равно открыть", action: { proceed() })
+                            TextAlertAction(type: .destructiveAction, title: "Всё равно открыть", action: { openProceed() })
                         ]), nil, .window(.root))
                     } else {
-                        proceed()
+                        openProceed()
                     }
                 }
                 return true

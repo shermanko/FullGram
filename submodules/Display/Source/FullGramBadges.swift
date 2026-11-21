@@ -82,6 +82,7 @@ public final class FullGramBadges {
         "creator": FullGramBadgeRole(label: "Создатель FullGram", shortLabel: "CREATOR", emoji: "👑", color: "#FF9500"),
         "official": FullGramBadgeRole(label: "Официальный ресурс FullGram", shortLabel: "FULLGRAM", emoji: "🛡", color: "#007AFF"),
         "sponsor": FullGramBadgeRole(label: "Спонсор FullGram", shortLabel: "SPONSOR", emoji: "💎", color: "#5856D6"),
+        "sponsor_plus": FullGramBadgeRole(label: "Спонсор+ FullGram", shortLabel: "SPONSOR+", emoji: "💠", color: "#FF2D55"),
         "premium": FullGramBadgeRole(label: "FullGram+", shortLabel: "FG+", emoji: "💎", color: "#AF52DE"),
         "dev": FullGramBadgeRole(label: "Разработчик", shortLabel: "DEV", emoji: "⚡", color: "#34C759")
     ]

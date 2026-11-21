@@ -196,17 +196,34 @@ func infoItems(
             }))
         }
         let isAdminUser = fullGramCanOpenAdmin(context: context)
-        let isOwnSponsorProfile = !isAdminUser && (user.id == context.account.peerId) && fullGramIsSelfSponsor(context: context)
-        if isAdminUser || isOwnSponsorProfile {
+        let isSelfSponsor = !isAdminUser && fullGramIsSelfSponsor(context: context)
+        let isSelfSponsorPlus = !isAdminUser && fullGramIsSelfSponsorPlus(context: context)
+        let isOwnSponsorProfile = isSelfSponsor && (user.id == context.account.peerId)
+        let isOtherProfileForSponsorPlus = isSelfSponsorPlus && (user.id != context.account.peerId)
+        if isAdminUser || isOwnSponsorProfile || isOtherProfileForSponsorPlus {
             let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
             let badgePeerId = user.id.toInt64()
             let badgeUsername = user.addressName
-            let statusLabel = fullGramBadgeRowStatusLabel(peerId: badgePeerId, username: badgeUsername, russian: ru)
-            let sponsorMode = !isAdminUser && isOwnSponsorProfile
+            let sponsorMode = !isAdminUser
+            let rowText: String
+            let rowLabel: String
+            if isOtherProfileForSponsorPlus {
+                rowText = ru ? "Выдать NFT (Спонсор+)" : "Grant NFT (Sponsor+)"
+                let nftCount = FullGramGrantedNFTStore.shared.gifts(forPeerId: badgePeerId).count
+                rowLabel = nftCount > 0 ? "\(nftCount) NFT" : (ru ? "Выдать" : "Grant")
+            } else if isOwnSponsorProfile {
+                rowLabel = fullGramBadgeRowStatusLabel(peerId: badgePeerId, username: badgeUsername, russian: ru)
+                rowText = isSelfSponsorPlus
+                    ? (ru ? "Спонсор+ (Бейдж и NFT)" : "Sponsor+ (Badge & NFT)")
+                    : (ru ? "Спонсор (Бейдж и NFT)" : "Sponsor (Badge & NFT)")
+            } else {
+                rowLabel = fullGramBadgeRowStatusLabel(peerId: badgePeerId, username: badgeUsername, russian: ru)
+                rowText = ru ? "Бейдж" : "Badge"
+            }
             items[currentPeerInfoSection]!.append(PeerInfoScreenDisclosureItem(
                 id: ItemFullGramBadge,
-                label: .text(statusLabel),
-                text: sponsorMode ? (ru ? "Спонсор (Бейдж и NFT)" : "Sponsor (Badge & NFT)") : (ru ? "Бейдж" : "Badge"),
+                label: .text(rowLabel),
+                text: rowText,
                 icon: fullGramBadgeMenuIcon(),
                 action: {
                     guard let controller = interaction.getController() else {
@@ -994,6 +1011,26 @@ func infoItems(
         }
     }
     
+    if let peer = data.peer {
+        let confirmPid = peer.id.toInt64()
+        let confirmEnabled = FullGramExtras.shared.isConfirmSendChat(confirmPid)
+        let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+        items[.peerInfo]!.append(PeerInfoScreenDisclosureItem(
+            id: "fullgram-confirm-send-chat",
+            label: .text(confirmEnabled ? (ru ? "Вкл" : "On") : (ru ? "Выкл" : "Off")),
+            text: ru ? "Запрос перед отправкой" : "Confirm before sending",
+            icon: nil,
+            action: {
+                let nowEnabled = FullGramExtras.shared.toggleConfirmSendChat(confirmPid)
+                let noticeText = nowEnabled
+                    ? (ru ? "Включён запрос «Вы точно хотите это отправить?» для этого чата" : "Send confirmation enabled for this chat")
+                    : (ru ? "Запрос перед отправкой для этого чата отключён" : "Send confirmation disabled for this chat")
+                interaction.getController()?.present(UndoOverlayController(presentationData: presentationData, content: .info(title: nil, text: noticeText, timeout: nil, customUndoText: nil), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), in: .current)
+                interaction.requestLayout(false)
+            }
+        ))
+    }
+
     if FullGramExtras.shared.showPeerIds, let peer = data.peer {
         let value: String
         switch peer.id.namespace {

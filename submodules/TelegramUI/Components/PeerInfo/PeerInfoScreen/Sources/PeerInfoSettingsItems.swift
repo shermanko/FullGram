@@ -503,16 +503,25 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
     }
     let isAdminUser = fullGramCanOpenAdmin(context: context)
     let isSelfSponsor = !isAdminUser && fullGramIsSelfSponsor(context: context)
+    let isSelfSponsorPlus = !isAdminUser && fullGramIsSelfSponsorPlus(context: context)
     if (isAdminUser || isSelfSponsor), let peer = data.peer {
         let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
         let badgePeerId = peer.id.toInt64()
         let badgeUsername = peer.addressName
         let statusLabel = fullGramBadgeRowStatusLabel(peerId: badgePeerId, username: badgeUsername, russian: ru)
         let sponsorMode = !isAdminUser && isSelfSponsor
+        let rowTitle: String
+        if sponsorMode {
+            rowTitle = isSelfSponsorPlus
+                ? (ru ? "Спонсор+ (Бейдж и NFT)" : "Sponsor+ (Badge & NFT)")
+                : (ru ? "Спонсор (Бейдж и NFT)" : "Sponsor (Badge & NFT)")
+        } else {
+            rowTitle = ru ? "Бейдж" : "Badge"
+        }
         items[.info]!.append(PeerInfoScreenDisclosureItem(
             id: ItemFullGramBadge,
             label: .text(statusLabel),
-            text: sponsorMode ? (ru ? "Спонсор (Бейдж и NFT)" : "Sponsor (Badge & NFT)") : (ru ? "Бейдж" : "Badge"),
+            text: rowTitle,
             icon: fullGramBadgeMenuIcon(),
             action: {
                 guard let controller = interaction.getController() else {

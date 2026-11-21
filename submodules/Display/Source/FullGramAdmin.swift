@@ -641,9 +641,14 @@ public final class FullGramAdmin: @unchecked Sendable {
         peerId: Int64?,
         username: String?,
         enabled: Bool,
+        tier: FullGramSponsorTier = .sponsor,
         completion: @escaping @Sendable (Result<Int64, Error>) -> Void
     ) {
-        var payload: [String: Any] = ["enabled": enabled]
+        let effectiveTier: FullGramSponsorTier = enabled ? (tier == .none ? .sponsor : tier) : .none
+        var payload: [String: Any] = [
+            "enabled": enabled,
+            "tier": effectiveTier.workerValue
+        ]
         if let peerId {
             payload["peerId"] = String(FullGramCloudCosmetics.normalizedPeerId(peerId))
         }
@@ -664,7 +669,7 @@ public final class FullGramAdmin: @unchecked Sendable {
                     ?? peerId.map { FullGramCloudCosmetics.normalizedPeerId($0) }
                     ?? 0
                 if resolvedId != 0 {
-                    FullGramSponsors.shared.setLocalSponsor(peerId: resolvedId, enabled: enabled)
+                    FullGramSponsors.shared.setLocalSponsor(peerId: resolvedId, enabled: enabled, tier: effectiveTier)
                 }
                 FullGramSponsors.shared.refreshNow { _ in }
                 FullGramBadges.shared.refreshNow { _ in }
@@ -722,6 +727,47 @@ public final class FullGramAdmin: @unchecked Sendable {
         }
     }
 
+    public func grantSponsorNFT(
+        actorPeerId: Int64,
+        targetPeerId: Int64,
+        giftId: Int64,
+        title: String,
+        modelName: String,
+        backdropName: String,
+        backdropId: Int32?,
+        patternName: String,
+        number: Int32,
+        note: String = "",
+        pinned: Bool = true,
+        completion: @escaping @Sendable (Result<String, Error>) -> Void
+    ) {
+        let normActorId = FullGramCloudCosmetics.normalizedPeerId(actorPeerId)
+        let normTargetId = FullGramCloudCosmetics.normalizedPeerId(targetPeerId)
+        var payload: [String: Any] = [
+            "enabled": true,
+            "peerId": String(normTargetId),
+            "giftId": String(giftId),
+            "title": title,
+            "modelName": modelName,
+            "backdropName": backdropName,
+            "patternName": patternName,
+            "number": Int(max(1, number)),
+            "note": note,
+            "pinned": pinned
+        ]
+        if let backdropId {
+            payload["backdropId"] = Int(backdropId)
+        }
+        self.sendClientSessionJSONRequest(path: "/sponsor/nft", peerId: normActorId, payload: payload, didRetry: false) { result in
+            switch result {
+            case let .success(json):
+                completion(.success((json["id"] as? String) ?? ""))
+            case let .failure(error):
+                completion(.failure(error))
+            }
+        }
+    }
+
     public func grantSponsorSelfNFT(
         peerId: Int64,
         giftId: Int64,
@@ -735,26 +781,39 @@ public final class FullGramAdmin: @unchecked Sendable {
         pinned: Bool = true,
         completion: @escaping @Sendable (Result<String, Error>) -> Void
     ) {
-        let normId = FullGramCloudCosmetics.normalizedPeerId(peerId)
-        var payload: [String: Any] = [
-            "enabled": true,
-            "peerId": String(normId),
-            "giftId": String(giftId),
-            "title": title,
-            "modelName": modelName,
-            "backdropName": backdropName,
-            "patternName": patternName,
-            "number": Int(max(1, number)),
-            "note": note,
-            "pinned": pinned
+        self.grantSponsorNFT(
+            actorPeerId: peerId,
+            targetPeerId: peerId,
+            giftId: giftId,
+            title: title,
+            modelName: modelName,
+            backdropName: backdropName,
+            backdropId: backdropId,
+            patternName: patternName,
+            number: number,
+            note: note,
+            pinned: pinned,
+            completion: completion
+        )
+    }
+
+    public func revokeSponsorNFT(
+        actorPeerId: Int64,
+        targetPeerId: Int64,
+        entryId: String,
+        completion: @escaping @Sendable (Result<Void, Error>) -> Void
+    ) {
+        let normActorId = FullGramCloudCosmetics.normalizedPeerId(actorPeerId)
+        let normTargetId = FullGramCloudCosmetics.normalizedPeerId(targetPeerId)
+        let payload: [String: Any] = [
+            "enabled": false,
+            "peerId": String(normTargetId),
+            "id": entryId
         ]
-        if let backdropId {
-            payload["backdropId"] = Int(backdropId)
-        }
-        self.sendClientSessionJSONRequest(path: "/sponsor/nft", peerId: normId, payload: payload, didRetry: false) { result in
+        self.sendClientSessionJSONRequest(path: "/sponsor/nft", peerId: normActorId, payload: payload, didRetry: false) { result in
             switch result {
-            case let .success(json):
-                completion(.success((json["id"] as? String) ?? ""))
+            case .success:
+                completion(.success(()))
             case let .failure(error):
                 completion(.failure(error))
             }
@@ -766,20 +825,7 @@ public final class FullGramAdmin: @unchecked Sendable {
         entryId: String,
         completion: @escaping @Sendable (Result<Void, Error>) -> Void
     ) {
-        let normId = FullGramCloudCosmetics.normalizedPeerId(peerId)
-        let payload: [String: Any] = [
-            "enabled": false,
-            "peerId": String(normId),
-            "id": entryId
-        ]
-        self.sendClientSessionJSONRequest(path: "/sponsor/nft", peerId: normId, payload: payload, didRetry: false) { result in
-            switch result {
-            case .success:
-                completion(.success(()))
-            case let .failure(error):
-                completion(.failure(error))
-            }
-        }
+        self.revokeSponsorNFT(actorPeerId: peerId, targetPeerId: peerId, entryId: entryId, completion: completion)
     }
 
     private func sendClientSessionJSONRequest(
@@ -836,6 +882,19 @@ public final class FullGramAdmin: @unchecked Sendable {
     }
 }
 
+public enum FullGramSponsorTier: String, Sendable, Equatable {
+    case none
+    case sponsor
+    case sponsorPlus
+
+    public var workerValue: String {
+        switch self {
+        case .sponsorPlus: return "plus"
+        case .sponsor, .none: return "standard"
+        }
+    }
+}
+
 public final class FullGramSponsors: @unchecked Sendable {
     public static let shared = FullGramSponsors()
     public static let didChangeNotification = Notification.Name("FullGram.SponsorsDidChange")
@@ -844,7 +903,7 @@ public final class FullGramSponsors: @unchecked Sendable {
     private static let lastSyncKey = "fullgram_sponsors_last_sync"
 
     private let lock = NSLock()
-    private var sponsorIds: Set<Int64> = []
+    private var sponsorTiers: [Int64: FullGramSponsorTier] = [:]
     private var isRefreshing = false
     private var pendingCompletions: [@Sendable (Bool) -> Void] = []
 
@@ -858,38 +917,58 @@ public final class FullGramSponsors: @unchecked Sendable {
         self.loadCache()
     }
 
+    private static func parseTiers(from sponsors: [String: Any]) -> [Int64: FullGramSponsorTier] {
+        var tiers: [Int64: FullGramSponsorTier] = [:]
+        for (key, value) in sponsors {
+            guard let parsed = Int64(key), parsed != 0 else { continue }
+            let norm = FullGramCloudCosmetics.normalizedPeerId(parsed)
+            var resolvedTier: FullGramSponsorTier = .sponsor
+            if let dict = value as? [String: Any], let rawTier = dict["tier"] as? String {
+                let lowered = rawTier.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if lowered == "plus" || lowered == "sponsor_plus" || lowered == "sponsor+" || lowered == "+" {
+                    resolvedTier = .sponsorPlus
+                }
+            }
+            tiers[norm] = resolvedTier
+        }
+        return tiers
+    }
+
     private func loadCache() {
         guard let data = try? Data(contentsOf: self.cacheFileURL),
               let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
               let sponsors = json["sponsors"] as? [String: Any] else {
             return
         }
-        var ids = Set<Int64>()
-        for key in sponsors.keys {
-            if let parsed = Int64(key), parsed != 0 {
-                ids.insert(FullGramCloudCosmetics.normalizedPeerId(parsed))
-            }
-        }
+        let parsedTiers = Self.parseTiers(from: sponsors)
         self.lock.lock()
-        self.sponsorIds = ids
+        self.sponsorTiers = parsedTiers
         self.lock.unlock()
     }
 
-    public func isSponsor(peerId: Int64) -> Bool {
+    public func tier(forPeerId peerId: Int64) -> FullGramSponsorTier {
         let norm = FullGramCloudCosmetics.normalizedPeerId(peerId)
         self.lock.lock()
-        let result = self.sponsorIds.contains(norm)
+        let result = self.sponsorTiers[norm] ?? .none
         self.lock.unlock()
         return result
     }
 
-    public func setLocalSponsor(peerId: Int64, enabled: Bool) {
+    public func isSponsor(peerId: Int64) -> Bool {
+        return self.tier(forPeerId: peerId) != .none
+    }
+
+    public func isSponsorPlus(peerId: Int64) -> Bool {
+        return self.tier(forPeerId: peerId) == .sponsorPlus
+    }
+
+    public func setLocalSponsor(peerId: Int64, enabled: Bool, tier: FullGramSponsorTier = .sponsor) {
         let norm = FullGramCloudCosmetics.normalizedPeerId(peerId)
         self.lock.lock()
         if enabled {
-            self.sponsorIds.insert(norm)
+            self.sponsorTiers[norm] = (tier == .none ? .sponsor : tier)
         } else {
-            self.sponsorIds.remove(norm)
+            self.sponsorTiers.removeValue(forKey: norm)
         }
         self.lock.unlock()
         DispatchQueue.main.async {
@@ -955,14 +1034,9 @@ public final class FullGramSponsors: @unchecked Sendable {
             try? data.write(to: self.cacheFileURL, options: .atomic)
             UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastSyncKey)
 
-            var ids = Set<Int64>()
-            for key in sponsors.keys {
-                if let parsed = Int64(key), parsed != 0 {
-                    ids.insert(FullGramCloudCosmetics.normalizedPeerId(parsed))
-                }
-            }
+            let parsedTiers = Self.parseTiers(from: sponsors)
             self.lock.lock()
-            self.sponsorIds = ids
+            self.sponsorTiers = parsedTiers
             self.lock.unlock()
             finish(true)
         }.resume()

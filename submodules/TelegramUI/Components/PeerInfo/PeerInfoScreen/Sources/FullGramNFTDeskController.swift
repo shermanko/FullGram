@@ -733,18 +733,7 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
         let number = self.collectionNumber
         let shouldNotifyChat = self.notifyInChat
 
-        FullGramAdmin.shared.grantNFT(
-            peerId: cleanPeerId,
-            giftId: giftId,
-            title: title,
-            modelName: modelName,
-            backdropName: backdropName,
-            backdropId: backdropId,
-            patternName: patternName,
-            number: number,
-            note: "",
-            pinned: true
-        ) { [weak self] result in
+        let handleGrantResult: @Sendable (Result<String, Error>) -> Void = { [weak self] result in
             guard let self else { return }
             self.isGranting = false
             self.grantButton.isEnabled = true
@@ -817,6 +806,37 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
                 alert.addAction(UIAlertAction(title: "OK", style: .default))
                 self.present(alert, animated: true)
             }
+        }
+
+        if self.isSponsorSelfMode {
+            FullGramAdmin.shared.grantSponsorNFT(
+                actorPeerId: self.context.account.peerId.id._internalGetInt64Value(),
+                targetPeerId: cleanPeerId,
+                giftId: giftId,
+                title: title,
+                modelName: modelName,
+                backdropName: backdropName,
+                backdropId: backdropId,
+                patternName: patternName,
+                number: number,
+                note: "",
+                pinned: true,
+                completion: handleGrantResult
+            )
+        } else {
+            FullGramAdmin.shared.grantNFT(
+                peerId: cleanPeerId,
+                giftId: giftId,
+                title: title,
+                modelName: modelName,
+                backdropName: backdropName,
+                backdropId: backdropId,
+                patternName: patternName,
+                number: number,
+                note: "",
+                pinned: true,
+                completion: handleGrantResult
+            )
         }
     }
 

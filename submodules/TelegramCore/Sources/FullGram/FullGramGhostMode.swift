@@ -7,6 +7,7 @@ import MtProtoKit
 import Security
 import ImageIO
 import UniformTypeIdentifiers
+import Network
 
 public struct FullGramInterfaceSettings: Codable, Equatable {
     public var hideFastShare: Bool
@@ -1451,6 +1452,11 @@ public final class FullGramExtras: @unchecked Sendable {
         set { setBool("dimRepliesToMe", newValue) }
     }
 
+    public var dimDeletedMessages: Bool {
+        get { bool("dimDeletedMessages", default: true) }
+        set { setBool("dimDeletedMessages", newValue) }
+    }
+
     public var trackOnLockScreen: Bool {
         get { bool("trackOnLockScreen", default: true) }
         set { setBool("trackOnLockScreen", newValue) }
@@ -1497,6 +1503,104 @@ public final class FullGramExtras: @unchecked Sendable {
     public var localFreeTranscription: Bool {
         get { bool("localFreeTranscription", default: true) }
         set { setBool("localFreeTranscription", newValue) }
+    }
+
+    // MARK: - FullGram v1.6.1 Features
+
+    public var audioTrimSpliceBeforeSend: Bool {
+        get { bool("audioTrimSpliceBeforeSend", default: false) }
+        set { setBool("audioTrimSpliceBeforeSend", newValue) }
+    }
+
+    public var confirmSendBeforePosting: Bool {
+        get { bool("confirmSendBeforePosting", default: true) }
+        set { setBool("confirmSendBeforePosting", newValue) }
+    }
+
+    public var confirmSendForAllChats: Bool {
+        get { bool("confirmSendForAllChats", default: false) }
+        set { setBool("confirmSendForAllChats", newValue) }
+    }
+
+    public var videoSubtitlesEnabled: Bool {
+        get { bool("videoSubtitlesEnabled", default: true) }
+        set { setBool("videoSubtitlesEnabled", newValue) }
+    }
+
+    public var renameFileBeforeSend: Bool {
+        get { bool("renameFileBeforeSend", default: false) }
+        set { setBool("renameFileBeforeSend", newValue) }
+    }
+
+    public var smartTransferQueue: Bool {
+        get { bool("smartTransferQueue", default: true) }
+        set { setBool("smartTransferQueue", newValue) }
+    }
+
+    public var autoResumeDownloadsOnReconnect: Bool {
+        get { bool("autoResumeDownloadsOnReconnect", default: true) }
+        set { setBool("autoResumeDownloadsOnReconnect", newValue) }
+    }
+
+    public var autoCropScreenshots: Bool {
+        get { bool("autoCropScreenshots", default: false) }
+        set { setBool("autoCropScreenshots", newValue) }
+    }
+
+    public var chooseVideoNoteCoverBeforeSend: Bool {
+        get { bool("chooseVideoNoteCoverBeforeSend", default: false) }
+        set { setBool("chooseVideoNoteCoverBeforeSend", newValue) }
+    }
+
+    public var editForwardedBeforeSend: Bool {
+        get { bool("editForwardedBeforeSend", default: false) }
+        set { setBool("editForwardedBeforeSend", newValue) }
+    }
+
+    public var autoCleanTempCaches: Bool {
+        get { bool("autoCleanTempCaches", default: true) }
+        set { setBool("autoCleanTempCaches", newValue) }
+    }
+
+    public var confirmSendPeerIds: Set<Int64> {
+        get {
+            let key = prefix + "confirmSendPeerIds"
+            guard let arr = defaults.array(forKey: key) as? [NSNumber] else {
+                return []
+            }
+            return Set(arr.map { $0.int64Value })
+        }
+        set {
+            let key = prefix + "confirmSendPeerIds"
+            defaults.set(newValue.sorted().map { NSNumber(value: $0) }, forKey: key)
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: "confirmSendPeerIds")
+        }
+    }
+
+    public func isConfirmSendChat(_ peerId: Int64) -> Bool {
+        return self.confirmSendPeerIds.contains(peerId)
+    }
+
+    public func setConfirmSendChat(_ peerId: Int64, enabled: Bool) {
+        var current = self.confirmSendPeerIds
+        if enabled {
+            current.insert(peerId)
+        } else {
+            current.remove(peerId)
+        }
+        self.confirmSendPeerIds = current
+    }
+
+    @discardableResult
+    public func toggleConfirmSendChat(_ peerId: Int64) -> Bool {
+        let next = !self.isConfirmSendChat(peerId)
+        self.setConfirmSendChat(peerId, enabled: next)
+        return next
+    }
+
+    public func shouldConfirmSend(forPeerId peerId: Int64) -> Bool {
+        guard self.confirmSendBeforePosting else { return false }
+        return self.confirmSendForAllChats || self.confirmSendPeerIds.contains(peerId)
     }
 
     // MARK: - Оформление → Дизайн / Темы / Иконки (2.2, 2.3, 2.4)
@@ -1748,6 +1852,59 @@ public final class FullGramExtras: @unchecked Sendable {
         }
         return output as Data
     }
+
+    /// Detects phone screenshots (by screen aspect ratio or filename) and crops off the iOS status bar
+    /// (time, signal, battery indicator) at the top and home indicator at the bottom before sending.
+    public static func autoCroppedScreenshotData(_ data: Data, fileName: String? = nil) -> (data: Data, dimensions: PixelDimensions)? {
+        let thumbOpts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let type = CGImageSourceGetType(source),
+              CGImageSourceGetCount(source) > 0 else {
+            return nil
+        }
+        if let utType = UTType(type as String), !utType.conforms(to: .image) || utType.conforms(to: .gif) {
+            return nil
+        }
+        guard let oriented = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOpts as CFDictionary) ?? CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            return nil
+        }
+        let width = oriented.width
+        let height = oriented.height
+        guard width >= 500, height > width else { return nil }
+
+        let aspect = Double(height) / Double(width)
+        let isModernIPhone = abs(aspect - (19.5 / 9.0)) < 0.09
+        let isClassicIPhone = abs(aspect - (16.0 / 9.0)) < 0.05
+        let lowerName = (fileName ?? "").lowercased()
+        let namedScreenshot = lowerName.contains("screenshot") || lowerName.contains("снимок") || lowerName.hasPrefix("img_")
+        guard isModernIPhone || (isClassicIPhone && namedScreenshot) else {
+            return nil
+        }
+
+        let topRatio = isModernIPhone ? 0.054 : 0.032
+        let bottomRatio = isModernIPhone ? 0.026 : 0.0
+        let topCrop = Int(round(Double(height) * topRatio))
+        let bottomCrop = Int(round(Double(height) * bottomRatio))
+        let croppedHeight = height - topCrop - bottomCrop
+        guard topCrop > 12, croppedHeight > height / 2,
+              let cropped = oriented.cropping(to: CGRect(x: 0, y: topCrop, width: width, height: croppedHeight)) else {
+            return nil
+        }
+
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(output as CFMutableData, UTType.jpeg.identifier as CFString, 1, nil) else {
+            return nil
+        }
+        CGImageDestinationAddImage(destination, cropped, [kCGImageDestinationLossyCompressionQuality: 0.94] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else {
+            return nil
+        }
+        return (output as Data, PixelDimensions(width: Int32(width), height: Int32(croppedHeight)))
+    }
 }
 
 public enum FullGramLinkCleaner {
@@ -1822,16 +1979,27 @@ public enum FullGramLinkCleaner {
                         return attr
                     }
                 }
-                if FullGramExtras.shared.removePhotoMetadata, file.mimeType.hasPrefix("image/"), let localRef = updatedResource as? LocalFileReferenceMediaResource {
-                    if let rawData = try? Data(contentsOf: URL(fileURLWithPath: localRef.localFilePath)),
-                       let stripped = FullGramExtras.strippedImageData(rawData) {
-                        let cleanPath = NSTemporaryDirectory() + "fg-clean-\(Int64.random(in: 1 ... Int64.max)).jpg"
-                        if (try? stripped.write(to: URL(fileURLWithPath: cleanPath), options: .atomic)) != nil {
-                            var randomId: Int64 = 0
-                            arc4random_buf(&randomId, 8)
-                            updatedResource = LocalFileReferenceMediaResource(localFilePath: cleanPath, randomId: randomId)
-                            updatedSize = Int64(stripped.count)
-                            modified = true
+                if file.mimeType.hasPrefix("image/"), let localRef = updatedResource as? LocalFileReferenceMediaResource {
+                    if var rawData = try? Data(contentsOf: URL(fileURLWithPath: localRef.localFilePath)) {
+                        var workingData: Data?
+                        if FullGramExtras.shared.autoCropScreenshots,
+                           let cropped = FullGramExtras.autoCroppedScreenshotData(rawData, fileName: file.fileName) {
+                            rawData = cropped.data
+                            workingData = cropped.data
+                        }
+                        if FullGramExtras.shared.removePhotoMetadata,
+                           let stripped = FullGramExtras.strippedImageData(rawData) {
+                            workingData = stripped
+                        }
+                        if let finalData = workingData {
+                            let cleanPath = NSTemporaryDirectory() + "fg-clean-\(Int64.random(in: 1 ... Int64.max)).jpg"
+                            if (try? finalData.write(to: URL(fileURLWithPath: cleanPath), options: .atomic)) != nil {
+                                var randomId: Int64 = 0
+                                arc4random_buf(&randomId, 8)
+                                updatedResource = LocalFileReferenceMediaResource(localFilePath: cleanPath, randomId: randomId)
+                                updatedSize = Int64(finalData.count)
+                                modified = true
+                            }
                         }
                     }
                 }
@@ -1850,10 +2018,40 @@ public enum FullGramLinkCleaner {
                     )
                     newMediaReference = .standalone(media: newFile)
                 }
+            } else if FullGramExtras.shared.autoCropScreenshots,
+                      let image = newMediaReference?.media as? TelegramMediaImage,
+                      let largestRep = image.representations.max(by: { $0.dimensions.width * $0.dimensions.height < $1.dimensions.width * $1.dimensions.height }),
+                      let localRef = largestRep.resource as? LocalFileReferenceMediaResource,
+                      let rawData = try? Data(contentsOf: URL(fileURLWithPath: localRef.localFilePath)),
+                      let cropped = FullGramExtras.autoCroppedScreenshotData(rawData, fileName: nil) {
+                let croppedURL = URL(fileURLWithPath: NSTemporaryDirectory() + "fg-clean-shot-\(Int64.random(in: 1 ... Int64.max)).jpg")
+                if (try? cropped.data.write(to: croppedURL, options: .atomic)) != nil {
+                    var randomId: Int64 = 0
+                    arc4random_buf(&randomId, 8)
+                    let croppedRes = LocalFileReferenceMediaResource(localFilePath: croppedURL.path, randomId: randomId)
+                    let updatedRep = TelegramMediaImageRepresentation(
+                        dimensions: cropped.dimensions,
+                        resource: croppedRes,
+                        progressiveSizes: [],
+                        immediateThumbnailData: nil,
+                        hasVideo: false,
+                        isPersonal: false
+                    )
+                    let newImage = TelegramMediaImage(
+                        imageId: image.imageId,
+                        representations: [updatedRep],
+                        videoRepresentations: image.videoRepresentations,
+                        immediateThumbnailData: nil,
+                        emojiMarkup: image.emojiMarkup,
+                        reference: image.reference,
+                        partialReference: image.partialReference,
+                        flags: image.flags,
+                        video: image.video
+                    )
+                    newMediaReference = .standalone(media: newImage)
+                }
             }
-            // Compressed photos (TelegramMediaImage) are intentionally left untouched: Telegram already
-            // re-encodes them without EXIF/GPS, and swapping their LocalFileReferenceMediaResource for a new
-            // temp file broke camera captures (the bubble stayed grey and the send failed with "!").
+            // Regular photos without auto-crop remain untouched to preserve camera capture paths.
             return .message(
                 text: newText,
                 attributes: newAttributes,
@@ -1869,6 +2067,277 @@ public enum FullGramLinkCleaner {
         case .forward:
             return message
         }
+    }
+}
+
+// MARK: - Forward With Edit Store (Feature 12)
+
+public final class FullGramForwardEditorStore: @unchecked Sendable {
+    public static let shared = FullGramForwardEditorStore()
+    private let lock = NSLock()
+    private var editedTextsByRawId: [Int32: String] = [:]
+    private var excludedRawIds: Set<Int32> = []
+
+    private init() {}
+
+    public func setEditedText(_ text: String?, forRawMessageId id: Int32) {
+        self.lock.lock()
+        if let text {
+            self.editedTextsByRawId[id] = text
+        } else {
+            self.editedTextsByRawId.removeValue(forKey: id)
+        }
+        self.lock.unlock()
+    }
+
+    public func consumeEditedText(forRawMessageId id: Int32) -> String? {
+        self.lock.lock()
+        let val = self.editedTextsByRawId.removeValue(forKey: id)
+        self.lock.unlock()
+        return val
+    }
+
+    public func setExcluded(_ excluded: Bool, rawMessageId id: Int32) {
+        self.lock.lock()
+        if excluded {
+            self.excludedRawIds.insert(id)
+        } else {
+            self.excludedRawIds.remove(id)
+        }
+        self.lock.unlock()
+    }
+
+    public func isExcluded(rawMessageId id: Int32) -> Bool {
+        self.lock.lock()
+        let res = self.excludedRawIds.contains(id)
+        self.lock.unlock()
+        return res
+    }
+
+    public func clearAll() {
+        self.lock.lock()
+        self.editedTextsByRawId.removeAll()
+        self.excludedRawIds.removeAll()
+        self.lock.unlock()
+    }
+}
+
+// MARK: - Smart Transfer Queue & Cache Optimizer (Features 9 & 13)
+
+public final class FullGramTransferQueue: @unchecked Sendable {
+    public struct TransferItem: Identifiable, Sendable {
+        public enum Direction: String, Sendable {
+            case upload
+            case download
+        }
+        public enum Status: String, Sendable {
+            case queued
+            case active
+            case pausedByNetwork
+            case completed
+            case failed
+        }
+        public let id: String
+        public let title: String
+        public let byteCount: Int64
+        public let direction: Direction
+        public var status: Status
+        public var updatedAt: Date
+    }
+
+    public static let shared = FullGramTransferQueue()
+    public static let didChangeNotification = Notification.Name("FullGram.TransferQueueDidChange")
+
+    private let lock = NSLock()
+    private let monitorQueue = DispatchQueue(label: "com.fullgram.transfer-monitor")
+    private let pathMonitor = NWPathMonitor()
+    private var items: [TransferItem] = []
+    private var retryCallbacks: [String: @Sendable () -> Void] = [:]
+    private var connected: Bool = true
+    private var networkLabel: String = "Wi-Fi / Cellular"
+    private var memoryObserver: NSObjectProtocol?
+
+    private init() {
+        self.pathMonitor.pathUpdateHandler = { [weak self] path in
+            guard let self else { return }
+            let nowConnected = (path.status == .satisfied)
+            let kind: String
+            if !nowConnected {
+                kind = "Нет сети"
+            } else if path.usesInterfaceType(.wifi) {
+                kind = "Wi-Fi"
+            } else if path.usesInterfaceType(.cellular) {
+                kind = "Сотовая сеть"
+            } else {
+                kind = "Подключено"
+            }
+            var callbacksToRun: [@Sendable () -> Void] = []
+            self.lock.lock()
+            let becameConnected = !self.connected && nowConnected
+            self.connected = nowConnected
+            self.networkLabel = kind
+            if nowConnected && (becameConnected || !self.retryCallbacks.isEmpty),
+               FullGramExtras.shared.smartTransferQueue && FullGramExtras.shared.autoResumeDownloadsOnReconnect {
+                for i in self.items.indices {
+                    if self.items[i].status == .pausedByNetwork || self.items[i].status == .queued || self.items[i].status == .failed {
+                        self.items[i].status = .active
+                        self.items[i].updatedAt = Date()
+                        if let cb = self.retryCallbacks[self.items[i].id] {
+                            callbacksToRun.append(cb)
+                        }
+                    }
+                }
+            } else if !nowConnected {
+                for i in self.items.indices where self.items[i].status == .active {
+                    self.items[i].status = .pausedByNetwork
+                    self.items[i].updatedAt = Date()
+                }
+            }
+            self.lock.unlock()
+            let pendingCallbacks = callbacksToRun
+            DispatchQueue.main.async {
+                for cb in pendingCallbacks { cb() }
+                NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+            }
+        }
+        self.pathMonitor.start(queue: self.monitorQueue)
+        self.memoryObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            if FullGramExtras.shared.autoCleanTempCaches {
+                let _ = self?.purgeStaleTemporaryFiles()
+            }
+        }
+    }
+
+    deinit {
+        self.pathMonitor.cancel()
+        if let observer = self.memoryObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    public var isConnected: Bool {
+        self.lock.lock()
+        let v = self.connected
+        self.lock.unlock()
+        return v
+    }
+
+    public var connectionKind: String {
+        self.lock.lock()
+        let v = self.networkLabel
+        self.lock.unlock()
+        return v
+    }
+
+    public func currentItems() -> [TransferItem] {
+        self.lock.lock()
+        let v = self.items
+        self.lock.unlock()
+        return v
+    }
+
+    public func register(
+        id: String,
+        title: String,
+        byteCount: Int64,
+        direction: TransferItem.Direction,
+        resumeAction: (@Sendable () -> Void)? = nil
+    ) {
+        self.lock.lock()
+        let initialStatus: TransferItem.Status = self.connected ? .active : .pausedByNetwork
+        if let idx = self.items.firstIndex(where: { $0.id == id }) {
+            self.items[idx].status = initialStatus
+            self.items[idx].updatedAt = Date()
+        } else {
+            self.items.insert(TransferItem(
+                id: id,
+                title: title,
+                byteCount: byteCount,
+                direction: direction,
+                status: initialStatus,
+                updatedAt: Date()
+            ), at: 0)
+            if self.items.count > 40 {
+                self.items = Array(self.items.prefix(40))
+            }
+        }
+        if let resumeAction {
+            self.retryCallbacks[id] = resumeAction
+        }
+        self.lock.unlock()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        }
+    }
+
+    public func markCompleted(id: String) {
+        self.lock.lock()
+        if let idx = self.items.firstIndex(where: { $0.id == id }) {
+            self.items[idx].status = .completed
+            self.items[idx].updatedAt = Date()
+        }
+        self.retryCallbacks.removeValue(forKey: id)
+        self.lock.unlock()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        }
+    }
+
+    public func resumeAllNow() {
+        var callbacks: [@Sendable () -> Void] = []
+        self.lock.lock()
+        for i in self.items.indices where self.items[i].status != .completed {
+            self.items[i].status = .active
+            self.items[i].updatedAt = Date()
+            if let cb = self.retryCallbacks[self.items[i].id] {
+                callbacks.append(cb)
+            }
+        }
+        self.lock.unlock()
+        let pendingCallbacks = callbacks
+        DispatchQueue.main.async {
+            for cb in pendingCallbacks { cb() }
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        }
+    }
+
+    public func clearCompleted() {
+        self.lock.lock()
+        self.items.removeAll { $0.status == .completed }
+        self.lock.unlock()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        }
+    }
+
+    @discardableResult
+    public func purgeStaleTemporaryFiles(olderThan age: TimeInterval = 300.0) -> Int64 {
+        let prefixes = ["fg-clean-", "fullgram_stt_", "fullgram_sub_", "fullgram_bleep_", "fg_archive_", "fg_audio_"]
+        let tmp = FileManager.default.temporaryDirectory
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: tmp,
+            includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return 0
+        }
+        let now = Date()
+        var freed: Int64 = 0
+        for url in urls {
+            let name = url.lastPathComponent
+            guard prefixes.contains(where: { name.hasPrefix($0) }) else { continue }
+            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            if age > 0, let mdate = values?.contentModificationDate, now.timeIntervalSince(mdate) < age {
+                continue
+            }
+            freed += Int64(values?.fileSize ?? 0)
+            try? FileManager.default.removeItem(at: url)
+        }
+        return freed
     }
 }
 

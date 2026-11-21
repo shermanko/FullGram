@@ -5636,7 +5636,14 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                     }
                     
                     for id in forwardMessageIds.sorted() {
-                        messages.append(.forward(source: id, threadId: replyThreadId, grouping: .auto, attributes: attributes, correlationId: nil))
+                        if FullGramForwardEditorStore.shared.isExcluded(rawMessageId: id.id) {
+                            continue
+                        }
+                        if let editedForwardText = FullGramForwardEditorStore.shared.consumeEditedText(forRawMessageId: id.id) {
+                            messages.append(.message(text: editedForwardText, attributes: [], inlineStickers: [:], mediaReference: nil, threadId: replyThreadId, replyToMessageId: nil, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
+                        } else {
+                            messages.append(.forward(source: id, threadId: replyThreadId, grouping: .auto, attributes: attributes, correlationId: nil))
+                        }
                     }
                 }
                 

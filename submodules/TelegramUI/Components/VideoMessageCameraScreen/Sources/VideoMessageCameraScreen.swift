@@ -2012,6 +2012,8 @@ public class VideoMessageCameraScreen: ViewController {
     }
         
     fileprivate var didSend = false
+    fileprivate var customCoverImage: UIImage?
+    fileprivate var didPickCustomCover = false
     fileprivate var lastActionTimestamp: Double?
     fileprivate var isSendingImmediately = false
     public func sendVideoRecording(silentPosting: Bool? = nil, scheduleTime: Int32? = nil, repeatPeriod: Int32? = nil, messageEffect: ChatSendMessageEffect? = nil) {
@@ -2087,9 +2089,40 @@ public class VideoMessageCameraScreen: ViewController {
             }
             
             let dimensions = video.dimensions
-            
+
+            if FullGramExtras.shared.chooseVideoNoteCoverBeforeSend && !self.didPickCustomCover && !self.isSendingImmediately {
+                self.didSend = false
+                let pickerAsset = composition(with: results)
+                let picker = FullGramVideoCircleCoverPickerController(
+                    asset: pickerAsset,
+                    duration: max(0.5, finalDuration),
+                    initialThumbnail: video.thumbnail,
+                    onSelectCover: { [weak self] _, selectedImage in
+                        guard let self else {
+                            return
+                        }
+                        self.customCoverImage = selectedImage
+                        self.didPickCustomCover = true
+                        self.sendVideoRecording(
+                            silentPosting: silentPosting,
+                            scheduleTime: scheduleTime,
+                            repeatPeriod: repeatPeriod,
+                            messageEffect: messageEffect
+                        )
+                    }
+                )
+                self.present(picker, in: .window(.root))
+                return
+            }
+
+            let chosenCustomCover = self.customCoverImage
+            self.customCoverImage = nil
+            self.didPickCustomCover = false
+
             let thumbnailImage: Signal<UIImage, NoError>
-            if startTime > 0.0 {
+            if let chosenCustomCover {
+                thumbnailImage = .single(chosenCustomCover)
+            } else if startTime > 0.0 {
                 thumbnailImage = Signal { subscriber in
                     let composition = composition(with: results)
                     let imageGenerator = AVAssetImageGenerator(asset: composition)

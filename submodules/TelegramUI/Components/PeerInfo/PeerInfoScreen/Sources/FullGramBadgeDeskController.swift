@@ -14,6 +14,13 @@ import EntityKeyboard
 import EmojiStatusSelectionComponent
 import UndoUI
 
+private final class FullGramBadgeDeskPresenterBox: @unchecked Sendable {
+    weak var controller: ItemListController?
+    var presentNative: ((UIViewController) -> Void)?
+    var presentController: ((ViewController) -> Void)?
+    var push: ((ViewController) -> Void)?
+}
+
 // MARK: - Owner Gate & Profile Row Helpers
 
 func fullGramCanOpenAdmin(context: AccountContext) -> Bool {
@@ -26,14 +33,22 @@ func fullGramCanOpenAdmin(context: AccountContext) -> Bool {
     return FullGramAdmin.isOwnerUserId(context.account.peerId.id._internalGetInt64Value())
 }
 
-func fullGramIsSelfSponsor(context: AccountContext) -> Bool {
+func fullGramSelfSponsorTier(context: AccountContext) -> FullGramSponsorTier {
     guard FullGramFeatureFlags.isEnabled(.adminPanel) else {
-        return false
+        return .none
     }
     guard context.account.peerId.namespace == Namespaces.Peer.CloudUser else {
-        return false
+        return .none
     }
-    return FullGramSponsors.shared.isSponsor(peerId: context.account.peerId.id._internalGetInt64Value())
+    return FullGramSponsors.shared.tier(forPeerId: context.account.peerId.id._internalGetInt64Value())
+}
+
+func fullGramIsSelfSponsor(context: AccountContext) -> Bool {
+    return fullGramSelfSponsorTier(context: context) != .none
+}
+
+func fullGramIsSelfSponsorPlus(context: AccountContext) -> Bool {
+    return fullGramSelfSponsorTier(context: context) == .sponsorPlus
 }
 
 private let cachedFullGramBadgeMenuIcon: UIImage? = {
@@ -101,7 +116,7 @@ private enum FullGramBadgeDeskSection: Int32 {
 
 private final class FullGramBadgeDeskArguments {
     let context: AccountContext
-    let toggleSponsor: (Bool) -> Void
+    let selectSponsorTier: () -> Void
     let toggleEnabled: (Bool) -> Void
     let pickEmoji: () -> Void
     let resetEmoji: () -> Void
@@ -109,12 +124,13 @@ private final class FullGramBadgeDeskArguments {
     let editLabel: () -> Void
     let editShortLabel: () -> Void
     let openNFTCatalog: () -> Void
+    let grantNFTById: () -> Void
     let revokeNFT: (FullGramGrantedNFT) -> Void
     let editToken: () -> Void
 
     init(
         context: AccountContext,
-        toggleSponsor: @escaping (Bool) -> Void,
+        selectSponsorTier: @escaping () -> Void,
         toggleEnabled: @escaping (Bool) -> Void,
         pickEmoji: @escaping () -> Void,
         resetEmoji: @escaping () -> Void,
@@ -122,11 +138,12 @@ private final class FullGramBadgeDeskArguments {
         editLabel: @escaping () -> Void,
         editShortLabel: @escaping () -> Void,
         openNFTCatalog: @escaping () -> Void,
+        grantNFTById: @escaping () -> Void,
         revokeNFT: @escaping (FullGramGrantedNFT) -> Void,
         editToken: @escaping () -> Void
     ) {
         self.context = context
-        self.toggleSponsor = toggleSponsor
+        self.selectSponsorTier = selectSponsorTier
         self.toggleEnabled = toggleEnabled
         self.pickEmoji = pickEmoji
         self.resetEmoji = resetEmoji
@@ -134,6 +151,7 @@ private final class FullGramBadgeDeskArguments {
         self.editLabel = editLabel
         self.editShortLabel = editShortLabel
         self.openNFTCatalog = openNFTCatalog
+        self.grantNFTById = grantNFTById
         self.revokeNFT = revokeNFT
         self.editToken = editToken
     }
@@ -143,7 +161,7 @@ private enum FullGramBadgeDeskEntry: ItemListNodeEntry {
     case previewHeader(String)
     case previewPeer(EnginePeer, FullGramBadgeDraft, Bool)
     case sponsorHeader(String)
-    case sponsorSwitch(String, Bool)
+    case sponsorTier(String, String)
     case sponsorFooter(String)
     case badgeHeader(String)
     case badgeSwitch(String, Bool)
@@ -155,6 +173,7 @@ private enum FullGramBadgeDeskEntry: ItemListNodeEntry {
     case badgeFooter(String)
     case nftHeader(String)
     case nftGrantAction(String)
+    case nftGrantByIdAction(String)
     case nftGrantedItem(Int32, FullGramGrantedNFT, String, String)
     case nftFooter(String)
     case adminHeader(String)
@@ -164,11 +183,11 @@ private enum FullGramBadgeDeskEntry: ItemListNodeEntry {
         switch self {
         case .previewHeader, .previewPeer:
             return FullGramBadgeDeskSection.preview.rawValue
-        case .sponsorHeader, .sponsorSwitch, .sponsorFooter:
+        case .sponsorHeader, .sponsorTier, .sponsorFooter:
             return FullGramBadgeDeskSection.sponsor.rawValue
         case .badgeHeader, .badgeSwitch, .badgeEmoji, .badgeEmojiReset, .badgeRole, .badgeLabel, .badgeShortLabel, .badgeFooter:
             return FullGramBadgeDeskSection.badge.rawValue
-        case .nftHeader, .nftGrantAction, .nftGrantedItem, .nftFooter:
+        case .nftHeader, .nftGrantAction, .nftGrantByIdAction, .nftGrantedItem, .nftFooter:
             return FullGramBadgeDeskSection.nft.rawValue
         case .adminHeader, .adminToken:
             return FullGramBadgeDeskSection.admin.rawValue
@@ -180,7 +199,7 @@ private enum FullGramBadgeDeskEntry: ItemListNodeEntry {
         case .previewHeader: return 0
         case .previewPeer: return 1
         case .sponsorHeader: return 5
-        case .sponsorSwitch: return 6
+        case .sponsorTier: return 6
         case .sponsorFooter: return 7
         case .badgeHeader: return 10
         case .badgeSwitch: return 11
@@ -192,6 +211,7 @@ private enum FullGramBadgeDeskEntry: ItemListNodeEntry {
         case .badgeFooter: return 17
         case .nftHeader: return 20
         case .nftGrantAction: return 21
+        case .nftGrantByIdAction: return 22
         case let .nftGrantedItem(idx, _, _, _): return 100 + idx
         case .nftFooter: return 299
         case .adminHeader: return 300
@@ -253,8 +273,8 @@ private enum FullGramBadgeDeskEntry: ItemListNodeEntry {
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .sponsorHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
-        case let .sponsorSwitch(title, value):
-            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, sectionId: self.section, style: .blocks, updated: args.toggleSponsor)
+        case let .sponsorTier(title, value):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.selectSponsorTier)
         case let .sponsorFooter(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         case let .badgeSwitch(title, value):
@@ -275,6 +295,8 @@ private enum FullGramBadgeDeskEntry: ItemListNodeEntry {
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .nftGrantAction(title):
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.openNFTCatalog)
+        case let .nftGrantByIdAction(title):
+            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.grantNFTById)
         case let .nftGrantedItem(_, item, title, label):
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
                 args.revokeNFT(item)
@@ -293,6 +315,7 @@ private func fullGramRoleDisplayName(_ roleId: String, russian: Bool) -> String 
     switch roleId {
     case "creator": return russian ? "Создатель FullGram" : "FullGram Creator"
     case "official": return russian ? "Официальный ресурс" : "Official"
+    case "sponsor_plus": return russian ? "Спонсор+" : "Sponsor+"
     case "sponsor": return russian ? "Спонсор" : "Sponsor"
     case "premium": return "FullGram+"
     case "dev": return russian ? "Разработчик" : "Developer"
@@ -310,19 +333,23 @@ func fullGramBadgeDeskController(
     let isAdminUser = fullGramCanOpenAdmin(context: context)
     let cleanTargetId = FullGramCloudCosmetics.normalizedPeerId(peerId)
     let selfCleanId = FullGramCloudCosmetics.normalizedPeerId(context.account.peerId.id._internalGetInt64Value())
-    let sponsorSelfAllowed = isSponsorSelfMode && !isAdminUser && fullGramIsSelfSponsor(context: context) && cleanTargetId == selfCleanId
-    guard isAdminUser || sponsorSelfAllowed else {
+    let selfTier = fullGramSelfSponsorTier(context: context)
+    let sponsorSelfAllowed = isSponsorSelfMode && !isAdminUser && selfTier != .none && cleanTargetId == selfCleanId
+    let sponsorPlusOtherNFTOnly = isSponsorSelfMode && !isAdminUser && selfTier == .sponsorPlus && cleanTargetId != selfCleanId
+    let useSponsorNFTAPI = sponsorSelfAllowed || sponsorPlusOtherNFTOnly
+    guard isAdminUser || sponsorSelfAllowed || sponsorPlusOtherNFTOnly else {
         return fullGramPluginsController(context: context)
     }
     let existing = FullGramBadges.shared.rawAssignment(forPeerId: peerId, username: username)
-    let defaultRole = FullGramBadges.builtInRoles[sponsorSelfAllowed ? "sponsor" : "premium"]!
+    let defaultRoleKey: String = sponsorSelfAllowed ? (selfTier == .sponsorPlus ? "sponsor_plus" : "sponsor") : "premium"
+    let defaultRole = FullGramBadges.builtInRoles[defaultRoleKey]!
     let baseRoleId: String
     if let existingId = existing?.roleId, FullGramBadges.builtInRoles[existingId] != nil {
         baseRoleId = existingId
     } else if existing != nil {
         baseRoleId = "custom"
     } else {
-        baseRoleId = sponsorSelfAllowed ? "sponsor" : "premium"
+        baseRoleId = defaultRoleKey
     }
 
     let initialDraft = FullGramBadgeDraft(
@@ -345,10 +372,7 @@ func fullGramBadgeDeskController(
         })
     }
 
-    weak var weakController: ItemListController?
-    var presentNativeImpl: ((UIViewController) -> Void)?
-    var presentControllerImpl: ((ViewController) -> Void)?
-    var pushImpl: ((ViewController) -> Void)?
+    let presenter = FullGramBadgeDeskPresenterBox()
 
     let promptAdminToken: ((() -> Void)?) -> Void = { onSaved in
         let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
@@ -378,7 +402,7 @@ func fullGramBadgeDeskController(
             }))
         }
         alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
-        presentNativeImpl?(alert)
+        presenter.presentNative?(alert)
     }
 
     let commitSave: () -> Void = {
@@ -410,7 +434,7 @@ func fullGramBadgeDeskController(
                         elevatedLayout: false,
                         action: { _ in return false }
                     )
-                    presentControllerImpl?(banner)
+                    presenter.presentController?(banner)
                 case let .failure(error):
                     let alert = UIAlertController(
                         title: ru ? "Ошибка сохранения" : "Save failed",
@@ -418,7 +442,7 @@ func fullGramBadgeDeskController(
                         preferredStyle: .alert
                     )
                     alert.addAction(UIAlertAction(title: "OK", style: .default))
-                    presentNativeImpl?(alert)
+                    presenter.presentNative?(alert)
                 }
             }
             if sponsorSelfAllowed {
@@ -481,49 +505,72 @@ func fullGramBadgeDeskController(
 
     let args = FullGramBadgeDeskArguments(
         context: context,
-        toggleSponsor: { value in
-            let performSponsorToggle = {
-                FullGramAdmin.shared.setSponsor(peerId: cleanTargetId, username: username, enabled: value) { res in
-                    nftTick.set(nftCounter.modify { $0 + 1 })
-                    let pData = context.sharedContext.currentPresentationData.with { $0 }
-                    let ru = pData.strings.baseLanguageCode.hasPrefix("ru")
-                    switch res {
-                    case .success:
-                        let banner = UndoOverlayController(
-                            presentationData: pData,
-                            content: .succeed(
-                                text: value
-                                    ? (ru ? "Пользователь назначен спонсором FullGram" : "Sponsor status granted")
-                                    : (ru ? "Статус спонсора снят" : "Sponsor status removed"),
-                                timeout: 3.5,
-                                customUndoText: nil
-                            ),
-                            elevatedLayout: false,
-                            action: { _ in return false }
-                        )
-                        presentControllerImpl?(banner)
-                    case let .failure(err):
-                        let alert = UIAlertController(title: ru ? "Ошибка" : "Error", message: err.localizedDescription, preferredStyle: .alert)
-                        alert.addAction(UIAlertAction(title: "OK", style: .default))
-                        presentNativeImpl?(alert)
+        selectSponsorTier: {
+            let pData = context.sharedContext.currentPresentationData.with { $0 }
+            let ru = pData.strings.baseLanguageCode.hasPrefix("ru")
+            let applyTier: (FullGramSponsorTier) -> Void = { chosenTier in
+                let performSponsorChange = {
+                    let enabled = chosenTier != .none
+                    FullGramAdmin.shared.setSponsor(peerId: cleanTargetId, username: username, enabled: enabled, tier: chosenTier) { res in
+                        nftTick.set(nftCounter.modify { $0 + 1 })
+                        switch res {
+                        case .success:
+                            let statusMsg: String
+                            switch chosenTier {
+                            case .none:
+                                statusMsg = ru ? "Статус спонсора снят" : "Sponsor status removed"
+                            case .sponsor:
+                                statusMsg = ru ? "Пользователь назначен Спонсором FullGram" : "Sponsor status granted"
+                            case .sponsorPlus:
+                                statusMsg = ru ? "Пользователь назначен Спонсором+ FullGram" : "Sponsor+ status granted"
+                            }
+                            let banner = UndoOverlayController(
+                                presentationData: pData,
+                                content: .succeed(text: statusMsg, timeout: 3.5, customUndoText: nil),
+                                elevatedLayout: false,
+                                action: { _ in return false }
+                            )
+                            presenter.presentController?(banner)
+                        case let .failure(err):
+                            let alert = UIAlertController(title: ru ? "Ошибка" : "Error", message: err.localizedDescription, preferredStyle: .alert)
+                            alert.addAction(UIAlertAction(title: "OK", style: .default))
+                            presenter.presentNative?(alert)
+                        }
                     }
                 }
-            }
-            if !FullGramAdmin.shared.hasToken {
-                promptAdminToken {
-                    if FullGramAdmin.shared.hasToken {
-                        performSponsorToggle()
+                if !FullGramAdmin.shared.hasToken {
+                    promptAdminToken {
+                        if FullGramAdmin.shared.hasToken {
+                            performSponsorChange()
+                        }
                     }
+                } else {
+                    performSponsorChange()
                 }
-            } else {
-                performSponsorToggle()
             }
+
+            let sheet = UIAlertController(
+                title: ru ? "Роль спонсора FullGram" : "FullGram Sponsor Tier",
+                message: ru ? "Выберите уровень прав для пользователя:" : "Select permission tier for this user:",
+                preferredStyle: .actionSheet
+            )
+            sheet.addAction(UIAlertAction(title: ru ? "Нет (обычный пользователь)" : "None", style: .destructive, handler: { _ in
+                applyTier(.none)
+            }))
+            sheet.addAction(UIAlertAction(title: ru ? "💎 Спонсор (свой бейдж и свои NFT)" : "💎 Sponsor (self badge & NFTs)", style: .default, handler: { _ in
+                applyTier(.sponsor)
+            }))
+            sheet.addAction(UIAlertAction(title: ru ? "💠 Спонсор+ (свой бейдж и NFT любым людям)" : "💠 Sponsor+ (self badge & grant NFT to anyone)", style: .default, handler: { _ in
+                applyTier(.sponsorPlus)
+            }))
+            sheet.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
+            presenter.presentNative?(sheet)
         },
         toggleEnabled: { value in
             updateState { $0.draft.enabled = value }
         },
         pickEmoji: {
-            guard let controller = weakController else { return }
+            guard let controller = presenter.controller else { return }
             let currentId = stateValue.with { $0.draft.customEmojiId }
             var selectedItems = Set<AnyHashable>()
             if let currentId {
@@ -558,9 +605,9 @@ func fullGramBadgeDeskController(
                 }
             )
             emojiController.pushController = { c in
-                pushImpl?(c)
+                presenter.push?(c)
             }
-            presentControllerImpl?(emojiController)
+            presenter.presentController?(emojiController)
         },
         resetEmoji: {
             updateState { $0.draft.customEmojiId = nil }
@@ -568,7 +615,12 @@ func fullGramBadgeDeskController(
         pickRole: {
             let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
             let sheet = UIAlertController(title: ru ? "Выберите роль" : "Select role", message: nil, preferredStyle: .actionSheet)
-            let order = sponsorSelfAllowed ? ["sponsor", "premium", "dev"] : ["sponsor", "premium", "dev", "official", "creator"]
+            let order: [String]
+            if sponsorSelfAllowed {
+                order = selfTier == .sponsorPlus ? ["sponsor_plus", "sponsor", "premium", "dev"] : ["sponsor", "premium", "dev"]
+            } else {
+                order = ["sponsor_plus", "sponsor", "premium", "dev", "official", "creator"]
+            }
             for key in order {
                 if let role = FullGramBadges.builtInRoles[key] {
                     sheet.addAction(UIAlertAction(title: "\(role.emoji) \(fullGramRoleDisplayName(key, russian: ru))", style: .default, handler: { _ in
@@ -583,7 +635,7 @@ func fullGramBadgeDeskController(
                 }
             }
             sheet.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
-            presentNativeImpl?(sheet)
+            presenter.presentNative?(sheet)
         },
         editLabel: {
             let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
@@ -600,7 +652,7 @@ func fullGramBadgeDeskController(
                 }
             }))
             alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
-            presentNativeImpl?(alert)
+            presenter.presentNative?(alert)
         },
         editShortLabel: {
             let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
@@ -617,17 +669,42 @@ func fullGramBadgeDeskController(
                 }
             }))
             alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
-            presentNativeImpl?(alert)
+            presenter.presentNative?(alert)
         },
         openNFTCatalog: {
             let cleanId = peer.id.id._internalGetInt64Value()
-            pushImpl?(fullGramNFTCatalogController(
+            presenter.push?(fullGramNFTCatalogController(
                 context: context,
                 targetPeerId: cleanId,
                 targetDisplayName: peer.compactDisplayTitle,
                 targetEnginePeerId: peer.id,
-                isSponsorSelfMode: sponsorSelfAllowed
+                isSponsorSelfMode: useSponsorNFTAPI
             ))
+        },
+        grantNFTById: {
+            let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
+            let alert = UIAlertController(
+                title: ru ? "Выдать NFT пользователю" : "Grant NFT to user",
+                message: ru ? "Введите Telegram User ID получателя:" : "Enter recipient Telegram User ID:",
+                preferredStyle: .alert
+            )
+            alert.addTextField { tf in
+                tf.placeholder = "123456789"
+                tf.keyboardType = .numberPad
+            }
+            alert.addAction(UIAlertAction(title: ru ? "Выбрать NFT →" : "Choose NFT →", style: .default, handler: { _ in
+                let raw = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let uid = Int64(raw), uid > 0 else { return }
+                presenter.push?(fullGramNFTCatalogController(
+                    context: context,
+                    targetPeerId: uid,
+                    targetDisplayName: "ID \(uid)",
+                    targetEnginePeerId: nil,
+                    isSponsorSelfMode: useSponsorNFTAPI
+                ))
+            }))
+            alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
+            presenter.presentNative?(alert)
         },
         revokeNFT: { item in
             let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
@@ -648,17 +725,17 @@ func fullGramBadgeDeskController(
                     case let .failure(err):
                         let errAlert = UIAlertController(title: ru ? "Ошибка" : "Error", message: err.localizedDescription, preferredStyle: .alert)
                         errAlert.addAction(UIAlertAction(title: "OK", style: .default))
-                        presentNativeImpl?(errAlert)
+                        presenter.presentNative?(errAlert)
                     }
                 }
-                if sponsorSelfAllowed {
-                    FullGramAdmin.shared.revokeSponsorSelfNFT(peerId: cleanId, entryId: item.id, completion: finishRevoke)
+                if useSponsorNFTAPI {
+                    FullGramAdmin.shared.revokeSponsorNFT(actorPeerId: selfCleanId, targetPeerId: cleanId, entryId: item.id, completion: finishRevoke)
                 } else {
                     FullGramAdmin.shared.revokeNFT(peerId: cleanId, entryId: item.id, completion: finishRevoke)
                 }
             }))
             alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
-            presentNativeImpl?(alert)
+            presenter.presentNative?(alert)
         },
         editToken: {
             promptAdminToken(nil)
@@ -669,58 +746,83 @@ func fullGramBadgeDeskController(
     |> map { presentationData, state, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
         let changed = state.draft != state.original
-        let rightButton: ItemListNavigationButton
-        if state.saving {
+        let rightButton: ItemListNavigationButton?
+        if sponsorPlusOtherNFTOnly {
+            rightButton = nil
+        } else if state.saving {
             rightButton = ItemListNavigationButton(content: .none, style: .activity, enabled: false, action: {})
         } else {
             rightButton = ItemListNavigationButton(content: .text(presentationData.strings.Common_Done), style: .bold, enabled: changed, action: commitSave)
         }
 
-        var entries: [FullGramBadgeDeskEntry] = [
-            .previewHeader(ru ? "ПРЕДПРОСМОТР" : "PREVIEW"),
-            .previewPeer(peer, state.draft, ru)
-        ]
-
-        if isAdminUser, case .user = peer {
-            let isSponsorNow = FullGramSponsors.shared.isSponsor(peerId: cleanTargetId)
-            entries.append(.sponsorHeader(ru ? "СПОНСОР FULLGRAM" : "FULLGRAM SPONSOR"))
-            entries.append(.sponsorSwitch(ru ? "Назначить спонсором" : "Assign as Sponsor", isSponsorNow))
-            entries.append(.sponsorFooter(ru ? "Спонсор может самостоятельно настраивать свой бейдж и выдавать себе NFT в свой профиль без токена владельца." : "A Sponsor can customize their own badge and grant themselves profile NFTs without owner admin token."))
+        var entries: [FullGramBadgeDeskEntry] = []
+        if !sponsorPlusOtherNFTOnly {
+            entries.append(.previewHeader(ru ? "ПРЕДПРОСМОТР" : "PREVIEW"))
+            entries.append(.previewPeer(peer, state.draft, ru))
         }
 
-        entries.append(.badgeHeader(ru ? "БЕЙДЖ FULLGRAM" : "FULLGRAM BADGE"))
-        entries.append(.badgeSwitch(ru ? "Бейдж" : "Badge", state.draft.enabled))
-
-        if state.draft.enabled {
-            let emojiStatus = state.draft.customEmojiId != nil ? (ru ? "Выбран" : "Chosen") : (ru ? "По умолчанию" : "Default")
-            entries.append(.badgeEmoji(ru ? "Эмодзи" : "Emoji", emojiStatus))
-            if state.draft.customEmojiId != nil {
-                entries.append(.badgeEmojiReset(ru ? "Сбросить эмодзи" : "Reset emoji"))
+        if isAdminUser, case .user = peer {
+            let currentTier = FullGramSponsors.shared.tier(forPeerId: cleanTargetId)
+            let tierLabel: String
+            switch currentTier {
+            case .none: tierLabel = ru ? "Нет" : "None"
+            case .sponsor: tierLabel = ru ? "Спонсор" : "Sponsor"
+            case .sponsorPlus: tierLabel = ru ? "Спонсор+" : "Sponsor+"
             }
-            entries.append(.badgeRole(ru ? "Роль" : "Role", fullGramRoleDisplayName(state.draft.roleId, russian: ru)))
-            entries.append(.badgeLabel(ru ? "Текст бейджа" : "Badge text", state.draft.label))
-            entries.append(.badgeShortLabel(ru ? "Короткая метка" : "Short tag", state.draft.shortLabel))
-            entries.append(.badgeFooter(ru ? "Без эмодзи: стандартный значок роли" : "No emoji: the developer mark"))
+            entries.append(.sponsorHeader(ru ? "СПОНСОР FULLGRAM" : "FULLGRAM SPONSOR"))
+            entries.append(.sponsorTier(ru ? "Статус спонсора" : "Sponsor tier", tierLabel))
+            entries.append(.sponsorFooter(ru ? "«Спонсор» редактирует свой бейдж и свои NFT. «Спонсор+» дополнительно может выдавать и снимать NFT в профилях любых пользователей без токена владельца." : "'Sponsor' manages their own badge and NFTs. 'Sponsor+' can also grant/remove NFTs on other users' profiles without an owner token."))
+        }
+
+        if !sponsorPlusOtherNFTOnly {
+            entries.append(.badgeHeader(ru ? "БЕЙДЖ FULLGRAM" : "FULLGRAM BADGE"))
+            entries.append(.badgeSwitch(ru ? "Бейдж" : "Badge", state.draft.enabled))
+
+            if state.draft.enabled {
+                let emojiStatus = state.draft.customEmojiId != nil ? (ru ? "Выбран" : "Chosen") : (ru ? "По умолчанию" : "Default")
+                entries.append(.badgeEmoji(ru ? "Эмодзи" : "Emoji", emojiStatus))
+                if state.draft.customEmojiId != nil {
+                    entries.append(.badgeEmojiReset(ru ? "Сбросить эмодзи" : "Reset emoji"))
+                }
+                entries.append(.badgeRole(ru ? "Роль" : "Role", fullGramRoleDisplayName(state.draft.roleId, russian: ru)))
+                entries.append(.badgeLabel(ru ? "Текст бейджа" : "Badge text", state.draft.label))
+                entries.append(.badgeShortLabel(ru ? "Короткая метка" : "Short tag", state.draft.shortLabel))
+                entries.append(.badgeFooter(ru ? "Без эмодзи: стандартный значок роли" : "No emoji: the developer mark"))
+            }
         }
 
         let grantedNfts = FullGramGrantedNFTStore.shared.gifts(forPeerId: peerId)
         entries.append(.nftHeader(ru ? "NFT-ПОДАРКИ В ПРОФИЛЬ" : "PROFILE NFT GIFTS"))
         entries.append(.nftGrantAction(ru ? "Выдать NFT (выбор модели, фона, узора и #)…" : "Grant NFT (model, backdrop, pattern & #)…"))
+        if sponsorSelfAllowed && selfTier == .sponsorPlus {
+            entries.append(.nftGrantByIdAction(ru ? "Выдать NFT другому пользователю по ID…" : "Grant NFT to another user by ID…"))
+        }
         for (idx, nft) in grantedNfts.enumerated() {
             let detail = nft.modelName.isEmpty ? "#\(nft.number)" : nft.modelName
             entries.append(.nftGrantedItem(Int32(idx), nft, "\(nft.title) #\(nft.number)", detail))
         }
         entries.append(.nftFooter(ru ? "Выданные NFT отображаются у всех пользователей FullGram прямо в профиле (существующие NFT Telegram сохраняются)." : "Granted NFTs are visible to all FullGram users directly on the profile without affecting Telegram NFTs."))
 
-        if !sponsorSelfAllowed {
+        if !useSponsorNFTAPI {
             entries.append(.adminHeader(ru ? "СЕРВЕР FULLGRAM" : "FULLGRAM SERVER"))
             entries.append(.adminToken(ru ? "Токен администратора" : "Admin token", FullGramAdmin.shared.hasToken ? (ru ? "Сохранён" : "Saved") : (ru ? "Не задан" : "Not set")))
+        }
+
+        let titleText: String
+        if sponsorPlusOtherNFTOnly {
+            titleText = ru ? "Спонсор+: NFT" : "Sponsor+: NFT"
+        } else if sponsorSelfAllowed {
+            titleText = selfTier == .sponsorPlus
+                ? (ru ? "Спонсор+: Бейдж и NFT" : "Sponsor+: Badge & NFT")
+                : (ru ? "Спонсор: Бейдж и NFT" : "Sponsor: Badge & NFT")
+        } else {
+            titleText = ru ? "Бейдж и NFT" : "Badge & NFT"
         }
 
         let data = ItemListPresentationData(presentationData)
         let controllerState = ItemListControllerState(
             presentationData: data,
-            title: .text(sponsorSelfAllowed ? (ru ? "Спонсор: Бейдж и NFT" : "Sponsor: Badge & NFT") : (ru ? "Бейдж и NFT" : "Badge & NFT")),
+            title: .text(titleText),
             leftNavigationButton: nil,
             rightNavigationButton: rightButton,
             backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back),
@@ -735,10 +837,10 @@ func fullGramBadgeDeskController(
     }
 
     let controller = ItemListController(context: context, state: signal)
-    weakController = controller
-    presentNativeImpl = { [weak controller] vc in controller?.present(vc, animated: true) }
-    presentControllerImpl = { [weak controller] c in controller?.present(c, in: .window(.root)) }
-    pushImpl = { [weak controller] c in controller?.push(c) }
+    presenter.controller = controller
+    presenter.presentNative = { [weak controller] vc in controller?.present(vc, animated: true) }
+    presenter.presentController = { [weak controller] c in controller?.present(c, in: .window(.root)) }
+    presenter.push = { [weak controller] c in controller?.push(c) }
     return controller
 }
 
@@ -864,8 +966,7 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
         return fullGramPluginsController(context: context)
     }
 
-    var presentNativeImpl: ((UIViewController) -> Void)?
-    var pushImpl: ((ViewController) -> Void)?
+    let presenter = FullGramBadgeDeskPresenterBox()
     let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
     let tick = Atomic<Int>(value: 0)
     let bump: @Sendable () -> Void = {
@@ -875,7 +976,7 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
     let showAlert: (String, String) -> Void = { title, message in
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))
-        presentNativeImpl?(alert)
+        presenter.presentNative?(alert)
     }
 
     let args = FullGramAdminPanelArguments(
@@ -911,7 +1012,7 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
                 }))
             }
             alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
-            presentNativeImpl?(alert)
+            presenter.presentNative?(alert)
         },
         verifyServerAuth: {
             let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
@@ -933,7 +1034,7 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
             let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
             let alert = UIAlertController(
                 title: ru ? "Выдать / снять бейдж" : "Grant / remove badge",
-                message: ru ? "Укажите Telegram ID или @username и роль (creator, official, sponsor, premium, dev или off)." : "Enter Telegram ID or @username and role (creator, official, sponsor, premium, dev, or off).",
+                message: ru ? "Укажите Telegram ID или @username и роль (creator, official, sponsor_plus, sponsor, premium, dev или off)." : "Enter Telegram ID or @username and role (creator, official, sponsor_plus, sponsor, premium, dev, or off).",
                 preferredStyle: .alert
             )
             alert.addTextField { tf in
@@ -943,7 +1044,7 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
             }
             alert.addTextField { tf in
                 tf.text = "premium"
-                tf.placeholder = "sponsor / premium / dev / official / creator / off"
+                tf.placeholder = "sponsor_plus / sponsor / premium / dev / official / creator / off"
                 tf.autocorrectionType = .no
                 tf.autocapitalizationType = .none
             }
@@ -973,15 +1074,15 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
                 }
             }))
             alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
-            presentNativeImpl?(alert)
+            presenter.presentNative?(alert)
         },
         manageSponsorById: {
             let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
             let alert = UIAlertController(
                 title: ru ? "Управление спонсором" : "Sponsor management",
                 message: ru
-                    ? "Спонсор может сам редактировать свой бейдж и выдавать себе NFT в свой профиль без админ-токена. Введите Telegram ID или @username:"
-                    : "A Sponsor can customize their own badge and grant NFTs to their own profile without an admin token. Enter Telegram ID or @username:",
+                    ? "«Спонсор» меняет свой бейдж и свои NFT. «Спонсор+» также может выдавать NFT другим пользователям. Введите Telegram ID или @username:"
+                    : "'Sponsor' customizes their own badge & NFTs. 'Sponsor+' can also grant NFTs to other users. Enter Telegram ID or @username:",
                 preferredStyle: .alert
             )
             alert.addTextField { tf in
@@ -989,36 +1090,43 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
                 tf.autocorrectionType = .no
                 tf.autocapitalizationType = .none
             }
-            let performSponsorAction: (Bool) -> Void = { enabled in
+            let performSponsorAction: (Bool, FullGramSponsorTier) -> Void = { enabled, tier in
                 let target = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !target.isEmpty else { return }
                 let numericId = Int64(target)
                 FullGramAdmin.shared.setSponsor(
                     peerId: numericId,
                     username: numericId == nil ? target : nil,
-                    enabled: enabled
+                    enabled: enabled,
+                    tier: tier
                 ) { res in
                     switch res {
                     case let .success(resolvedId):
-                        showAlert(
-                            ru ? "Готово" : "Done",
-                            enabled
-                                ? (ru ? "Пользователь \(resolvedId) назначен спонсором." : "User \(resolvedId) assigned as Sponsor.")
-                                : (ru ? "Статус спонсора снят с \(resolvedId)." : "Sponsor removed from \(resolvedId).")
-                        )
+                        let msg: String
+                        if !enabled {
+                            msg = ru ? "Статус спонсора снят с \(resolvedId)." : "Sponsor removed from \(resolvedId)."
+                        } else if tier == .sponsorPlus {
+                            msg = ru ? "Пользователь \(resolvedId) назначен Спонсором+." : "User \(resolvedId) assigned as Sponsor+."
+                        } else {
+                            msg = ru ? "Пользователь \(resolvedId) назначен Спонсором." : "User \(resolvedId) assigned as Sponsor."
+                        }
+                        showAlert(ru ? "Готово" : "Done", msg)
                     case let .failure(err):
                         showAlert(ru ? "Ошибка" : "Error", err.localizedDescription)
                     }
                 }
             }
-            alert.addAction(UIAlertAction(title: ru ? "Назначить спонсором" : "Assign Sponsor", style: .default, handler: { _ in
-                performSponsorAction(true)
+            alert.addAction(UIAlertAction(title: ru ? "Назначить Спонсором" : "Assign Sponsor", style: .default, handler: { _ in
+                performSponsorAction(true, .sponsor)
+            }))
+            alert.addAction(UIAlertAction(title: ru ? "Назначить Спонсором+" : "Assign Sponsor+", style: .default, handler: { _ in
+                performSponsorAction(true, .sponsorPlus)
             }))
             alert.addAction(UIAlertAction(title: ru ? "Снять спонсора" : "Remove Sponsor", style: .destructive, handler: { _ in
-                performSponsorAction(false)
+                performSponsorAction(false, .none)
             }))
             alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
-            presentNativeImpl?(alert)
+            presenter.presentNative?(alert)
         },
         grantNFTById: {
             let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
@@ -1036,10 +1144,10 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
             alert.addAction(UIAlertAction(title: ru ? "Выбрать NFT →" : "Choose NFT →", style: .default, handler: { _ in
                 let raw = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 guard let uid = Int64(raw), uid > 0 else { return }
-                pushImpl?(fullGramNFTCatalogController(context: context, targetPeerId: uid, targetDisplayName: "ID \(uid)"))
+                presenter.push?(fullGramNFTCatalogController(context: context, targetPeerId: uid, targetDisplayName: "ID \(uid)"))
             }))
             alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
-            presentNativeImpl?(alert)
+            presenter.presentNative?(alert)
         },
         publishLocalPlugin: {
             let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
@@ -1070,7 +1178,7 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
                 }))
             }
             sheet.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
-            presentNativeImpl?(sheet)
+            presenter.presentNative?(sheet)
         },
         removeMarketPlugin: {
             let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
@@ -1097,7 +1205,7 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
                         }))
                     }
                     sheet.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
-                    presentNativeImpl?(sheet)
+                    presenter.presentNative?(sheet)
                 }
             }
         },
@@ -1154,7 +1262,7 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
     }
 
     let controller = ItemListController(context: context, state: signal)
-    presentNativeImpl = { [weak controller] vc in controller?.present(vc, animated: true) }
-    pushImpl = { [weak controller] c in controller?.push(c) }
+    presenter.presentNative = { [weak controller] vc in controller?.present(vc, animated: true) }
+    presenter.push = { [weak controller] c in controller?.push(c) }
     return controller
 }

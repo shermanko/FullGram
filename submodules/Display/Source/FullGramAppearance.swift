@@ -6,7 +6,7 @@ import UIKitRuntimeUtils
 
 /// Встроенные шрифты (UIAppFonts) + 50 шрифтов из GitHub-репозитория FullGram (без нагрузки на Cloudflare).
 public enum FullGramFonts {
-    public struct Option {
+    public struct Option: Equatable, Sendable {
         public let id: String
         public let title: String
         /// PostScript-имя; nil — системный шрифт Telegram.
@@ -147,7 +147,9 @@ public enum FullGramFonts {
     }
 
     public static func reloadActiveFont() {
-        self.registerActiveFontIfNeeded()
+        if let option = self.options.first(where: { $0.id == self.selectedId }) {
+            _ = self.registerFontFileIfNeeded(option: option)
+        }
         Font.clearCache()
         NotificationCenter.default.post(name: self.didChangeNotification, object: nil)
     }

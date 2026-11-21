@@ -248,6 +248,13 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
             destination: { fullGramMessageHistoryController(context: $0) }
         ),
         FullGramSearchItem(
+            id: 18,
+            title: "Полупрозрачные удалённые сообщения",
+            subtitle: "Чаты → Удалённые",
+            keywords: "удаленные полупрозрачные прозрачность удалено deleted translucent",
+            toggle: ({ FullGramExtras.shared.dimDeletedMessages }, { FullGramExtras.shared.dimDeletedMessages = $0 })
+        ),
+        FullGramSearchItem(
             id: 11,
             title: "Обход ограничений (одноразовые медиа)",
             subtitle: "Чаты",
@@ -529,6 +536,106 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
             subtitle: "Плагины",
             keywords: "плагины скрипты lua python код редактор маркет информация о чате",
             destination: { fullGramPluginsController(context: $0) }
+        ),
+
+        // FullGram v1.6.1: Отправка, медиа, документы и оптимизация
+        FullGramSearchItem(
+            id: 71,
+            title: "Нарезка и склейка аудио перед отправкой",
+            subtitle: "Сообщение и отправка",
+            keywords: "аудио нарезка склейка обрезка монтаж голос перед отправкой",
+            toggle: ({ FullGramExtras.shared.audioTrimSpliceBeforeSend }, { FullGramExtras.shared.audioTrimSpliceBeforeSend = $0 })
+        ),
+        FullGramSearchItem(
+            id: 72,
+            title: "Студия нарезки и склейки аудио",
+            subtitle: "Сообщение и отправка",
+            keywords: "студия аудио склеить нарезать файл перед отправкой",
+            destination: { _ in FullGramAudioTrimSpliceController(initialURL: nil, title: "Студия аудио") }
+        ),
+        FullGramSearchItem(
+            id: 73,
+            title: "Переименовывать файл перед отправкой",
+            subtitle: "Сообщение и отправка",
+            keywords: "имя файла переименование rename документ",
+            toggle: ({ FullGramExtras.shared.renameFileBeforeSend }, { FullGramExtras.shared.renameFileBeforeSend = $0 })
+        ),
+        FullGramSearchItem(
+            id: 74,
+            title: "Запрос перед отправкой в выбранных чатах",
+            subtitle: "Сообщение и отправка",
+            keywords: "подтверждение запрос точно хотите отправить чат защита",
+            toggle: ({ FullGramExtras.shared.confirmSendBeforePosting }, { FullGramExtras.shared.confirmSendBeforePosting = $0 })
+        ),
+        FullGramSearchItem(
+            id: 75,
+            title: "Запрос перед отправкой во всех чатах",
+            subtitle: "Сообщение и отправка",
+            keywords: "подтверждение все чаты запрос отправить",
+            toggle: ({ FullGramExtras.shared.confirmSendForAllChats }, { FullGramExtras.shared.confirmSendForAllChats = $0 })
+        ),
+        FullGramSearchItem(
+            id: 76,
+            title: "Субтитры для кружков и видео",
+            subtitle: "Основное",
+            keywords: "субтитры кружки видео текст речь расшифровка live",
+            toggle: ({ FullGramExtras.shared.videoSubtitlesEnabled }, { FullGramExtras.shared.videoSubtitlesEnabled = $0 })
+        ),
+        FullGramSearchItem(
+            id: 77,
+            title: "Очередь отправки и докачки файлов",
+            subtitle: "Сообщение и отправка",
+            keywords: "очередь докачка связь интернет сеть загрузка отправка",
+            destination: { fullGramTransferQueueController(context: $0) }
+        ),
+        FullGramSearchItem(
+            id: 78,
+            title: "Умная очередь отправки и загрузки",
+            subtitle: "Сообщение и отправка",
+            keywords: "очередь загрузка отправка сеть докачка",
+            toggle: ({ FullGramExtras.shared.smartTransferQueue }, { FullGramExtras.shared.smartTransferQueue = $0 })
+        ),
+        FullGramSearchItem(
+            id: 79,
+            title: "Автодокачка при появлении сети",
+            subtitle: "Сообщение и отправка",
+            keywords: "докачка сеть восстановление авто reconnect",
+            toggle: ({ FullGramExtras.shared.autoResumeDownloadsOnReconnect }, { FullGramExtras.shared.autoResumeDownloadsOnReconnect = $0 })
+        ),
+        FullGramSearchItem(
+            id: 80,
+            title: "Автообрезка скриншотов (убрать статус-бар)",
+            subtitle: "Сообщение и отправка",
+            keywords: "скриншот обрезка статус бар батарея индикатор фото",
+            toggle: ({ FullGramExtras.shared.autoCropScreenshots }, { FullGramExtras.shared.autoCropScreenshots = $0 })
+        ),
+        FullGramSearchItem(
+            id: 81,
+            title: "Выбор кадра-обложки кружка",
+            subtitle: "Сообщение и отправка",
+            keywords: "обложка кадр кружок видеосообщение превью",
+            toggle: ({ FullGramExtras.shared.chooseVideoNoteCoverBeforeSend }, { FullGramExtras.shared.chooseVideoNoteCoverBeforeSend = $0 })
+        ),
+        FullGramSearchItem(
+            id: 82,
+            title: "Правка текста перед пересылкой",
+            subtitle: "Сообщение и отправка",
+            keywords: "пересылка правка убрать кусок forward редактор",
+            toggle: ({ FullGramExtras.shared.editForwardedBeforeSend }, { FullGramExtras.shared.editForwardedBeforeSend = $0 })
+        ),
+        FullGramSearchItem(
+            id: 83,
+            title: "Автоочистка временных кэшей (оптимизация)",
+            subtitle: "Основное",
+            keywords: "оптимизация кэш память очистка tmp файлы",
+            toggle: ({ FullGramExtras.shared.autoCleanTempCaches }, { FullGramExtras.shared.autoCleanTempCaches = $0 })
+        ),
+        FullGramSearchItem(
+            id: 84,
+            title: "Сообщение, очередь и инструменты отправки",
+            subtitle: "Сообщение и отправка",
+            keywords: "отправка аудио очередь скриншоты обложка пересылка файлы",
+            destination: { fullGramSendingController(context: $0) }
         )
     ]
 }

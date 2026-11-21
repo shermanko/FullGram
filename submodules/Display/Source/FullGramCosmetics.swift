@@ -312,6 +312,7 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
                 preparedData = png
             }
         }
+        let finalPayloadData = preparedData
         guard let uploadURL = URL(string: FullGramAdmin.workerBaseURL + "/cosmetics/upload-frame") else {
             completion?(.failure(NSError(domain: "FullGramCloudCosmetics", code: 400, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])))
             return
@@ -325,7 +326,7 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
             case let .success(token):
                 let payload: [String: Any] = [
                     "peerId": String(norm),
-                    "imageBase64": preparedData.base64EncodedString(),
+                    "imageBase64": finalPayloadData.base64EncodedString(),
                     "ext": isGif ? "gif" : "png"
                 ]
                 guard let bodyData = try? JSONSerialization.data(withJSONObject: payload, options: []) else {

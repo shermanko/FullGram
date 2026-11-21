@@ -768,12 +768,19 @@ public final class ChatTitleComponent: Component {
                             if peer.isVerified {
                                 titleCredibilityIcon = .verified
                             }
-                            if !peer.isFake && !peer.isScam && (titleCredibilityIcon == .none || titleCredibilityIcon == .premium),
-                               let badge = FullGramBadges.shared.badge(forPeerId: peer.id.toInt64(), username: peer.addressName) {
-                                titleCredibilityIcon = .fullGram(badge)
-                            }
                             if let verificationIconFileId = peer.verificationIconFileId {
                                 titleVerifiedIcon = .emojiStatus(PeerEmojiStatus(content: .emoji(fileId: verificationIconFileId), expirationDate: nil))
+                            }
+                            let hasRealTelegramPremium = peer.isServerPremium || peer.emojiStatus != nil
+                            if !peer.isFake && !peer.isScam,
+                               let badge = FullGramBadges.shared.badge(forPeerId: peer.id.toInt64(), username: peer.addressName) {
+                                if hasRealTelegramPremium {
+                                    if titleVerifiedIcon == .none {
+                                        titleVerifiedIcon = .fullGram(badge)
+                                    }
+                                } else if titleCredibilityIcon == .none || titleCredibilityIcon == .premium {
+                                    titleCredibilityIcon = .fullGram(badge)
+                                }
                             }
                         }
                     }

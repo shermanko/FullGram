@@ -1057,3 +1057,207 @@ public enum FullGramSpeechBleep {
         }
     }
 }
+
+public struct FullGramSubtitleCue: Sendable, Equatable {
+    public let start: TimeInterval
+    public let end: TimeInterval
+    public let text: String
+
+    public init(start: TimeInterval, end: TimeInterval, text: String) {
+        self.start = start
+        self.end = end
+        self.text = text
+    }
+}
+
+public extension FullGramSpeechBleep {
+    private static let subtitleLock = NSLock()
+    private static var subtitleCache: [String: [FullGramSubtitleCue]] = [:]
+
+    static func activeSubtitleText(in cues: [FullGramSubtitleCue], at timestamp: TimeInterval) -> String? {
+        guard !cues.isEmpty else { return nil }
+        for cue in cues {
+            if timestamp >= max(0.0, cue.start - 0.08) && timestamp <= cue.end + 0.15 {
+                return cue.text
+            }
+        }
+        return nil
+    }
+
+    static func recognizeSubtitleCues(
+        at path: String,
+        preferredLanguage: String? = nil,
+        defaultExtension: String = "mp4",
+        completion: @escaping @Sendable ([FullGramSubtitleCue]) -> Void
+    ) {
+        self.subtitleLock.lock()
+        if let cached = self.subtitleCache[path] {
+            self.subtitleLock.unlock()
+            DispatchQueue.main.async { completion(cached) }
+            return
+        }
+        self.subtitleLock.unlock()
+
+        let startRecognition = {
+            let srcURL = URL(fileURLWithPath: path)
+            guard FileManager.default.fileExists(atPath: path) else {
+                DispatchQueue.main.async { completion([]) }
+                return
+            }
+            let supportedExts = ["m4a", "mp4", "mov", "wav", "caf", "mp3", "aac"]
+            let ext = srcURL.pathExtension.lowercased()
+            let workingURL: URL
+            var shouldCleanup = false
+            if supportedExts.contains(ext) {
+                workingURL = srcURL
+            } else {
+                let tmpURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("fullgram_sub_\(UUID().uuidString).\(defaultExtension)")
+                do {
+                    try FileManager.default.copyItem(at: srcURL, to: tmpURL)
+                    workingURL = tmpURL
+                    shouldCleanup = true
+                } catch {
+                    DispatchQueue.main.async { completion([]) }
+                    return
+                }
+            }
+
+            let assetDuration = max(1.0, CMTimeGetSeconds(AVURLAsset(url: workingURL).duration))
+            var candidates: [String] = []
+            for raw in [preferredLanguage, Locale.current.identifier, "ru-RU", "en-US"] {
+                if let id = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty, !candidates.contains(id) {
+                    candidates.append(id)
+                }
+            }
+
+            func finishCues(_ cues: [FullGramSubtitleCue]) {
+                if shouldCleanup { try? FileManager.default.removeItem(at: workingURL) }
+                if !cues.isEmpty {
+                    self.subtitleLock.lock()
+                    if self.subtitleCache.count >= 40 {
+                        self.subtitleCache.removeAll()
+                    }
+                    self.subtitleCache[path] = cues
+                    self.subtitleLock.unlock()
+                }
+                DispatchQueue.main.async { completion(cues) }
+            }
+
+            func attempt(index: Int) {
+                guard index < candidates.count else {
+                    finishCues([])
+                    return
+                }
+                guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: candidates[index])), recognizer.isAvailable else {
+                    attempt(index: index + 1)
+                    return
+                }
+                let request = SFSpeechURLRecognitionRequest(url: workingURL)
+                request.shouldReportPartialResults = false
+                request.taskHint = .dictation
+                if #available(iOS 16.0, *) {
+                    request.addsPunctuation = true
+                }
+                var handled = false
+                recognizer.recognitionTask(with: request) { result, error in
+                    guard !handled else { return }
+                    if let result, result.isFinal {
+                        handled = true
+                        let segs = result.bestTranscription.segments
+                        let full = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let built = Self.buildSubtitleCues(segments: segs, fallbackText: full, duration: assetDuration)
+                        if !built.isEmpty {
+                            finishCues(built)
+                        } else {
+                            attempt(index: index + 1)
+                        }
+                    } else if error != nil {
+                        handled = true
+                        attempt(index: index + 1)
+                    }
+                }
+            }
+
+            attempt(index: 0)
+        }
+
+        let status = SFSpeechRecognizer.authorizationStatus()
+        if status == .notDetermined {
+            SFSpeechRecognizer.requestAuthorization { newStatus in
+                if newStatus == .authorized {
+                    startRecognition()
+                } else {
+                    DispatchQueue.main.async { completion([]) }
+                }
+            }
+        } else if status == .authorized {
+            startRecognition()
+        } else {
+            DispatchQueue.main.async { completion([]) }
+        }
+    }
+
+    private static func buildSubtitleCues(
+        segments: [SFTranscriptionSegment],
+        fallbackText: String,
+        duration: TimeInterval
+    ) -> [FullGramSubtitleCue] {
+        let timedSegments = segments.filter { $0.timestamp >= 0 && $0.duration > 0 }
+        if !timedSegments.isEmpty {
+            var cues: [FullGramSubtitleCue] = []
+            var currentWords: [String] = []
+            var cueStart: TimeInterval = timedSegments[0].timestamp
+            var cueEnd: TimeInterval = timedSegments[0].timestamp + max(0.35, timedSegments[0].duration)
+
+            func flush() {
+                let text = currentWords.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty {
+                    cues.append(FullGramSubtitleCue(start: cueStart, end: max(cueStart + 0.4, cueEnd), text: text))
+                }
+                currentWords.removeAll()
+            }
+
+            for (idx, seg) in timedSegments.enumerated() {
+                let word = seg.substring.trimmingCharacters(in: .whitespacesAndNewlines)
+                if word.isEmpty { continue }
+                let segStart = seg.timestamp
+                let segEnd = segStart + max(0.3, seg.duration)
+                if currentWords.isEmpty {
+                    cueStart = segStart
+                    cueEnd = segEnd
+                }
+                let gap = segStart - cueEnd
+                if !currentWords.isEmpty && (gap > 0.65 || (segEnd - cueStart) > 2.8 || currentWords.count >= 6) {
+                    flush()
+                    cueStart = segStart
+                }
+                currentWords.append(word)
+                cueEnd = segEnd
+                let lastChar = word.last
+                if lastChar == "." || lastChar == "?" || lastChar == "!" || idx == timedSegments.count - 1 {
+                    flush()
+                }
+            }
+            flush()
+            if !cues.isEmpty {
+                return cues
+            }
+        }
+
+        let words = fallbackText.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        guard !words.isEmpty else { return [] }
+        let chunkSize = 6
+        var chunks: [String] = []
+        var i = 0
+        while i < words.count {
+            chunks.append(words[i ..< min(words.count, i + chunkSize)].joined(separator: " "))
+            i += chunkSize
+        }
+        let step = max(0.8, duration / Double(max(1, chunks.count)))
+        return chunks.enumerated().map { idx, text in
+            let s = Double(idx) * step
+            return FullGramSubtitleCue(start: s, end: s + step, text: text)
+        }
+    }
+}

@@ -662,6 +662,10 @@ public class ChatMessageInstantVideoItemNode: ChatMessageItemView, ASGestureReco
             func finishAsyncLayout(_ animation: ListViewItemUpdateAnimation, _ synchronousLoads: Bool) {
                 if let strongSelf = weakSelf.value {
                     strongSelf.contextSourceNode.frame = CGRect(origin: CGPoint(), size: layoutSize)
+                    let fgDeletedAlpha: CGFloat = (FullGramExtras.shared.dimDeletedMessages && item.message.attributes.contains(where: { $0 is FullGramDeletedMessageAttribute })) ? 0.52 : 1.0
+                    if strongSelf.contextSourceNode.alpha != fgDeletedAlpha {
+                        strongSelf.contextSourceNode.alpha = fgDeletedAlpha
+                    }
                     strongSelf.containerNode.frame = CGRect(origin: CGPoint(), size: layoutSize)
                     strongSelf.contextSourceNode.contentNode.frame = CGRect(origin: CGPoint(), size: layoutSize)
                     strongSelf.messageAccessibilityArea.frame = CGRect(origin: CGPoint(), size: layoutSize)

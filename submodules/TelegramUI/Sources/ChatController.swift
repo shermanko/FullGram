@@ -9399,7 +9399,16 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
         return .single(false)
     }
     
-    func sendMessages(_ messages: [EnqueueMessage], media: Bool = false, postpone: Bool = false, commit: Bool = false, presentSchedulePickerInOverlay: Bool = false) {
+    func sendMessages(
+        _ messages: [EnqueueMessage],
+        media: Bool = false,
+        postpone: Bool = false,
+        commit: Bool = false,
+        presentSchedulePickerInOverlay: Bool = false,
+        fullGramConfirmed: Bool = false,
+        fullGramRenamed: Bool = false,
+        fullGramAudioEdited: Bool = false
+    ) {
         if case let .customChatContents(customChatContents) = self.subject {
             customChatContents.enqueueMessages(messages: messages)
             return
@@ -9407,6 +9416,223 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
         
         guard let peerId = self.chatLocation.peerId else {
             return
+        }
+
+        // Feature 8: File rename before send
+        if !fullGramRenamed && FullGramExtras.shared.renameFileBeforeSend {
+            var targetIndex: Int?
+            var currentFileName: String?
+            var targetFile: TelegramMediaFile?
+            for (idx, msg) in messages.enumerated() {
+                if case let .message(_, _, _, mediaRef, _, _, _, _, _, _) = msg,
+                   let file = mediaRef?.media as? TelegramMediaFile,
+                   !file.isVoice && !file.isInstantVideo && !file.isSticker && !file.isAnimated,
+                   let fName = file.fileName, !fName.isEmpty {
+                    targetIndex = idx
+                    currentFileName = fName
+                    targetFile = file
+                    break
+                }
+            }
+            if let idx = targetIndex, let fName = currentFileName, let file = targetFile {
+                let alert = UIAlertController(
+                    title: "Переименовать файл",
+                    message: "Введите новое имя файла перед отправкой:",
+                    preferredStyle: .alert
+                )
+                alert.addTextField { tf in
+                    tf.text = fName
+                    tf.autocorrectionType = .no
+                }
+                alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+                alert.addAction(UIAlertAction(title: "Отправить", style: .default, handler: { [weak self] _ in
+                    guard let self else { return }
+                    let rawNew = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    let finalName = rawNew.isEmpty ? fName : rawNew
+                    var updatedMessages = messages
+                    if case let .message(text, attributes, inlineStickers, _, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets) = messages[idx] {
+                        var newAttrs = file.attributes.filter {
+                            if case .FileName = $0 { return false }
+                            return true
+                        }
+                        newAttrs.append(.FileName(fileName: finalName))
+                        let newFile = TelegramMediaFile(
+                            fileId: file.fileId,
+                            partialReference: file.partialReference,
+                            resource: file.resource,
+                            previewRepresentations: file.previewRepresentations,
+                            videoThumbnails: file.videoThumbnails,
+                            immediateThumbnailData: file.immediateThumbnailData,
+                            mimeType: file.mimeType,
+                            size: file.size,
+                            attributes: newAttrs,
+                            alternativeRepresentations: file.alternativeRepresentations
+                        )
+                        updatedMessages[idx] = .message(
+                            text: text,
+                            attributes: attributes,
+                            inlineStickers: inlineStickers,
+                            mediaReference: .standalone(media: newFile),
+                            threadId: threadId,
+                            replyToMessageId: replyToMessageId,
+                            replyToStoryId: replyToStoryId,
+                            localGroupingKey: localGroupingKey,
+                            correlationId: correlationId,
+                            bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets
+                        )
+                    }
+                    self.sendMessages(
+                        updatedMessages,
+                        media: media,
+                        postpone: postpone,
+                        commit: commit,
+                        presentSchedulePickerInOverlay: presentSchedulePickerInOverlay,
+                        fullGramConfirmed: fullGramConfirmed,
+                        fullGramRenamed: true,
+                        fullGramAudioEdited: fullGramAudioEdited
+                    )
+                }))
+                (self.view.window?.rootViewController ?? self).present(alert, animated: true)
+                return
+            }
+        }
+
+        // Feature 3: Audio trim & splice studio before send
+        if !fullGramAudioEdited && FullGramExtras.shared.audioTrimSpliceBeforeSend {
+            var targetIndex: Int?
+            var targetFile: TelegramMediaFile?
+            var localPath: String?
+            for (idx, msg) in messages.enumerated() {
+                if case let .message(_, _, _, mediaRef, _, _, _, _, _, _) = msg,
+                   let file = mediaRef?.media as? TelegramMediaFile,
+                   !file.isVoice && (file.isMusic || file.mimeType.hasPrefix("audio/")),
+                   let localRef = file.resource as? LocalFileReferenceMediaResource,
+                   FileManager.default.fileExists(atPath: localRef.localFilePath) {
+                    targetIndex = idx
+                    targetFile = file
+                    localPath = localRef.localFilePath
+                    break
+                }
+            }
+            if let idx = targetIndex, let file = targetFile, let path = localPath {
+                let studio = FullGramAudioTrimSpliceController(
+                    initialURL: URL(fileURLWithPath: path),
+                    title: file.fileName ?? "Audio",
+                    onComplete: { [weak self] editedURL, newDuration in
+                        guard let self else { return }
+                        var updatedMessages = messages
+                        if case let .message(text, attributes, inlineStickers, _, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets) = messages[idx] {
+                            let newDataSize = (try? FileManager.default.attributesOfItem(atPath: editedURL.path)[.size] as? Int64)
+                            let newRes = LocalFileReferenceMediaResource(localFilePath: editedURL.path, randomId: Int64.random(in: 1 ... Int64.max))
+                            var newAttrs: [TelegramMediaFileAttribute] = file.attributes.map { attr in
+                                switch attr {
+                                case let .Audio(isVoice, _, title, performer, waveform):
+                                    return .Audio(isVoice: isVoice, duration: Int(max(1.0, round(newDuration))), title: title, performer: performer, waveform: waveform)
+                                case let .FileName(fName):
+                                    let stem = (fName as NSString).deletingPathExtension
+                                    return .FileName(fileName: stem.isEmpty ? "edited_audio.m4a" : "\(stem)_edit.m4a")
+                                default:
+                                    return attr
+                                }
+                            }
+                            if !newAttrs.contains(where: { if case .Audio = $0 { return true }; return false }) {
+                                newAttrs.append(.Audio(isVoice: false, duration: Int(max(1.0, round(newDuration))), title: file.fileName, performer: nil, waveform: nil))
+                            }
+                            let newFile = TelegramMediaFile(
+                                fileId: EngineMedia.Id(namespace: Namespaces.Media.LocalFile, id: Int64.random(in: Int64.min ... Int64.max)),
+                                partialReference: nil,
+                                resource: newRes,
+                                previewRepresentations: file.previewRepresentations,
+                                videoThumbnails: [],
+                                immediateThumbnailData: nil,
+                                mimeType: "audio/mp4",
+                                size: newDataSize,
+                                attributes: newAttrs,
+                                alternativeRepresentations: []
+                            )
+                            updatedMessages[idx] = .message(
+                                text: text,
+                                attributes: attributes,
+                                inlineStickers: inlineStickers,
+                                mediaReference: .standalone(media: newFile),
+                                threadId: threadId,
+                                replyToMessageId: replyToMessageId,
+                                replyToStoryId: replyToStoryId,
+                                localGroupingKey: localGroupingKey,
+                                correlationId: correlationId,
+                                bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets
+                            )
+                        }
+                        self.sendMessages(
+                            updatedMessages,
+                            media: media,
+                            postpone: postpone,
+                            commit: commit,
+                            presentSchedulePickerInOverlay: presentSchedulePickerInOverlay,
+                            fullGramConfirmed: fullGramConfirmed,
+                            fullGramRenamed: true,
+                            fullGramAudioEdited: true
+                        )
+                    },
+                    onSendOriginal: { [weak self] in
+                        self?.sendMessages(
+                            messages,
+                            media: media,
+                            postpone: postpone,
+                            commit: commit,
+                            presentSchedulePickerInOverlay: presentSchedulePickerInOverlay,
+                            fullGramConfirmed: fullGramConfirmed,
+                            fullGramRenamed: true,
+                            fullGramAudioEdited: true
+                        )
+                    }
+                )
+                self.push(studio)
+                return
+            }
+        }
+
+        // Feature 4: Send confirmation prompt for selected chats
+        if !fullGramConfirmed && FullGramExtras.shared.shouldConfirmSend(forPeerId: peerId.toInt64()) {
+            let alert = textAlertController(
+                context: self.context,
+                updatedPresentationData: self.updatedPresentationData,
+                title: "Подтверждение отправки",
+                text: "Вы точно хотите это отправить?",
+                actions: [
+                    TextAlertAction(type: .genericAction, title: self.presentationData.strings.Common_Cancel, action: {}),
+                    TextAlertAction(type: .defaultAction, title: "Отправить", action: { [weak self] in
+                        self?.sendMessages(
+                            messages,
+                            media: media,
+                            postpone: postpone,
+                            commit: commit,
+                            presentSchedulePickerInOverlay: presentSchedulePickerInOverlay,
+                            fullGramConfirmed: true,
+                            fullGramRenamed: true,
+                            fullGramAudioEdited: true
+                        )
+                    })
+                ]
+            )
+            self.present(alert, in: .window(.root))
+            return
+        }
+
+        if FullGramExtras.shared.smartTransferQueue {
+            for msg in messages {
+                if case let .message(_, _, _, mediaRef, _, _, _, _, _, _) = msg,
+                   let file = mediaRef?.media as? TelegramMediaFile,
+                   !file.isSticker {
+                    let upId = "up_\(file.fileId.id)"
+                    FullGramTransferQueue.shared.register(
+                        id: upId,
+                        title: file.fileName ?? "Медиафайл",
+                        byteCount: file.size ?? 0,
+                        direction: .upload
+                    )
+                }
+            }
         }
 
         let _ = (self.shouldDivertMessagesToScheduled(messages: messages)

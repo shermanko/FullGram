@@ -528,7 +528,7 @@ private final class FullGramHeaderItemNode: ListViewItemNode {
 
             let (versionLayout, versionApply) = makeVersionLayout(TextNodeLayoutArguments(
                 attributedString: NSAttributedString(
-                    string: "1.6.0",
+                    string: "1.6.1",
                     font: Font.regular(15.0),
                     textColor: item.theme.list.itemSecondaryTextColor
                 ),
@@ -677,7 +677,13 @@ public func fullGramSettingsController(context: AccountContext) -> ViewControlle
             entries.append(.adminPanel(presentationData.theme, ru ? "Админ-панель FullGram" : "FullGram Admin"))
         } else if fullGramIsSelfSponsor(context: context) {
             let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
-            entries.append(.sponsorPanel(presentationData.theme, ru ? "Панель спонсора (Бейдж и NFT)" : "Sponsor Panel (Badge & NFT)"))
+            let isPlus = fullGramIsSelfSponsorPlus(context: context)
+            entries.append(.sponsorPanel(
+                presentationData.theme,
+                isPlus
+                    ? (ru ? "Панель Спонсор+ (Бейдж и NFT)" : "Sponsor+ Panel (Badge & NFT)")
+                    : (ru ? "Панель спонсора (Бейдж и NFT)" : "Sponsor Panel (Badge & NFT)")
+            ))
         }
         entries.append(.categoriesHeader(presentationData.theme, "КАТЕГОРИИ"))
 
@@ -1886,6 +1892,7 @@ private enum FullGramMediaToggle: Int32 {
 private struct FullGramMessageHistoryArguments {
     let toggleEdits: (Bool) -> Void
     let toggleDeleted: (Bool) -> Void
+    let toggleDimDeleted: (Bool) -> Void
     let toggleBots: (Bool) -> Void
     let openRestrictionBypass: () -> Void
     let toggleMedia: (FullGramMediaToggle, Bool) -> Void
@@ -1899,6 +1906,7 @@ private struct FullGramMessageHistoryArguments {
 private enum FullGramMessageHistoryEntry: ItemListNodeEntry {
     case header(String)
     case saveDeleted(String, Bool)
+    case dimDeleted(String, Bool)
     case saveEdits(String, Bool)
     case saveForBots(String, Bool)
     case restrictionBypassLink(String, String)
@@ -1916,7 +1924,7 @@ private enum FullGramMessageHistoryEntry: ItemListNodeEntry {
 
     var section: ItemListSectionId {
         switch self {
-        case .header, .saveDeleted, .saveEdits, .saveForBots, .restrictionBypassLink, .info:
+        case .header, .saveDeleted, .dimDeleted, .saveEdits, .saveForBots, .restrictionBypassLink, .info:
             return 0
         case .recordsHeader, .record, .empty:
             return 1
@@ -1933,14 +1941,16 @@ private enum FullGramMessageHistoryEntry: ItemListNodeEntry {
             return 0
         case .saveDeleted:
             return 1
-        case .saveEdits:
+        case .dimDeleted:
             return 2
-        case .saveForBots:
+        case .saveEdits:
             return 3
-        case .restrictionBypassLink:
+        case .saveForBots:
             return 4
-        case .info:
+        case .restrictionBypassLink:
             return 5
+        case .info:
+            return 6
         case .recordsHeader:
             return 10
         case let .record(index, _, _, _, _):
@@ -1975,6 +1985,8 @@ private enum FullGramMessageHistoryEntry: ItemListNodeEntry {
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .saveDeleted(title, value):
             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, sectionId: self.section, style: .blocks, updated: arguments.toggleDeleted)
+        case let .dimDeleted(title, value):
+            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, sectionId: self.section, style: .blocks, updated: arguments.toggleDimDeleted)
         case let .saveEdits(title, value):
             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, sectionId: self.section, style: .blocks, updated: arguments.toggleEdits)
         case let .saveForBots(title, value):
@@ -2087,6 +2099,9 @@ public func fullGramMessageHistoryController(context: AccountContext) -> ViewCon
         },
         toggleDeleted: { value in
             let _ = context.engine.messages.updateFullGramMessageHistory(saveDeleted: value).start()
+        },
+        toggleDimDeleted: { value in
+            FullGramExtras.shared.dimDeletedMessages = value
         },
         toggleBots: { value in
             let _ = context.engine.messages.updateFullGramMessageHistory(saveForBots: value).start()
@@ -2202,6 +2217,7 @@ public func fullGramMessageHistoryController(context: AccountContext) -> ViewCon
         var entries: [FullGramMessageHistoryEntry] = [
             .header(t("СОХРАНЕНИЕ СООБЩЕНИЙ", "MESSAGE RETENTION")),
             .saveDeleted(t("Сохранять удалённые сообщения", "Save deleted messages"), state.saveDeleted),
+            .dimDeleted(t("Делать удалённые полупрозрачными", "Make deleted messages translucent"), FullGramExtras.shared.dimDeletedMessages),
             .saveEdits(t("Сохранять историю изменений", "Save message edits"), state.saveEdits),
             .saveForBots(t("Сохранять сообщения ботов", "Save bot messages"), state.saveForBots),
             .restrictionBypassLink(
@@ -2209,8 +2225,8 @@ public func fullGramMessageHistoryController(context: AccountContext) -> ViewCon
                 bypassActive ? t("Вкл.", "On") : t("Выкл.", "Off")
             ),
             .info(t(
-                "Удалённые сообщения остаются в чате с пометкой «Удалено», а предыдущие версии изменённых и удалённых сообщений сохраняются в списке ниже прямо на устройстве.",
-                "Deleted messages stay in chats with a 'Deleted' label, and previous versions of edited and deleted messages are stored locally below."
+                "Удалённые сообщения остаются в чате с пометкой «Удалено» (при желании — полупрозрачными), а предыдущие версии изменённых и удалённых сообщений сохраняются в списке ниже прямо на устройстве.",
+                "Deleted messages stay in chats with a 'Deleted' label (translucent when enabled), and previous versions of edited and deleted messages are stored locally below."
             )),
             .recordsHeader(t("ЖУРНАЛ (\(state.records.count))", "ARCHIVE (\(state.records.count))"))
         ]
@@ -2714,21 +2730,43 @@ private enum FullGramSendingToggle: Int32 {
     case quickFormattingBar = 1
     case antiCaps = 2
     case translateBeforeSend = 3
+    case audioTrimSpliceBeforeSend = 4
+    case renameFileBeforeSend = 5
+    case confirmSendBeforePosting = 6
+    case confirmSendForAllChats = 7
+    case autoCropScreenshots = 8
+    case chooseVideoNoteCoverBeforeSend = 9
+    case editForwardedBeforeSend = 10
+    case smartTransferQueue = 11
+    case autoResumeDownloadsOnReconnect = 12
 }
 
 private struct FullGramSendingArguments {
     let toggle: (FullGramSendingToggle, Bool) -> Void
     let selectTranslateLanguage: () -> Void
+    let openAudioStudio: () -> Void
+    let openTransferQueue: () -> Void
 }
 
 private enum FullGramSendingEntry: ItemListNodeEntry {
     case textHeader(String)
     case toggle(FullGramSendingToggle, String, Bool)
     case translateLanguage(String, String)
+    case mediaHeader(String)
+    case queueHeader(String)
+    case openAudioStudio(String)
+    case openTransferQueue(String, String)
     case info(String)
 
     var section: ItemListSectionId {
-        return 0
+        switch self {
+        case .textHeader, .toggle(.quickFormattingBar, _, _), .toggle(.antiCaps, _, _), .toggle(.translateBeforeSend, _, _), .translateLanguage:
+            return 0
+        case .mediaHeader, .toggle:
+            return 1
+        case .queueHeader, .openAudioStudio, .openTransferQueue, .info:
+            return 2
+        }
     }
 
     var stableId: Int32 {
@@ -2738,9 +2776,17 @@ private enum FullGramSendingEntry: ItemListNodeEntry {
         case let .toggle(option, _, _):
             return option.rawValue
         case .translateLanguage:
-            return 10
+            return 15
+        case .mediaHeader:
+            return 20
+        case .queueHeader:
+            return 40
+        case .openAudioStudio:
+            return 45
+        case .openTransferQueue:
+            return 46
         case .info:
-            return 30
+            return 60
         }
     }
 
@@ -2751,7 +2797,7 @@ private enum FullGramSendingEntry: ItemListNodeEntry {
     func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
         let arguments = arguments as! FullGramSendingArguments
         switch self {
-        case let .textHeader(text):
+        case let .textHeader(text), let .mediaHeader(text), let .queueHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .toggle(option, title, value):
             return ItemListSwitchItem(
@@ -2776,6 +2822,28 @@ private enum FullGramSendingEntry: ItemListNodeEntry {
                 disclosureStyle: .arrow,
                 action: arguments.selectTranslateLanguage
             )
+        case let .openAudioStudio(title):
+            return ItemListDisclosureItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                title: title,
+                label: "",
+                sectionId: self.section,
+                style: .blocks,
+                disclosureStyle: .arrow,
+                action: arguments.openAudioStudio
+            )
+        case let .openTransferQueue(title, label):
+            return ItemListDisclosureItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                title: title,
+                label: label,
+                sectionId: self.section,
+                style: .blocks,
+                disclosureStyle: .arrow,
+                action: arguments.openTransferQueue
+            )
         case let .info(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         }
@@ -2784,10 +2852,19 @@ private enum FullGramSendingEntry: ItemListNodeEntry {
 
 public func fullGramSendingController(context: AccountContext) -> ViewController {
     var presentControllerImpl: ((ViewController) -> Void)?
+    var pushControllerImpl: ((ViewController) -> Void)?
     let extrasChanged = ValuePromise<Int>(0, ignoreRepeated: false)
     var extrasVersion = 0
     let observer = NotificationCenter.default.addObserver(
         forName: FullGramExtras.didChangeNotification,
+        object: nil,
+        queue: .main
+    ) { _ in
+        extrasVersion += 1
+        extrasChanged.set(extrasVersion)
+    }
+    let queueObserver = NotificationCenter.default.addObserver(
+        forName: FullGramTransferQueue.didChangeNotification,
         object: nil,
         queue: .main
     ) { _ in
@@ -2804,6 +2881,24 @@ public func fullGramSendingController(context: AccountContext) -> ViewController
                 FullGramExtras.shared.translateBeforeSend = value
             case .quickFormattingBar:
                 FullGramExtras.shared.quickFormattingBar = value
+            case .audioTrimSpliceBeforeSend:
+                FullGramExtras.shared.audioTrimSpliceBeforeSend = value
+            case .renameFileBeforeSend:
+                FullGramExtras.shared.renameFileBeforeSend = value
+            case .confirmSendBeforePosting:
+                FullGramExtras.shared.confirmSendBeforePosting = value
+            case .confirmSendForAllChats:
+                FullGramExtras.shared.confirmSendForAllChats = value
+            case .autoCropScreenshots:
+                FullGramExtras.shared.autoCropScreenshots = value
+            case .chooseVideoNoteCoverBeforeSend:
+                FullGramExtras.shared.chooseVideoNoteCoverBeforeSend = value
+            case .editForwardedBeforeSend:
+                FullGramExtras.shared.editForwardedBeforeSend = value
+            case .smartTransferQueue:
+                FullGramExtras.shared.smartTransferQueue = value
+            case .autoResumeDownloadsOnReconnect:
+                FullGramExtras.shared.autoResumeDownloadsOnReconnect = value
             }
         },
         selectTranslateLanguage: {
@@ -2829,6 +2924,13 @@ public func fullGramSendingController(context: AccountContext) -> ViewController
                 ])
             ])
             presentControllerImpl?(sheet)
+        },
+        openAudioStudio: {
+            let isRussian = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
+            pushControllerImpl?(FullGramAudioTrimSpliceController(initialURL: nil, title: isRussian ? "Студия аудио" : "Audio Studio"))
+        },
+        openTransferQueue: {
+            pushControllerImpl?(fullGramTransferQueueController(context: context))
         }
     )
 
@@ -2859,15 +2961,34 @@ public func fullGramSendingController(context: AccountContext) -> ViewController
             ))
         }
 
+        entries.append(.mediaHeader(t("МЕДИА И ПОДТВЕРЖДЕНИЕ", "MEDIA & CONFIRMATION")))
+        entries.append(.toggle(.audioTrimSpliceBeforeSend, t("Нарезка и склейка аудио перед отправкой", "Audio trim & splice before sending"), extras.audioTrimSpliceBeforeSend))
+        entries.append(.toggle(.renameFileBeforeSend, t("Переименовывать файл перед отправкой", "Rename file before sending"), extras.renameFileBeforeSend))
+        entries.append(.toggle(.autoCropScreenshots, t("Автообрезка скриншотов (убрать статус-бар)", "Auto-crop screenshots (remove status bar)"), extras.autoCropScreenshots))
+        entries.append(.toggle(.chooseVideoNoteCoverBeforeSend, t("Выбор кадра-обложки кружка", "Choose cover frame for video notes"), extras.chooseVideoNoteCoverBeforeSend))
+        entries.append(.toggle(.editForwardedBeforeSend, t("Правка текста перед пересылкой", "Edit forwarded text before sending"), extras.editForwardedBeforeSend))
+        entries.append(.toggle(.confirmSendBeforePosting, t("Запрос перед отправкой («Вы точно хотите…»)", "Confirm before sending prompt"), extras.confirmSendBeforePosting))
+        if extras.confirmSendBeforePosting {
+            entries.append(.toggle(.confirmSendForAllChats, t("Спрашивать во всех чатах (не только выбранных)", "Confirm in all chats (not only selected)"), extras.confirmSendForAllChats))
+        }
+
+        let pendingCount = FullGramTransferQueue.shared.currentItems().filter { $0.status != .completed }.count
+        let queueBadge = pendingCount > 0 ? "\(pendingCount)" : FullGramTransferQueue.shared.connectionKind
+        entries.append(.queueHeader(t("ОЧЕРЕДЬ И ИНСТРУМЕНТЫ", "QUEUE & TOOLS")))
+        entries.append(.toggle(.smartTransferQueue, t("Умная очередь отправки и загрузки", "Smart transfer queue"), extras.smartTransferQueue))
+        entries.append(.toggle(.autoResumeDownloadsOnReconnect, t("Автодокачка при появлении сети", "Auto-resume on reconnect"), extras.autoResumeDownloadsOnReconnect))
+        entries.append(.openAudioStudio(t("Студия нарезки и склейки аудио…", "Audio trim & splice studio…")))
+        entries.append(.openTransferQueue(t("Очередь отправки и докачки файлов", "Transfer & resume queue"), queueBadge))
+
         entries.append(.info(t(
-            "• Анти-капс автоматически исправляет случайный CAPS LOCK при наборе.\n• Перевод перед отправкой добавляет панель быстрого перевода над полем ввода.",
-            "• Anti-caps fixes accidental CAPS LOCK.\n• Translate before send adds a quick translation bar above the input field."
+            "• В профиле нужного чата можно включить пункт «Запрос перед отправкой».\n• При пересылке сообщений нажмите на панель пересылки над полем ввода → «✂️ Править текст пересылки…».\n• Нарезка и автообрезка скриншотов работают полностью локально на устройстве.",
+            "• Enable \"Confirm before sending\" per-chat from any Peer Info screen.\n• Tap the forward bar above the input field to trim or remove parts before sending.\n• Audio trimming and screenshot cropping run locally on-device."
         )))
 
         let data = ItemListPresentationData(presentationData)
         let controllerState = ItemListControllerState(
             presentationData: data,
-            title: .text(t("Сообщение", "Message")),
+            title: .text(t("Сообщение и отправка", "Message & Sending")),
             leftNavigationButton: nil,
             rightNavigationButton: nil,
             backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back)
@@ -2882,13 +3003,175 @@ public func fullGramSendingController(context: AccountContext) -> ViewController
     }
     |> afterDisposed {
         NotificationCenter.default.removeObserver(observer)
+        NotificationCenter.default.removeObserver(queueObserver)
     }
 
     let controller = ItemListController(context: context, state: signal)
     presentControllerImpl = { [weak controller] c in
         controller?.present(c, in: .window(.root))
     }
+    pushControllerImpl = { [weak controller] c in
+        controller?.push(c)
+    }
     return controller
+}
+
+private enum FullGramTransferQueueSection: Int32 {
+    case status = 0
+    case actions = 1
+    case items = 2
+}
+
+private final class FullGramTransferQueueArguments {
+    let resumeAll: () -> Void
+    let clearCompleted: () -> Void
+    init(resumeAll: @escaping () -> Void, clearCompleted: @escaping () -> Void) {
+        self.resumeAll = resumeAll
+        self.clearCompleted = clearCompleted
+    }
+}
+
+private enum FullGramTransferQueueEntry: ItemListNodeEntry {
+    case statusHeader(String)
+    case networkStatus(String, String)
+    case resumeAll(String)
+    case clearCompleted(String)
+    case itemsHeader(String)
+    case transferRow(Int32, String, String)
+    case empty(String)
+
+    var section: ItemListSectionId {
+        switch self {
+        case .statusHeader, .networkStatus:
+            return FullGramTransferQueueSection.status.rawValue
+        case .resumeAll, .clearCompleted:
+            return FullGramTransferQueueSection.actions.rawValue
+        case .itemsHeader, .transferRow, .empty:
+            return FullGramTransferQueueSection.items.rawValue
+        }
+    }
+
+    var stableId: Int32 {
+        switch self {
+        case .statusHeader: return 0
+        case .networkStatus: return 1
+        case .resumeAll: return 10
+        case .clearCompleted: return 11
+        case .itemsHeader: return 20
+        case let .transferRow(idx, _, _): return 100 + idx
+        case .empty: return 999
+        }
+    }
+
+    static func <(lhs: FullGramTransferQueueEntry, rhs: FullGramTransferQueueEntry) -> Bool {
+        return lhs.stableId < rhs.stableId
+    }
+
+    func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
+        let args = arguments as! FullGramTransferQueueArguments
+        switch self {
+        case let .statusHeader(text), let .itemsHeader(text):
+            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+        case let .networkStatus(title, value):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .none, enabled: false, action: {})
+        case let .resumeAll(title):
+            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.resumeAll)
+        case let .clearCompleted(title):
+            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .destructive, alignment: .natural, sectionId: self.section, style: .blocks, action: args.clearCompleted)
+        case let .transferRow(_, title, label):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: label, sectionId: self.section, style: .blocks, disclosureStyle: .none, enabled: false, action: {})
+        case let .empty(text):
+            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
+        }
+    }
+}
+
+public func fullGramTransferQueueController(context: AccountContext) -> ViewController {
+    let changed = ValuePromise<Int>(0, ignoreRepeated: false)
+    var version = 0
+    let observer = NotificationCenter.default.addObserver(
+        forName: FullGramTransferQueue.didChangeNotification,
+        object: nil,
+        queue: .main
+    ) { _ in
+        version += 1
+        changed.set(version)
+    }
+
+    let args = FullGramTransferQueueArguments(
+        resumeAll: {
+            FullGramTransferQueue.shared.resumeAllNow()
+        },
+        clearCompleted: {
+            FullGramTransferQueue.shared.clearCompleted()
+        }
+    )
+
+    let signal = combineLatest(context.sharedContext.presentationData, changed.get())
+    |> deliverOnMainQueue
+    |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
+        let isRussian = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+        func t(_ ru: String, _ en: String) -> String {
+            return isRussian ? ru : en
+        }
+
+        let queue = FullGramTransferQueue.shared
+        let items = queue.currentItems()
+        var entries: [FullGramTransferQueueEntry] = [
+            .statusHeader(t("СЕТЕВОЙ СТАТУС", "NETWORK STATUS")),
+            .networkStatus(
+                t("Соединение", "Connection"),
+                queue.isConnected ? queue.connectionKind : t("Офлайн — пауза", "Offline — paused")
+            ),
+            .resumeAll(t("Докачать / возобновить все", "Resume all transfers")),
+            .clearCompleted(t("Очистить завершённые", "Clear completed")),
+            .itemsHeader(t("ПЕРЕДАЧИ (\(items.count))", "TRANSFERS (\(items.count))"))
+        ]
+
+        if items.isEmpty {
+            entries.append(.empty(t(
+                "Очередь пуста. Отправленные или загруженные файлы с включённой опцией «Умная очередь» будут отслеживаться здесь и автоматически возобновляться при восстановлении сети.",
+                "Queue is empty. Files sent or downloaded with Smart Transfer Queue enabled will appear here and auto-resume when network returns."
+            )))
+        } else {
+            let formatter = ByteCountFormatter()
+            formatter.countStyle = .file
+            for (index, item) in items.prefix(40).enumerated() {
+                let dir = item.direction == .upload ? "↑" : "↓"
+                let statusText: String
+                switch item.status {
+                case .queued: statusText = t("В очереди", "Queued")
+                case .active: statusText = t("Активно", "Active")
+                case .pausedByNetwork: statusText = t("Ждёт сеть", "Waiting network")
+                case .completed: statusText = t("Готово", "Done")
+                case .failed: statusText = t("Ошибка", "Failed")
+                }
+                let sizeLabel = item.byteCount > 0 ? "\(formatter.string(fromByteCount: item.byteCount)) · \(statusText)" : statusText
+                entries.append(.transferRow(Int32(index), "\(dir) \(item.title)", sizeLabel))
+            }
+        }
+
+        let data = ItemListPresentationData(presentationData)
+        let controllerState = ItemListControllerState(
+            presentationData: data,
+            title: .text(t("Очередь и докачка", "Transfer Queue")),
+            leftNavigationButton: nil,
+            rightNavigationButton: nil,
+            backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back)
+        )
+        let listState = ItemListNodeState(
+            presentationData: data,
+            entries: entries,
+            style: .blocks,
+            animateChanges: false
+        )
+        return (controllerState, (listState, args))
+    }
+    |> afterDisposed {
+        NotificationCenter.default.removeObserver(observer)
+    }
+
+    return ItemListController(context: context, state: signal)
 }
 
 // MARK: - 4. Вкладка «Перевод» (без DeepL API Pro)
@@ -3904,6 +4187,8 @@ private enum FullGramOtherGeneralToggle: Int32, CaseIterable {
     case keepScreenOnInVoice = 9
     case downloadBoost = 10
     case localFreeTranscription = 11
+    case videoSubtitles = 12
+    case autoCleanTempCaches = 13
 
     var title: String {
         switch self {
@@ -3918,6 +4203,8 @@ private enum FullGramOtherGeneralToggle: Int32, CaseIterable {
         case .keepScreenOnInVoice: return "не гасить экран в голосовых и кружках"
         case .downloadBoost: return "Улучшение загрузки"
         case .localFreeTranscription: return "Бесплатная расшифровка голосовых и кружков"
+        case .videoSubtitles: return "Субтитры для кружков и видео"
+        case .autoCleanTempCaches: return "Автоочистка временных кэшей (оптимизация)"
         }
     }
 }
@@ -4000,6 +4287,12 @@ func fullGramOtherGeneralController(context: AccountContext) -> ViewController {
             case .keepScreenOnInVoice: FullGramExtras.shared.keepScreenOnInVoice = value
             case .downloadBoost: FullGramExtras.shared.downloadBoost = value
             case .localFreeTranscription: FullGramExtras.shared.localFreeTranscription = value
+            case .videoSubtitles: FullGramExtras.shared.videoSubtitlesEnabled = value
+            case .autoCleanTempCaches:
+                FullGramExtras.shared.autoCleanTempCaches = value
+                if value {
+                    let _ = FullGramTransferQueue.shared.purgeStaleTemporaryFiles()
+                }
             }
         },
         pickDownloadBoostMultiplier: {
@@ -4034,7 +4327,9 @@ func fullGramOtherGeneralController(context: AccountContext) -> ViewController {
             (.noAutoplayNextVoice, extras.noAutoplayNextVoice),
             (.keepScreenOnInPlayer, extras.keepScreenOnInPlayer),
             (.keepScreenOnInVoice, extras.keepScreenOnInVoice),
-            (.localFreeTranscription, extras.localFreeTranscription)
+            (.localFreeTranscription, extras.localFreeTranscription),
+            (.videoSubtitles, extras.videoSubtitlesEnabled),
+            (.autoCleanTempCaches, extras.autoCleanTempCaches)
         ]
         var entries: [FullGramOtherGeneralEntry] = [.header("ОСНОВНОЕ")]
         for (opt, val) in values {

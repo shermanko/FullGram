@@ -306,7 +306,41 @@ private func chatForwardOptions(selfController: ChatControllerImpl, sourceView: 
         if !items.isEmpty {
             items.append(.separator)
         }
-        
+
+        items.append(.action(ContextMenuActionItem(text: "✂️ Править текст пересылки…", icon: { theme in return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Edit"), color: theme.contextMenu.primaryColor) }, action: { [weak selfController] _, f in
+            f(.default)
+            guard let selfController else { return }
+            let editItems: [FullGramForwardEditController.ForwardItem] = messages.map { message in
+                let authorName = message.effectiveAuthor.flatMap(EnginePeer.init)?.compactDisplayTitle ?? ""
+                return FullGramForwardEditController.ForwardItem(
+                    messageIdRaw: message.id.id,
+                    authorName: authorName,
+                    text: message.text,
+                    included: !FullGramForwardEditorStore.shared.isExcluded(rawMessageId: message.id.id)
+                )
+            }
+            let editor = FullGramForwardEditController(items: editItems) { updatedItems in
+                var keptIds: [MessageId] = []
+                for entry in updatedItems {
+                    if let orig = messages.first(where: { $0.id.id == entry.messageIdRaw }) {
+                        FullGramForwardEditorStore.shared.setExcluded(!entry.included, rawMessageId: entry.messageIdRaw)
+                        if entry.included {
+                            keptIds.append(orig.id)
+                            if entry.text != orig.text {
+                                FullGramForwardEditorStore.shared.setEditedText(entry.text, forRawMessageId: entry.messageIdRaw)
+                            }
+                        }
+                    }
+                }
+                selfController.updateChatPresentationInterfaceState(animated: true, interactive: true, { state in
+                    return state.updatedInterfaceState { interfaceState in
+                        return interfaceState.withUpdatedForwardMessageIds(keptIds.isEmpty ? nil : keptIds)
+                    }
+                })
+            }
+            selfController.push(editor)
+        })))
+
         items.append(.action(ContextMenuActionItem(text: presentationData.strings.Conversation_ForwardOptions_ChangeRecipient, icon: { theme in return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Replace"), color: theme.contextMenu.primaryColor) }, action: { [weak selfController] c, f in
             selfController?.interfaceInteraction?.forwardCurrentForwardMessages()
             

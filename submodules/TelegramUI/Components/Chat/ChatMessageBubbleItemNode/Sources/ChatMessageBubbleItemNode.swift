@@ -2827,17 +2827,30 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
                 } else if effectiveAuthor.isPremium {
                     currentCredibilityIcon = (.premium(color: color.withMultipliedAlpha(0.4)), nil)
                 }
+                if let authorVerificationIconFileId {
+                    // As the chat header and the chat list draw it: a template emoji takes the accent colour (the bubble's).
+                    authorVerificationIcon = .animation(content: .customEmoji(fileId: authorVerificationIconFileId), size: CGSize(width: 32.0, height: 32.0), placeholderColor: incoming ? item.presentationData.theme.theme.chat.message.incoming.mediaPlaceholderColor : item.presentationData.theme.theme.chat.message.outgoing.mediaPlaceholderColor, themeColor: incoming ? item.presentationData.theme.theme.chat.message.incoming.accentTextColor : item.presentationData.theme.theme.chat.message.outgoing.accentTextColor, loopMode: .count(2))
+                }
                 var isChannelSelfPost = false
                 if case let .peer(chatPeerId) = item.chatLocation, chatPeerId == effectiveAuthor.id, effectiveAuthor is TelegramChannel {
                     isChannelSelfPost = true
                 }
+                let hasRealTelegramPremium = effectiveAuthor.isServerPremium || effectiveAuthor.emojiStatus != nil
                 if !isChannelSelfPost,
-                   !effectiveAuthor.isScam && !effectiveAuthor.isFake && !effectiveAuthor.isVerified && effectiveAuthor.emojiStatus == nil,
+                   !effectiveAuthor.isScam && !effectiveAuthor.isFake,
                    let fullGramBadge = FullGramBadges.shared.badge(forPeerId: effectiveAuthor.id.toInt64(), username: effectiveAuthor.addressName) {
+                    let badgeContent: EmojiStatusComponent.Content
                     if let customEmojiId = fullGramBadge.customEmojiId {
-                        currentCredibilityIcon = (.animation(content: .customEmoji(fileId: customEmojiId), size: CGSize(width: 20.0, height: 20.0), placeholderColor: incoming ? item.presentationData.theme.theme.chat.message.incoming.mediaPlaceholderColor : item.presentationData.theme.theme.chat.message.outgoing.mediaPlaceholderColor, themeColor: color.withMultipliedAlpha(0.4), loopMode: .count(2)), nil)
+                        badgeContent = .animation(content: .customEmoji(fileId: customEmojiId), size: CGSize(width: 20.0, height: 20.0), placeholderColor: incoming ? item.presentationData.theme.theme.chat.message.incoming.mediaPlaceholderColor : item.presentationData.theme.theme.chat.message.outgoing.mediaPlaceholderColor, themeColor: color.withMultipliedAlpha(0.4), loopMode: .count(2))
                     } else {
-                        currentCredibilityIcon = (.fullGramBadge(color: fullGramBadge.uiColor, string: fullGramBadge.chipText), nil)
+                        badgeContent = .fullGramBadge(color: fullGramBadge.uiColor, string: fullGramBadge.chipText)
+                    }
+                    if hasRealTelegramPremium {
+                        if authorVerificationIcon == nil {
+                            authorVerificationIcon = badgeContent
+                        }
+                    } else if !effectiveAuthor.isVerified && effectiveAuthor.emojiStatus == nil {
+                        currentCredibilityIcon = (badgeContent, nil)
                     }
                 }
             }
@@ -2856,10 +2869,6 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
                     rawAuthorNameColor.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: nil)
                     authorNameColor = UIColor(hue: hue, saturation: saturation * 0.7, brightness: min(1.0, brightness * 1.2), alpha: 1.0)
                 }
-            }
-            if let authorVerificationIconFileId {
-                // As the chat header and the chat list draw it: a template emoji takes the accent colour (the bubble's).
-                authorVerificationIcon = .animation(content: .customEmoji(fileId: authorVerificationIconFileId), size: CGSize(width: 32.0, height: 32.0), placeholderColor: incoming ? item.presentationData.theme.theme.chat.message.incoming.mediaPlaceholderColor : item.presentationData.theme.theme.chat.message.outgoing.mediaPlaceholderColor, themeColor: incoming ? item.presentationData.theme.theme.chat.message.incoming.accentTextColor : item.presentationData.theme.theme.chat.message.outgoing.accentTextColor, loopMode: .count(2))
             }
         }
         
@@ -3164,6 +3173,11 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
                         let textString = NSAttributedString(string: string, font: Font.bold(10.0), textColor: .black, paragraphAlignment: .center)
                         let stringRect = textString.boundingRect(with: CGSize(width: 100.0, height: 16.0), options: .usesLineFragmentOrigin, context: nil)
                         credibilityIconWidth += floor(stringRect.width) + 11.0
+                    case let .fullGramBadge(_, string):
+                        let badgeFont = UIFont.systemFont(ofSize: 10.5, weight: .bold)
+                        let titleString = NSAttributedString(string: string, attributes: [.font: badgeFont])
+                        let measured = titleString.boundingRect(with: CGSize(width: 140.0, height: 18.0), options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+                        credibilityIconWidth += max(20.0, ceil(measured.width) + 12.0)
                     default:
                         credibilityIconWidth += 20.0
                     }
@@ -3202,7 +3216,20 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
                 
                 let closeButtonWidth: CGFloat = item.message.adAttribute != nil ? 18.0 : 0.0
                 
-                let verificationIconWidth = ChatMessageAuthorVerificationIcon.leadingWidth(iconSize: authorVerificationIcon != nil ? ChatMessageAuthorVerificationIcon.size : nil)
+                let verificationIconEstimatedSize: CGSize?
+                if let authorVerificationIcon {
+                    if case let .fullGramBadge(_, string) = authorVerificationIcon {
+                        let badgeFont = UIFont.systemFont(ofSize: 10.5, weight: .bold)
+                        let titleString = NSAttributedString(string: string, attributes: [.font: badgeFont])
+                        let measured = titleString.boundingRect(with: CGSize(width: 140.0, height: 18.0), options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+                        verificationIconEstimatedSize = CGSize(width: max(20.0, ceil(measured.width) + 12.0), height: ChatMessageAuthorVerificationIcon.size.height)
+                    } else {
+                        verificationIconEstimatedSize = ChatMessageAuthorVerificationIcon.size
+                    }
+                } else {
+                    verificationIconEstimatedSize = nil
+                }
+                let verificationIconWidth = ChatMessageAuthorVerificationIcon.leadingWidth(iconSize: verificationIconEstimatedSize)
                 
                 var nameMaximumWidth = maximumNodeWidth - layoutConstants.text.bubbleInsets.left - layoutConstants.text.bubbleInsets.right - verificationIconWidth - credibilityIconWidth - rankBadgeSizeAndApply.0.size.width - closeButtonWidth
                 var bubblelessHeaderRunWidth: CGFloat = 0.0
@@ -4460,6 +4487,16 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
                     break
                 }
             }
+        }
+        let isFullGramDeleted: Bool
+        switch item.content {
+        case let .message(message, _, _, _, _):
+            isFullGramDeleted = message.attributes.contains(where: { $0 is FullGramDeletedMessageAttribute })
+        case let .group(messages):
+            isFullGramDeleted = messages.contains(where: { $0.0.attributes.contains(where: { $0 is FullGramDeletedMessageAttribute }) })
+        }
+        if FullGramExtras.shared.dimDeletedMessages && isFullGramDeleted {
+            fgAlpha = 0.52
         }
         if strongSelf.mainContainerNode.alpha != fgAlpha {
             strongSelf.mainContainerNode.alpha = fgAlpha

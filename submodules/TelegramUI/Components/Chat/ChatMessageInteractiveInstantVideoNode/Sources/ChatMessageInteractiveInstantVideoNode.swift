@@ -136,6 +136,10 @@ public class ChatMessageInteractiveInstantVideoNode: ASDisplayNode {
     private let playbackStatusDisposable = MetaDisposable()
     private let playerStatusDisposable = MetaDisposable()
     private let fetchedThumbnailDisposable = MetaDisposable()
+    private let fullGramSubtitleDisposable = MetaDisposable()
+    private var fullGramSubtitleMessageId: MessageId?
+    private var fullGramSubtitleCues: [FullGramSubtitleCue] = []
+    private var fullGramSubtitleLabel: UILabel?
     
     private var viewOnceIconImage: UIImage?
     
@@ -236,6 +240,7 @@ public class ChatMessageInteractiveInstantVideoNode: ASDisplayNode {
         self.playerStatusDisposable.dispose()
         self.fetchedThumbnailDisposable.dispose()
         self.transcribeDisposable?.dispose()
+        self.fullGramSubtitleDisposable.dispose()
     }
     
     override public func didLoad() {
@@ -1231,7 +1236,96 @@ public class ChatMessageInteractiveInstantVideoNode: ASDisplayNode {
             transition.updateAlpha(node: replyInfoNode, alpha: alpha)
         }
     }
-    
+
+    private func updateFullGramSubtitles(item: ChatMessageBubbleContentItem, file: TelegramMediaFile, videoFrame: CGRect, animator: ControlledTransitionAnimator?) {
+        guard FullGramExtras.shared.videoSubtitlesEnabled else {
+            self.fullGramSubtitleLabel?.isHidden = true
+            return
+        }
+
+        var isPlayingNow = false
+        if let playerStatus = self.playerStatus {
+            switch playerStatus.status {
+            case .playing:
+                isPlayingNow = true
+            case let .buffering(_, whilePlaying, _, _):
+                isPlayingNow = whilePlaying
+            case .paused:
+                isPlayingNow = false
+            }
+        }
+
+        guard isPlayingNow else {
+            self.fullGramSubtitleLabel?.isHidden = true
+            return
+        }
+
+        let currentMessageId = item.message.id
+        if self.fullGramSubtitleMessageId != currentMessageId {
+            self.fullGramSubtitleMessageId = currentMessageId
+            self.fullGramSubtitleCues = []
+            let appLocale = item.presentationData.strings.baseLanguageCode
+            let _ = messageMediaFileInteractiveFetched(context: item.context, message: item.message, file: file, userInitiated: false).startStrict()
+            self.fullGramSubtitleDisposable.set((item.context.engine.resources.data(id: EngineMediaResource.Id(file.resource.id))
+            |> filter { $0.isComplete }
+            |> take(1)
+            |> deliverOnMainQueue).startStrict(next: { [weak self] data in
+                FullGramSpeechBleep.recognizeSubtitleCues(at: data.path, preferredLanguage: appLocale, defaultExtension: "mp4") { [weak self] cues in
+                    guard let self, self.item?.message.id == currentMessageId else {
+                        return
+                    }
+                    self.fullGramSubtitleCues = cues
+                    self.updateStatus(animator: nil)
+                }
+            }))
+        }
+
+        let timestamp = self.playerStatus?.timestamp ?? 0.0
+        guard let activeText = FullGramSpeechBleep.activeSubtitleText(in: self.fullGramSubtitleCues, at: timestamp), !activeText.isEmpty else {
+            self.fullGramSubtitleLabel?.isHidden = true
+            return
+        }
+
+        let label: UILabel
+        if let existing = self.fullGramSubtitleLabel {
+            label = existing
+        } else {
+            let created = UILabel()
+            created.font = UIFont.systemFont(ofSize: 12.0, weight: .semibold)
+            created.textColor = .white
+            created.backgroundColor = UIColor(white: 0.0, alpha: 0.68)
+            created.layer.cornerRadius = 8.0
+            created.layer.masksToBounds = true
+            created.textAlignment = .center
+            created.numberOfLines = 2
+            created.lineBreakMode = .byTruncatingTail
+            created.isUserInteractionEnabled = false
+            self.view.addSubview(created)
+            self.fullGramSubtitleLabel = created
+            label = created
+        }
+
+        label.isHidden = false
+        label.text = activeText
+        self.view.bringSubviewToFront(label)
+
+        let maxWidth = max(80.0, videoFrame.width - 32.0)
+        let measured = label.sizeThatFits(CGSize(width: maxWidth - 14.0, height: 42.0))
+        let pillWidth = min(maxWidth, ceil(measured.width) + 14.0)
+        let pillHeight = ceil(measured.height) + 6.0
+        let targetFrame = CGRect(
+            x: floorToScreenPixels(videoFrame.midX - pillWidth * 0.5),
+            y: floorToScreenPixels(videoFrame.maxY - pillHeight - 28.0),
+            width: pillWidth,
+            height: pillHeight
+        )
+        if let animator {
+            animator.updateFrame(layer: label.layer, frame: targetFrame, completion: nil)
+        } else {
+            label.frame = targetFrame
+        }
+    }
+
     private func updateStatus(animator: ControlledTransitionAnimator? = nil) {
         guard let item = self.item, let status = self.status, let videoFrame = self.videoFrame else {
             return
@@ -1459,7 +1553,9 @@ public class ChatMessageInteractiveInstantVideoNode: ASDisplayNode {
                 streamingStatusNode.transitionToState(streamingState)
             }
         }
-        
+
+        self.updateFullGramSubtitles(item: item, file: file, videoFrame: videoFrame, animator: animator)
+
         if let statusNode = self.statusNode {
             if state == .none {
                 self.statusNode = nil

@@ -729,12 +729,19 @@ final class PeerInfoHeaderNode: ASDisplayNode {
             if peer.isVerified {
                 credibilityIcon = .verified
             }
-            if !peer.isFake && !peer.isScam && (credibilityIcon == .none || credibilityIcon == .premium),
-               let badge = FullGramBadges.shared.badge(forPeerId: peer.id.toInt64(), username: peer.addressName) {
-                credibilityIcon = .fullGram(badge)
-            }
             if let verificationIconFileId = peer.verificationIconFileId {
                 verifiedIcon = .emojiStatus(PeerEmojiStatus(content: .emoji(fileId: verificationIconFileId), expirationDate: nil))
+            }
+            let hasRealTelegramPremium = peer.isServerPremium || peer.emojiStatus != nil
+            if !peer.isFake && !peer.isScam,
+               let badge = FullGramBadges.shared.badge(forPeerId: peer.id.toInt64(), username: peer.addressName) {
+                if hasRealTelegramPremium {
+                    if verifiedIcon == .none {
+                        verifiedIcon = .fullGram(badge)
+                    }
+                } else if credibilityIcon == .none || credibilityIcon == .premium {
+                    credibilityIcon = .fullGram(badge)
+                }
             }
         }
         
@@ -1205,6 +1212,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
             
             let emojiRegularStatusContent: EmojiStatusComponent.Content
             let emojiExpandedStatusContent: EmojiStatusComponent.Content
+            var verifiedIconAction: (() -> Void)?
             switch verifiedIcon {
             case .verified:
                 emojiRegularStatusContent = .verified(fillColor: presentationData.theme.list.itemCheckColors.fillColor, foregroundColor: presentationData.theme.list.itemCheckColors.foregroundColor, sizeType: .large)
@@ -1212,6 +1220,22 @@ final class PeerInfoHeaderNode: ASDisplayNode {
             case let .emojiStatus(emojiStatus):
                 emojiRegularStatusContent = .animation(content: .customEmoji(fileId: emojiStatus.fileId), size: CGSize(width: 80.0, height: 80.0), placeholderColor: presentationData.theme.list.mediaPlaceholderColor, themeColor: navigationContentsAccentColor, loopMode: .forever)
                 emojiExpandedStatusContent = .animation(content: .customEmoji(fileId: emojiStatus.fileId), size: CGSize(width: 80.0, height: 80.0), placeholderColor: navigationContentsAccentColor, themeColor: navigationContentsAccentColor, loopMode: .forever)
+            case let .fullGram(badge):
+                if let customEmojiId = badge.customEmojiId {
+                    emojiRegularStatusContent = .animation(content: .customEmoji(fileId: customEmojiId), size: CGSize(width: 80.0, height: 80.0), placeholderColor: presentationData.theme.list.mediaPlaceholderColor, themeColor: navigationContentsAccentColor, loopMode: .forever)
+                    emojiExpandedStatusContent = .animation(content: .customEmoji(fileId: customEmojiId), size: CGSize(width: 80.0, height: 80.0), placeholderColor: navigationContentsAccentColor, themeColor: navigationContentsAccentColor, loopMode: .forever)
+                } else {
+                    emojiRegularStatusContent = .fullGramBadge(color: badge.uiColor, string: badge.chipText)
+                    emojiExpandedStatusContent = emojiRegularStatusContent
+                }
+                verifiedIconAction = { [weak self] in
+                    guard let strongSelf = self else {
+                        return
+                    }
+                    if case let .fullGram(currentBadge) = strongSelf.currentVerifiedIcon {
+                        strongSelf.presentFullGramBadgeBanner(badge: currentBadge)
+                    }
+                }
             default:
                 emojiRegularStatusContent = .none
                 emojiExpandedStatusContent = .none
@@ -1226,7 +1250,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
                     content: emojiRegularStatusContent,
                     isVisibleForAnimations: true,
                     useSharedAnimation: true,
-                    action: nil,
+                    action: verifiedIconAction,
                     emojiFileUpdated: nil
                 )),
                 environment: {},
@@ -1241,7 +1265,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
                     content: emojiExpandedStatusContent,
                     isVisibleForAnimations: true,
                     useSharedAnimation: true,
-                    action: {}
+                    action: verifiedIconAction
                 )),
                 environment: {},
                 containerSize: CGSize(width: 26.0, height: 26.0)
@@ -1779,7 +1803,11 @@ final class PeerInfoHeaderNode: ASDisplayNode {
                 leftExpandedOffset = nextExpandedIconX + 4.0
             } else {
                 titleHorizontalOffset += (verifiedIconSize.width + 4.0) / 2.0
-                titleExpandedHorizontalOffset += titleExpandedVerifiedIconSize.width - 2.0
+                if case .fullGram = verifiedIcon {
+                    titleExpandedHorizontalOffset += titleExpandedVerifiedIconSize.width + 4.0
+                } else {
+                    titleExpandedHorizontalOffset += titleExpandedVerifiedIconSize.width - 2.0
+                }
                 
                 leftOffset = -verifiedIconSize.width - 4.0
                 leftExpandedOffset = -titleExpandedVerifiedIconSize.width - 4.0
@@ -2975,6 +3003,18 @@ final class PeerInfoHeaderNode: ASDisplayNode {
                     return self.titleExpandedCredibilityIconView.hitTest(self.view.convert(point, to: self.titleExpandedCredibilityIconView), with: event) ?? self.titleExpandedCredibilityIconView
                 } else if iconFrame.contains(point) && self.titleCredibilityIconView.alpha > 0.0 {
                     return self.titleCredibilityIconView.hitTest(self.view.convert(point, to: self.titleCredibilityIconView), with: event) ?? self.titleCredibilityIconView
+                }
+            default:
+                break
+            }
+            switch self.currentVerifiedIcon {
+            case .fullGram:
+                let iconFrame = self.titleVerifiedIconView.convert(self.titleVerifiedIconView.bounds, to: self.view).insetBy(dx: -8.0, dy: -8.0)
+                let expandedIconFrame = self.titleExpandedVerifiedIconView.convert(self.titleExpandedVerifiedIconView.bounds, to: self.view).insetBy(dx: -8.0, dy: -8.0)
+                if expandedIconFrame.contains(point) && self.isAvatarExpanded && self.titleExpandedVerifiedIconView.alpha > 0.0 {
+                    return self.titleExpandedVerifiedIconView.hitTest(self.view.convert(point, to: self.titleExpandedVerifiedIconView), with: event) ?? self.titleExpandedVerifiedIconView
+                } else if iconFrame.contains(point) && self.titleVerifiedIconView.alpha > 0.0 {
+                    return self.titleVerifiedIconView.hitTest(self.view.convert(point, to: self.titleVerifiedIconView), with: event) ?? self.titleVerifiedIconView
                 }
             default:
                 break

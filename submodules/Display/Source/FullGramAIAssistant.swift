@@ -738,8 +738,9 @@ public final class FullGramAIStore {
                         extraReason = " (\(finishReason))"
                     }
                 }
+                let finalExtraReason = extraReason
                 DispatchQueue.main.async {
-                    completion(.failure(NSError(domain: "FullGramAI", code: statusCode, userInfo: [NSLocalizedDescriptionKey: "Модель не вернула текст (HTTP \(statusCode)\(extraReason))."])))
+                    completion(.failure(NSError(domain: "FullGramAI", code: statusCode, userInfo: [NSLocalizedDescriptionKey: "Модель не вернула текст (HTTP \(statusCode)\(finalExtraReason))."])))
                 }
                 return
             }
