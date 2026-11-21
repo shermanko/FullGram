@@ -356,6 +356,8 @@ def check_swift_sources() -> int:
             used_display = [s for s in sorted(display_syms) if re.search(rf"\b{s}\b", text)]
             if used_display:
                 raise AssertionError(f"{rel} uses {used_display[0]} without 'import Display'")
+        if re.search(r"\bASDisplayNode\b", text) and "AsyncDisplayKit" not in imports:
+            raise AssertionError(f"{rel} uses ASDisplayNode without 'import AsyncDisplayKit'")
         if "UndoOverlayController" in text and "UndoUI" not in imports:
             raise AssertionError(f"{rel} uses UndoOverlayController without 'import UndoUI'")
         if re.search(r"UIBarButtonItem\([^)]*style:\s*\.done\b", text):

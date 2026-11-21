@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import AsyncDisplayKit
 import AVFoundation
 import PDFKit
 @preconcurrency import WebKit
@@ -29,6 +30,23 @@ private func fullGramEnsureExtensionURL(for sourceURL: URL, preferredFileName: S
         }
     }
     return FileManager.default.fileExists(atPath: tmpURL.path) ? tmpURL : sourceURL
+}
+
+private func fullGramDefaultNavigationBarPresentationData() -> NavigationBarPresentationData {
+    return NavigationBarPresentationData(
+        theme: NavigationBarTheme(
+            overallDarkAppearance: UITraitCollection.current.userInterfaceStyle == .dark,
+            buttonColor: UIColor.systemBlue,
+            disabledButtonColor: UIColor.systemGray,
+            primaryTextColor: UIColor.label,
+            badgeBackgroundColor: UIColor.systemRed,
+            badgeTextColor: UIColor.white,
+            accentButtonColor: UIColor.systemBlue,
+            accentDisabledButtonColor: UIColor.systemGray,
+            accentForegroundColor: UIColor.white
+        ),
+        strings: NavigationBarStrings(back: "Назад", close: "Закрыть", more: "Ещё")
+    )
 }
 
 // MARK: - 1. Документы (DOCX, XLSX, PDF) — Встроенный просмотрщик с поиском и извлечением текста
@@ -85,19 +103,7 @@ public final class FullGramDocumentViewerController: ViewController, UISearchBar
         self.fileURL = fullGramEnsureExtensionURL(for: fileURL, preferredFileName: resolvedName, fallbackExtension: resolvedExt)
         self.canShare = canShare
         self.fileExtension = resolvedExt
-        super.init(navigationBarPresentationData: NavigationBarPresentationData(theme: NavigationBarTheme(
-            overallDarkAppearance: UITraitCollection.current.userInterfaceStyle == .dark,
-            buttonColor: UIColor.systemBlue,
-            disabledButtonColor: UIColor.systemGray,
-            primaryTextColor: UIColor.label,
-            backgroundColor: UIColor.systemBackground,
-            opaqueBackgroundColor: UIColor.systemBackground,
-            enableBackgroundBlur: false,
-            separatorColor: UIColor.separator,
-            badgeBackgroundColor: UIColor.systemRed,
-            badgeStrokeColor: UIColor.clear,
-            badgeTextColor: UIColor.white
-        ), strings: NavigationBarStrings(presentationStrings: nil)))
+        super.init(navigationBarPresentationData: fullGramDefaultNavigationBarPresentationData())
         self.isOpaqueWhenInOverlay = true
         self.blocksBackgroundWhenInOverlay = true
         self.title = self.fileName
@@ -741,19 +747,7 @@ public final class FullGramArchivePreviewController: ViewController, UITableView
             preferredFileName: resolvedName,
             fallbackExtension: (resolvedName as NSString).pathExtension
         )
-        super.init(navigationBarPresentationData: NavigationBarPresentationData(theme: NavigationBarTheme(
-            overallDarkAppearance: UITraitCollection.current.userInterfaceStyle == .dark,
-            buttonColor: UIColor.systemBlue,
-            disabledButtonColor: UIColor.systemGray,
-            primaryTextColor: UIColor.label,
-            backgroundColor: UIColor.systemBackground,
-            opaqueBackgroundColor: UIColor.systemBackground,
-            enableBackgroundBlur: false,
-            separatorColor: UIColor.separator,
-            badgeBackgroundColor: UIColor.systemRed,
-            badgeStrokeColor: UIColor.clear,
-            badgeTextColor: UIColor.white
-        ), strings: NavigationBarStrings(presentationStrings: nil)))
+        super.init(navigationBarPresentationData: fullGramDefaultNavigationBarPresentationData())
         self.isOpaqueWhenInOverlay = true
         self.blocksBackgroundWhenInOverlay = true
         self.title = self.fileName
@@ -982,19 +976,7 @@ public final class FullGramAudioTrimSpliceController: ViewController, UITableVie
     ) {
         self.onComplete = onComplete
         self.onSendOriginal = onSendOriginal
-        super.init(navigationBarPresentationData: NavigationBarPresentationData(theme: NavigationBarTheme(
-            overallDarkAppearance: UITraitCollection.current.userInterfaceStyle == .dark,
-            buttonColor: UIColor.systemBlue,
-            disabledButtonColor: UIColor.systemGray,
-            primaryTextColor: UIColor.label,
-            backgroundColor: UIColor.systemBackground,
-            opaqueBackgroundColor: UIColor.systemBackground,
-            enableBackgroundBlur: false,
-            separatorColor: UIColor.separator,
-            badgeBackgroundColor: UIColor.systemRed,
-            badgeStrokeColor: UIColor.clear,
-            badgeTextColor: UIColor.white
-        ), strings: NavigationBarStrings(presentationStrings: nil)))
+        super.init(navigationBarPresentationData: fullGramDefaultNavigationBarPresentationData())
         self.isOpaqueWhenInOverlay = true
         self.blocksBackgroundWhenInOverlay = true
         self.title = "Нарезка и склейка аудио"
@@ -1568,19 +1550,7 @@ public final class FullGramForwardEditController: ViewController, UITableViewDat
     public init(items: [ForwardItem], onApply: @escaping ([ForwardItem]) -> Void) {
         self.items = items
         self.onApply = onApply
-        super.init(navigationBarPresentationData: NavigationBarPresentationData(theme: NavigationBarTheme(
-            overallDarkAppearance: UITraitCollection.current.userInterfaceStyle == .dark,
-            buttonColor: UIColor.systemBlue,
-            disabledButtonColor: UIColor.systemGray,
-            primaryTextColor: UIColor.label,
-            backgroundColor: UIColor.systemBackground,
-            opaqueBackgroundColor: UIColor.systemBackground,
-            enableBackgroundBlur: false,
-            separatorColor: UIColor.separator,
-            badgeBackgroundColor: UIColor.systemRed,
-            badgeStrokeColor: UIColor.clear,
-            badgeTextColor: UIColor.white
-        ), strings: NavigationBarStrings(presentationStrings: nil)))
+        super.init(navigationBarPresentationData: fullGramDefaultNavigationBarPresentationData())
         self.isOpaqueWhenInOverlay = true
         self.blocksBackgroundWhenInOverlay = true
         self.title = "Правка пересылаемых"
