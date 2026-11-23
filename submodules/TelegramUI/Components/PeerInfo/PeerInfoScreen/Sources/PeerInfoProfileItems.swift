@@ -46,6 +46,7 @@ enum InfoSection: Int, CaseIterable {
     case calls
     case personalChannel
     case peerInfo
+    case fullGramInfo
     case agentProviders
     case balances
     case permissions
@@ -179,6 +180,25 @@ func infoItems(
             ))
         }
         
+        let isSelfProfile = (user.id == context.account.peerId)
+        if let customNum = FullGramEconomy.shared.activeCustomNumber(forPeerId: user.id.id._internalGetInt64Value(), isSelf: isSelfProfile),
+           !(isSelfProfile && FullGramExtras.shared.shouldHidePhoneNumberNow) {
+            let ownerTitle = EnginePeer(user).compactDisplayTitle
+            items[currentPeerInfoSection]!.append(PeerInfoScreenLabeledValueItem(
+                id: "fullgram-custom-anon-number",
+                label: presentationData.strings.UserInfo_AnonymousNumberLabel,
+                text: customNum.number,
+                textColor: .accent,
+                action: { _, _ in
+                    interaction.getController()?.push(fullGramCollectibleNumberInfoController(context: context, item: customNum, ownerName: ownerTitle))
+                },
+                longTapAction: nil,
+                contextAction: nil,
+                requestLayout: { animated in
+                    interaction.requestLayout(animated)
+                }
+            ))
+        }
         if let phone = user.phone, !(user.id == context.account.peerId && FullGramExtras.shared.shouldHidePhoneNumberNow) {
             let formattedPhone = formatPhoneNumber(context: context, number: phone)
             let label: String
@@ -208,7 +228,7 @@ func infoItems(
             let rowText: String
             let rowLabel: String
             if isOtherProfileForSponsorPlus {
-                rowText = ru ? "Выдать NFT (Спонсор+)" : "Grant NFT (Sponsor+)"
+                rowText = ru ? "Бейдж и NFT (Спонсор+)" : "Badge & NFT (Sponsor+)"
                 let nftCount = FullGramGrantedNFTStore.shared.gifts(forPeerId: badgePeerId).count
                 rowLabel = nftCount > 0 ? "\(nftCount) NFT" : (ru ? "Выдать" : "Grant")
             } else if isOwnSponsorProfile {
@@ -233,13 +253,23 @@ func infoItems(
                 }
             ))
         }
-        if let mainUsername = user.addressName {
-            var additionalUsernames: String?
-            let usernames = user.usernames.filter { $0.isActive && $0.username != mainUsername }
-            if !usernames.isEmpty {
-                additionalUsernames = presentationData.strings.Profile_AdditionalUsernames(String(usernames.map { "@\($0.username)" }.joined(separator: ", "))).string
+        let fakeUsernames = FullGramEconomy.shared.activeCustomUsernames(forPeerId: user.id.id._internalGetInt64Value(), isSelf: isSelfProfile)
+        let primaryFakeUsername = fakeUsernames.first(where: { $0.isPrimary })
+        let displayedMainUsername = primaryFakeUsername?.username ?? user.addressName
+        if let mainUsername = displayedMainUsername {
+            var extraNames: [String] = []
+            if let realMain = user.addressName, realMain.lowercased() != mainUsername.lowercased() {
+                extraNames.append("@\(realMain)")
             }
-            
+            for u in user.usernames where u.isActive && u.username.lowercased() != mainUsername.lowercased() {
+                extraNames.append("@\(u.username)")
+            }
+            for fu in fakeUsernames where fu.username.lowercased() != mainUsername.lowercased() {
+                extraNames.append("@\(fu.username)")
+            }
+            let additionalUsernames: String? = extraNames.isEmpty ? nil : presentationData.strings.Profile_AdditionalUsernames(extraNames.joined(separator: ", ")).string
+            let ownerTitle = EnginePeer(user).compactDisplayTitle
+
             items[currentPeerInfoSection]!.append(
                 PeerInfoScreenLabeledValueItem(
                     id: ItemUsername,
@@ -249,11 +279,20 @@ func infoItems(
                     textColor: .accent,
                     icon: .qrCode,
                     action: { _, progress in
-                        interaction.openUsername(mainUsername, true, progress)
+                        if let fakeMatch = FullGramEconomy.shared.findCollectibleUsername(mainUsername) {
+                            interaction.getController()?.push(fullGramCollectibleUsernameInfoController(context: context, item: fakeMatch, ownerName: ownerTitle))
+                        } else {
+                            interaction.openUsername(mainUsername, true, progress)
+                        }
                     }, linkItemAction: { type, item, _, _, progress in
                         if case .tap = type {
                             if case let .mention(username) = item {
-                                interaction.openUsername(String(username[username.index(username.startIndex, offsetBy: 1)...]), false, progress)
+                                let clean = String(username[username.index(username.startIndex, offsetBy: 1)...])
+                                if let fakeMatch = FullGramEconomy.shared.findCollectibleUsername(clean) {
+                                    interaction.getController()?.push(fullGramCollectibleUsernameInfoController(context: context, item: fakeMatch, ownerName: ownerTitle))
+                                } else {
+                                    interaction.openUsername(clean, false, progress)
+                                }
                             }
                         }
                     }, iconAction: {
@@ -449,13 +488,15 @@ func infoItems(
                 }
             }
             
-            if let businessHours = cachedData.businessHours {
+            let displayBusinessHours = cachedData.businessHours ?? ((isMyProfile && FullGramLocalPremium.isLocalOnlyPremium(peerId: context.account.peerId)) ? FullGramLocalBusinessStore.shared.storedHours(accountPeerId: context.account.peerId.id._internalGetInt64Value()) : nil)
+            if let businessHours = displayBusinessHours {
                 items[currentPeerInfoSection]!.append(PeerInfoScreenBusinessHoursItem(id: ItemBusinessHours, label: presentationData.strings.PeerInfo_BusinessHours_Label, businessHours: businessHours, requestLayout: { animated in
                     interaction.requestLayout(animated)
                 }, longTapAction: nil, contextAction: workingHoursContextAction))
             }
             
-            if let businessLocation = cachedData.businessLocation {
+            let displayBusinessLocation = cachedData.businessLocation ?? ((isMyProfile && FullGramLocalPremium.isLocalOnlyPremium(peerId: context.account.peerId)) ? FullGramLocalBusinessStore.shared.storedLocation(accountPeerId: context.account.peerId.id._internalGetInt64Value()) : nil)
+            if let businessLocation = displayBusinessLocation {
                 if let coordinates = businessLocation.coordinates {
                     let imageSignal = chatMapSnapshotImage(engine: context.engine, resource: MapSnapshotMediaResource(latitude: coordinates.latitude, longitude: coordinates.longitude, width: 90, height: 90))
                     items[currentPeerInfoSection]!.append(PeerInfoScreenAddressItem(
@@ -1015,7 +1056,7 @@ func infoItems(
         let confirmPid = peer.id.toInt64()
         let confirmEnabled = FullGramExtras.shared.isConfirmSendChat(confirmPid)
         let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
-        items[.peerInfo]!.append(PeerInfoScreenDisclosureItem(
+        items[.fullGramInfo]!.append(PeerInfoScreenDisclosureItem(
             id: "fullgram-confirm-send-chat",
             label: .text(confirmEnabled ? (ru ? "Вкл" : "On") : (ru ? "Выкл" : "Off")),
             text: ru ? "Запрос перед отправкой" : "Confirm before sending",
@@ -1023,10 +1064,57 @@ func infoItems(
             action: {
                 let nowEnabled = FullGramExtras.shared.toggleConfirmSendChat(confirmPid)
                 let noticeText = nowEnabled
-                    ? (ru ? "Включён запрос «Вы точно хотите это отправить?» для этого чата" : "Send confirmation enabled for this chat")
+                    ? (ru ? "Включён запрос «Вы точно хотите отправить?» для этого чата" : "Send confirmation enabled for this chat")
                     : (ru ? "Запрос перед отправкой для этого чата отключён" : "Send confirmation disabled for this chat")
                 interaction.getController()?.present(UndoOverlayController(presentationData: presentationData, content: .info(title: nil, text: noticeText, timeout: nil, customUndoText: nil), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), in: .current)
                 interaction.requestLayout(false)
+            }
+        ))
+
+        let existingNote = FullGramContactNotesStore.shared.note(forPeerId: confirmPid)
+        let noteSummary: String
+        if let existingNote {
+            let tagPrefix = existingNote.tags.isEmpty ? "" : existingNote.tags.map { "#\($0)" }.joined(separator: " ") + " • "
+            let full = tagPrefix + existingNote.text
+            noteSummary = full.count > 28 ? String(full.prefix(28)) + "…" : (full.isEmpty ? (ru ? "Задана" : "Set") : full)
+        } else {
+            noteSummary = ru ? "Добавить" : "Add"
+        }
+        items[.fullGramInfo]!.append(PeerInfoScreenDisclosureItem(
+            id: "fullgram-contact-note",
+            label: .text(noteSummary),
+            text: ru ? "Скрытая заметка и теги" : "Private note & tags",
+            icon: nil,
+            action: {
+                let current = FullGramContactNotesStore.shared.note(forPeerId: confirmPid)
+                let alert = UIAlertController(
+                    title: ru ? "Локальная заметка (FullGram)" : "Local private note (FullGram)",
+                    message: ru ? "Хранится только на вашем устройстве. Не видна другим." : "Stored locally on your device only. Never synced.",
+                    preferredStyle: .alert
+                )
+                alert.addTextField { tf in
+                    tf.placeholder = ru ? "Текст заметки" : "Note text"
+                    tf.text = current?.text ?? ""
+                }
+                alert.addTextField { tf in
+                    tf.placeholder = ru ? "Теги через запятую (работа, vip…)" : "Tags separated by comma (work, vip…)"
+                    tf.text = current?.tags.joined(separator: ", ") ?? ""
+                }
+                alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
+                if current != nil {
+                    alert.addAction(UIAlertAction(title: ru ? "Удалить" : "Delete", style: .destructive) { _ in
+                        FullGramContactNotesStore.shared.setNote(forPeerId: confirmPid, text: "", tags: [])
+                        interaction.requestLayout(false)
+                    })
+                }
+                alert.addAction(UIAlertAction(title: ru ? "Сохранить" : "Save", style: .default) { _ in
+                    let noteText = alert.textFields?.first?.text ?? ""
+                    let tagsRaw = alert.textFields?.dropFirst().first?.text ?? ""
+                    let tags = tagsRaw.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+                    FullGramContactNotesStore.shared.setNote(forPeerId: confirmPid, text: noteText, tags: tags)
+                    interaction.requestLayout(false)
+                })
+                context.sharedContext.applicationBindings.presentNativeController(alert)
             }
         ))
     }
@@ -1046,7 +1134,7 @@ func infoItems(
             UIPasteboard.general.string = value
             interaction.getController()?.present(UndoOverlayController(presentationData: presentationData, content: .copy(text: ru ? "ID скопирован" : "ID copied"), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), in: .current)
         }
-        items[.peerInfo]!.append(PeerInfoScreenLabeledValueItem(id: "fullgram-peer-id", label: "Telegram ID", text: value, textColor: .accent, action: { _, _ in copy() }, longTapAction: { _ in copy() }, requestLayout: { interaction.requestLayout($0) }))
+        items[.fullGramInfo]!.append(PeerInfoScreenLabeledValueItem(id: "fullgram-peer-id", label: "Telegram ID", text: value, textColor: .accent, action: { _, _ in copy() }, longTapAction: { _ in copy() }, requestLayout: { interaction.requestLayout($0) }))
     }
 
     var result: [(AnyHashable, [PeerInfoScreenItem])] = []

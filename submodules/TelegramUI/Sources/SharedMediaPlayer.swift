@@ -177,6 +177,10 @@ final class SharedMediaPlayer {
     
     private var currentPrefetchItems: (SharedMediaPlaybackDataSource, SharedMediaPlaybackDataSource)?
     private let prefetchDisposable = MetaDisposable()
+    private var fgSilenceIntervals: [ClosedRange<Double>] = []
+    private var fgLastSilenceJumpTarget: Double = -1.0
+    private var fgLastSilenceJumpWall: CFAbsoluteTime = 0.0
+    private var fgSilenceResourceId: String?
     
     let type: MediaManagerPlayerType
     
@@ -224,8 +228,28 @@ final class SharedMediaPlayer {
                         let rateValue: Double
                         if case .music = playbackData.type {
                             rateValue = 1.0
+                        } else if strongSelf.playbackRate == .x1 && abs(Double(FullGramExtras.shared.voicePlaybackSpeed) - 1.0) > 0.01 {
+                            rateValue = Double(FullGramExtras.shared.voicePlaybackSpeed)
                         } else {
                             rateValue = strongSelf.playbackRate.doubleValue
+                        }
+                        strongSelf.fgSilenceIntervals = []
+                        strongSelf.fgLastSilenceJumpTarget = -1.0
+                        if (playbackData.type == .voice || playbackData.type == .instantVideo),
+                           FullGramExtras.shared.skipSilenceInVoiceAndCircles,
+                           case let .telegramFile(fileReference, _, _) = playbackData.source {
+                            let resId = fileReference.media.resource.id.stringRepresentation
+                            strongSelf.fgSilenceResourceId = resId
+                            if let path = strongSelf.engine.account.postbox.mediaBox.completedResourcePath(fileReference.media.resource) {
+                                FullGramSilenceSkipper.analyzeSpeechIntervals(url: URL(fileURLWithPath: path)) { [weak self] intervals in
+                                    Queue.mainQueue().async {
+                                        guard let self, self.fgSilenceResourceId == resId else { return }
+                                        self.fgSilenceIntervals = intervals
+                                    }
+                                }
+                            }
+                        } else {
+                            strongSelf.fgSilenceResourceId = nil
                         }
                         
                         switch playbackData.type {
@@ -336,7 +360,22 @@ final class SharedMediaPlayer {
                     let playerIndex = strongSelf.playerIndex
                     if let playbackItem = strongSelf.playbackItem, let item = state.item {
                         strongSelf.playbackStateValue.set(playbackItem.playbackStatus
-                        |> map { itemStatus in
+                        |> map { [weak self] itemStatus in
+                            if let strongSelf = self,
+                               (strongSelf.type == .voice),
+                               FullGramExtras.shared.skipSilenceInVoiceAndCircles,
+                               case .playing = itemStatus.status,
+                               !strongSelf.fgSilenceIntervals.isEmpty,
+                               let target = FullGramSilenceSkipper.nextSkipTarget(currentTime: itemStatus.timestamp, intervals: strongSelf.fgSilenceIntervals) {
+                                let now = CFAbsoluteTimeGetCurrent()
+                                if (now - strongSelf.fgLastSilenceJumpWall) > 0.35 && abs(target - strongSelf.fgLastSilenceJumpTarget) > 0.15 {
+                                    strongSelf.fgLastSilenceJumpWall = now
+                                    strongSelf.fgLastSilenceJumpTarget = target
+                                    Queue.mainQueue().async { [weak strongSelf] in
+                                        strongSelf?.playbackItem?.seek(target)
+                                    }
+                                }
+                            }
                             return .item(SharedMediaPlayerItemPlaybackState(playlistId: playlistId, playlistLocation: playlistLocation, item: item, previousItem: state.previousItem, nextItem: state.nextItem, status: itemStatus, order: state.order, looping: state.looping, playerIndex: playerIndex))
                         })
                     strongSelf.markItemAsPlayedDisposable.set((playbackItem.playbackStatus

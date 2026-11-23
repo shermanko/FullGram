@@ -243,7 +243,7 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
         FullGramSearchItem(
             id: 10,
             title: "Удалённые и изменённые сообщения",
-            subtitle: "Чаты",
+            subtitle: "Основное → Чаты",
             keywords: "история удаленные измененные сообщения кэш медиаархив",
             destination: { fullGramMessageHistoryController(context: $0) }
         ),
@@ -257,7 +257,7 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
         FullGramSearchItem(
             id: 11,
             title: "Обход ограничений (одноразовые медиа)",
-            subtitle: "Чаты",
+            subtitle: "Основное → Чаты",
             keywords: "одноразовые запрет копирования просмотр пересылка защита контента",
             destination: { fullGramRestrictionBypassController(context: $0) }
         ),
@@ -271,28 +271,28 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
         FullGramSearchItem(
             id: 13,
             title: "Сообщение (Анти-капс, автоперевод)",
-            subtitle: "Чаты",
+            subtitle: "Основное → Чаты",
             keywords: "капс переводчик перед отправкой сообщение",
             destination: { fullGramSendingController(context: $0) }
         ),
         FullGramSearchItem(
             id: 14,
             title: "Перевод сообщений и провайдеры",
-            subtitle: "Чаты",
+            subtitle: "Основное → Чаты",
             keywords: "переводчик язык google deepl yandex",
             destination: { fullGramTranslationSettingsController(context: $0) }
         ),
         FullGramSearchItem(
             id: 15,
             title: "Меню сообщения и реакции",
-            subtitle: "Чаты",
+            subtitle: "Основное → Чаты",
             keywords: "меню сообщения id автор реакции",
             destination: { fullGramMessageMenuController(context: $0) }
         ),
         FullGramSearchItem(
             id: 16,
             title: "Безлимит недавних стикеров",
-            subtitle: "Чаты",
+            subtitle: "Основное → Чаты",
             keywords: "стикеры лимит недавние",
             contextToggle: (
                 get: { $0.account.network.fullGramGhostMode.current.interface.unlimitedRecentStickers },
@@ -341,7 +341,7 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
         FullGramSearchItem(
             id: 17,
             title: "Авто-ответчик",
-            subtitle: "Чаты",
+            subtitle: "Основное → Чаты",
             keywords: "автоответчик авто ответчик afk занят сплю за рулем",
             destination: { fullGramAutoResponderController(context: $0) }
         ),
@@ -371,14 +371,14 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
         FullGramSearchItem(
             id: 30,
             title: "Шрифты (50+ шрифтов с GitHub)",
-            subtitle: "Оформление",
+            subtitle: "Основное → Оформление",
             keywords: "шрифт font minecraft jetbrains dream локальные github каталог roboto inter montserrat",
             destination: { fullGramFontsController(context: $0) }
         ),
         FullGramSearchItem(
             id: 31,
             title: "Темы и конструктор палитры",
-            subtitle: "Оформление",
+            subtitle: "Основное → Оформление",
             keywords: "тема темная oled цвета палитра конструктор",
             destination: { fullGramThemesController(context: $0) }
         ),
@@ -392,7 +392,7 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
         FullGramSearchItem(
             id: 33,
             title: "Дизайн (Удаление стекла, реакции)",
-            subtitle: "Оформление",
+            subtitle: "Основное → Оформление",
             keywords: "удаление стекла убрать стекло заливка цвет старый дизайн telegram классический светящиеся реакции замедление анимаций",
             destination: { fullGramDesignController(context: $0) }
         ),
@@ -406,14 +406,14 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
         FullGramSearchItem(
             id: 34,
             title: "Иконки приложения",
-            subtitle: "Оформление",
+            subtitle: "Основное → Оформление",
             keywords: "иконка приложения mascot красная зелёная синяя жёлтая розовая белая цветная",
             destination: { fullGramAppIconsController(context: $0) }
         ),
         FullGramSearchItem(
             id: 36,
             title: "Энергосбережение",
-            subtitle: "Прочее",
+            subtitle: "Основное → Прочее",
             keywords: "энергосбережение батарея заряд экономия анимации автовоспроизведение",
             destination: { fullGramPowerSavingController(context: $0) }
         ),
@@ -442,66 +442,66 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
         ),
         FullGramSearchItem(
             id: 43,
-            title: "Анти-скам (Мануал, Анти-OTC, Анти-офер)",
-            subtitle: "Раздел",
-            keywords: "анти скам antiscam фишинг гайд мануал инструкция не попадись отс офер",
+            title: "Анти-скам (Мануал, Правила банов, Анти-OTC)",
+            subtitle: "Безопасность",
+            keywords: "анти скам antiscam фишинг гайд мануал инструкция отс офер шаблоны ссылки новые аккаунты массовые вступления",
             destination: { fullGramAntiScamController(context: $0) }
         ),
         FullGramSearchItem(
             id: 44,
             title: "Анти-офер",
-            subtitle: "Анти-скам",
+            subtitle: "Безопасность → Анти-скам",
             keywords: "анти офер offer оффер бот пересылка ссылка",
             toggle: ({ FullGramAntiScam.shared.antiOfferEnabled }, { FullGramAntiScam.shared.antiOfferEnabled = $0 })
         ),
         FullGramSearchItem(
             id: 45,
             title: "Анти-OTC",
-            subtitle: "Анти-скам",
+            subtitle: "Безопасность → Анти-скам",
             keywords: "отс otc гарант сделка escrow",
             toggle: ({ FullGramAntiScam.shared.antiOtcEnabled }, { FullGramAntiScam.shared.antiOtcEnabled = $0 })
         ),
 
-        // Прочее и Бэкап
+        // Основное, Прочее, Для работы, Кошелёк и Бэкап
         FullGramSearchItem(
             id: 50,
-            title: "Бэкап и настройки «Прочее» (.fullgram)",
-            subtitle: "Прочее",
-            keywords: "бэкап backup экспорт импорт перенос настройки fullgram",
+            title: "Бэкап и раздел «Основное» (.fullgram)",
+            subtitle: "Основное",
+            keywords: "бэкап backup экспорт импорт перенос настройки основное прочее fullgram",
             destination: { fullGramOtherCategoryController(context: $0) }
         ),
         FullGramSearchItem(
             id: 51,
             title: "Бейджи FullGram (badges.json)",
-            subtitle: "Прочее",
+            subtitle: "Основное",
             keywords: "бейджи badges статус создатель премиум fullgram+ сервер",
             destination: { fullGramBadgesController(context: $0) }
         ),
         FullGramSearchItem(
             id: 52,
             title: "Локальный Premium",
-            subtitle: "Прочее",
+            subtitle: "Основное",
             keywords: "premium премиум статус",
             toggle: ({ FullGramExtras.shared.localPremium }, { FullGramExtras.shared.localPremium = $0 })
         ),
         FullGramSearchItem(
             id: 53,
             title: "Улучшение загрузки и множитель (x2–x8)",
-            subtitle: "Прочее → Основное",
+            subtitle: "Основное → Прочее",
             keywords: "скорость загрузки улучшение ускорение множитель x2 x3 x4 x6 x8 cdn",
             destination: { fullGramOtherGeneralController(context: $0) }
         ),
         FullGramSearchItem(
             id: 54,
             title: "Бесплатная расшифровка голосовых и кружков",
-            subtitle: "Прочее → Основное",
+            subtitle: "Основное → Прочее",
             keywords: "расшифровка транскрипция голос в текст кружки голосовые речь speech",
             toggle: ({ FullGramExtras.shared.localFreeTranscription }, { FullGramExtras.shared.localFreeTranscription = $0 })
         ),
         FullGramSearchItem(
             id: 55,
             title: "Не гасить экран в голосовых и кружках",
-            subtitle: "Прочее → Основное",
+            subtitle: "Основное → Прочее",
             keywords: "датчик приближения экран гаснет ухо кружок",
             toggle: ({ FullGramExtras.shared.keepScreenOnInVoice }, { FullGramExtras.shared.keepScreenOnInVoice = $0 })
         ),
@@ -532,10 +532,24 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
         // Плагины
         FullGramSearchItem(
             id: 70,
-            title: "Система плагинов (Lua и Python)",
+            title: "Система плагинов v2.0 (Lua, Python, Rust)",
             subtitle: "Плагины",
-            keywords: "плагины скрипты lua python код редактор маркет информация о чате",
+            keywords: "плагины скрипты lua python rust код редактор информация о чате фон api",
             destination: { fullGramPluginsController(context: $0) }
+        ),
+        FullGramSearchItem(
+            id: 85,
+            title: "Фоновый режим плагинов",
+            subtitle: "Плагины",
+            keywords: "фоновый режим фон background плагины тик таймер часы ник",
+            toggle: ({ FullGramPluginManager.shared.isBackgroundExecutionEnabled }, { FullGramPluginManager.shared.isBackgroundExecutionEnabled = $0 })
+        ),
+        FullGramSearchItem(
+            id: 86,
+            title: "Живой Ник и Часы в Telegram (.nick / .time)",
+            subtitle: "Плагины",
+            keywords: "ник имя профиль часы время телефон фон nick clock",
+            toggle: ({ FullGramPluginManager.shared.nickClockEnabled }, { FullGramPluginManager.shared.nickClockEnabled = $0 })
         ),
 
         // FullGram v1.6.1: Отправка, медиа, документы и оптимизация
@@ -636,6 +650,62 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
             subtitle: "Сообщение и отправка",
             keywords: "отправка аудио очередь скриншоты обложка пересылка файлы",
             destination: { fullGramSendingController(context: $0) }
+        ),
+        FullGramSearchItem(
+            id: 87,
+            title: "Для работы (Важные чаты, ZIP/RAR, DOCX/XLSX/PDF)",
+            subtitle: "Основное → Для работы",
+            keywords: "работа важные чаты подтверждение архив zip rar без скачивания docx xlsx pdf переименование",
+            destination: { fullGramWorkController(context: $0) }
+        ),
+        FullGramSearchItem(
+            id: 88,
+            title: "Кошелёк Gram, Звёзды, Подарки NFT и Fragment",
+            subtitle: "Основное → Кошелёк",
+            keywords: "кошелек gram ton звезды stars подарок nft апгрейд upgrade кастомные номера +888 юзернейм fragment",
+            destination: { fullGramEconomyHubController(context: $0) }
+        ),
+        FullGramSearchItem(
+            id: 89,
+            title: "Купить подарок FullGram (★)",
+            subtitle: "Основное → Подарки",
+            keywords: "купить подарок звезды реальные цены нфт nft",
+            destination: { fullGramGiftMarketController(context: $0, targetPeerId: nil, targetPeerName: nil) }
+        ),
+        FullGramSearchItem(
+            id: 90,
+            title: "Пузыри NFT в профиле (Profile V2)",
+            subtitle: "Основное → Оформление",
+            keywords: "пузыри нфт профиль profile v2 спец настройки debug",
+            toggle: ({ FullGramExtras.shared.profileNFTBubbles }, { FullGramExtras.shared.profileNFTBubbles = $0 })
+        ),
+        FullGramSearchItem(
+            id: 91,
+            title: "Анонимный просмотр историй",
+            subtitle: "Приватность",
+            keywords: "истории сторис анонимно просмотр скрытый privacy",
+            toggle: ({ FullGramExtras.shared.anonymousStoryViewing }, { FullGramExtras.shared.anonymousStoryViewing = $0 })
+        ),
+        FullGramSearchItem(
+            id: 92,
+            title: "Скачивание историй в галерею",
+            subtitle: "Приватность",
+            keywords: "истории сторис скачать сохранить галерея фото видео",
+            toggle: ({ FullGramExtras.shared.allowStoryDownload }, { FullGramExtras.shared.allowStoryDownload = $0 })
+        ),
+        FullGramSearchItem(
+            id: 93,
+            title: "Уведомление на главный экран при авто-ответе",
+            subtitle: "Основное → Прочее",
+            keywords: "автоответчик уведомление главный экран push пуш",
+            toggle: ({ FullGramAutoResponderSettings.shared.notifyOnHomeScreen }, { FullGramAutoResponderSettings.shared.notifyOnHomeScreen = $0 })
+        ),
+        FullGramSearchItem(
+            id: 94,
+            title: "10 умных функций FullGram",
+            subtitle: "Основное",
+            keywords: "фокус очистка ссылок раскладка типографика инкогнито закладки свайп",
+            destination: { fullGramSmartFeaturesController(context: $0) }
         )
     ]
 }

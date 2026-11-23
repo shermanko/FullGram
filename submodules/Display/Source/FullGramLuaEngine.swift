@@ -1368,5 +1368,122 @@ public final class FullGramLuaVM {
             }
         ])
         self.globalEnv.setLocal("json", .table(jsonBox))
+
+        // os.* (phone time & date)
+        let osBox = FullGramPluginTableBox(dict: [
+            "time": .function { args in
+                if let first = args.first, case let .table(box) = first {
+                    var comps = DateComponents()
+                    comps.year = Int(box.get(key: .string("year")).asInt ?? 1970)
+                    comps.month = Int(box.get(key: .string("month")).asInt ?? 1)
+                    comps.day = Int(box.get(key: .string("day")).asInt ?? 1)
+                    comps.hour = Int(box.get(key: .string("hour")).asInt ?? 12)
+                    comps.minute = Int(box.get(key: .string("min")).asInt ?? 0)
+                    comps.second = Int(box.get(key: .string("sec")).asInt ?? 0)
+                    if let d = Calendar.current.date(from: comps) {
+                        return .int(Int64(d.timeIntervalSince1970))
+                    }
+                }
+                return .int(Int64(Date().timeIntervalSince1970))
+            },
+            "clock": .function { _ in
+                return .double(ProcessInfo.processInfo.systemUptime)
+            },
+            "difftime": .function { args in
+                let t2 = args.count > 0 ? (args[0].asDouble ?? 0.0) : 0.0
+                let t1 = args.count > 1 ? (args[1].asDouble ?? 0.0) : 0.0
+                return .double(t2 - t1)
+            },
+            "date": .function { args in
+                var fmt = args.first?.asString ?? "%d.%m.%Y %H:%M:%S"
+                let ts = args.count > 1 ? (args[1].asDouble ?? Date().timeIntervalSince1970) : Date().timeIntervalSince1970
+                let date = Date(timeIntervalSince1970: ts)
+                var cal = Calendar.current
+                var tz = TimeZone.current
+                if fmt.hasPrefix("!") {
+                    fmt = String(fmt.dropFirst())
+                    tz = TimeZone(secondsFromGMT: 0) ?? tz
+                    cal.timeZone = tz
+                }
+                if fmt == "*t" {
+                    let c = cal.dateComponents([.year, .month, .day, .hour, .minute, .second, .weekday], from: date)
+                    let yday = cal.ordinality(of: .day, in: .year, for: date) ?? 1
+                    return .table(FullGramPluginTableBox(dict: [
+                        "year": .int(Int64(c.year ?? 1970)),
+                        "month": .int(Int64(c.month ?? 1)),
+                        "day": .int(Int64(c.day ?? 1)),
+                        "hour": .int(Int64(c.hour ?? 0)),
+                        "min": .int(Int64(c.minute ?? 0)),
+                        "sec": .int(Int64(c.second ?? 0)),
+                        "wday": .int(Int64(c.weekday ?? 1)),
+                        "yday": .int(Int64(yday)),
+                        "isdst": .bool(tz.isDaylightSavingTime(for: date))
+                    ]))
+                }
+                return .string(Self.formatStrftime(fmt, date: date, timeZone: tz))
+            }
+        ])
+        self.globalEnv.setLocal("os", .table(osBox))
+    }
+
+    private static func formatStrftime(_ format: String, date: Date, timeZone: TimeZone) -> String {
+        var cal = Calendar.current
+        cal.timeZone = timeZone
+        let c = cal.dateComponents([.year, .month, .day, .hour, .minute, .second, .weekday], from: date)
+        let yday = cal.ordinality(of: .day, in: .year, for: date) ?? 1
+        let hour24 = c.hour ?? 0
+        let hour12 = hour24 % 12 == 0 ? 12 : (hour24 % 12)
+        let ampm = hour24 < 12 ? "AM" : "PM"
+        let pad2: (Int) -> String = { String(format: "%02d", $0) }
+
+        let df = DateFormatter()
+        df.timeZone = timeZone
+        df.locale = Locale.current
+        df.dateFormat = "EEEE"
+        let fullWeekday = df.string(from: date)
+        df.dateFormat = "EEE"
+        let shortWeekday = df.string(from: date)
+        df.dateFormat = "MMMM"
+        let fullMonth = df.string(from: date)
+        df.dateFormat = "MMM"
+        let shortMonth = df.string(from: date)
+
+        var out = ""
+        let chars = Array(format)
+        var i = 0
+        while i < chars.count {
+            if chars[i] == "%", i + 1 < chars.count {
+                let code = chars[i + 1]
+                switch code {
+                case "Y": out += String(format: "%04d", c.year ?? 1970)
+                case "y": out += pad2((c.year ?? 1970) % 100)
+                case "m": out += pad2(c.month ?? 1)
+                case "d": out += pad2(c.day ?? 1)
+                case "H": out += pad2(hour24)
+                case "I": out += pad2(hour12)
+                case "M": out += pad2(c.minute ?? 0)
+                case "S": out += pad2(c.second ?? 0)
+                case "p": out += ampm
+                case "w": out += String(((c.weekday ?? 1) + 6) % 7)
+                case "j": out += String(format: "%03d", yday)
+                case "A": out += fullWeekday
+                case "a": out += shortWeekday
+                case "B": out += fullMonth
+                case "b": out += shortMonth
+                case "X": out += "\(pad2(hour24)):\(pad2(c.minute ?? 0)):\(pad2(c.second ?? 0))"
+                case "x": out += "\(pad2(c.day ?? 1)).\(pad2(c.month ?? 1)).\(String(format: "%04d", c.year ?? 1970))"
+                case "c": out += "\(pad2(c.day ?? 1)).\(pad2(c.month ?? 1)).\(String(format: "%04d", c.year ?? 1970)) \(pad2(hour24)):\(pad2(c.minute ?? 0)):\(pad2(c.second ?? 0))"
+                case "%": out.append("%")
+                default:
+                    out.append("%")
+                    out.append(code)
+                }
+                i += 2
+            } else {
+                out.append(chars[i])
+                i += 1
+            }
+        }
+        return out
     }
 }

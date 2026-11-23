@@ -29,18 +29,31 @@ public struct FullGramPluginMetadata: Codable, Equatable {
     public var author: String
     public var description: String
     public var permissions: [String]
+    public var backgroundEnabled: Bool
+    public var backgroundInterval: Int
 
     public var hasNetworkPermission: Bool {
         return self.permissions.contains("net")
     }
 
-    public init(id: String, name: String, version: String = "1.0", author: String = "User", description: String = "", permissions: [String] = []) {
+    public init(
+        id: String,
+        name: String,
+        version: String = "1.0",
+        author: String = "User",
+        description: String = "",
+        permissions: [String] = [],
+        backgroundEnabled: Bool = false,
+        backgroundInterval: Int = 30
+    ) {
         self.id = id
         self.name = name
         self.version = version
         self.author = author
         self.description = description
         self.permissions = permissions
+        self.backgroundEnabled = backgroundEnabled
+        self.backgroundInterval = min(3600, max(5, backgroundInterval))
     }
 
     public static func parse(from code: String, fallbackName: String, language: FullGramPluginLanguage) -> FullGramPluginMetadata {
@@ -56,8 +69,11 @@ public struct FullGramPluginMetadata: Codable, Equatable {
         var author = "User"
         var description = ""
         var permissions: [String] = []
+        var backgroundEnabled = false
+        var explicitBackgroundFlag: Bool?
+        var backgroundInterval = 30
 
-        for rawLine in code.components(separatedBy: .newlines).prefix(30) {
+        for rawLine in code.components(separatedBy: .newlines).prefix(45) {
             let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
             guard trimmed.hasPrefix(commentPrefix) else { continue }
             let body = trimmed.dropFirst(commentPrefix.count).trimmingCharacters(in: .whitespaces)
@@ -66,6 +82,27 @@ public struct FullGramPluginMetadata: Codable, Equatable {
             else if let val = extractTag("@version", from: body) { version = val }
             else if let val = extractTag("@author", from: body) { author = val }
             else if let val = extractTag("@description", from: body) { description = val }
+            else if let val = extractTag("@background", from: body) {
+                let lower = val.lowercased()
+                if ["true", "1", "yes", "on", "always", "да", "вкл"].contains(lower) {
+                    explicitBackgroundFlag = true
+                    backgroundEnabled = true
+                } else if ["false", "0", "no", "off", "нет", "выкл"].contains(lower) {
+                    explicitBackgroundFlag = false
+                    backgroundEnabled = false
+                }
+            }
+            else if let val = extractTag("@interval", from: body) {
+                let lower = val.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                let digits = lower.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
+                if let parsed = Int(digits), parsed > 0 {
+                    let seconds = lower.hasSuffix("m") ? parsed * 60 : parsed
+                    backgroundInterval = min(3600, max(5, seconds))
+                    if explicitBackgroundFlag == nil {
+                        backgroundEnabled = true
+                    }
+                }
+            }
             else if let val = extractTag("@permission", from: body) ?? extractTag("@permissions", from: body) {
                 let parsed = val
                     .lowercased()
@@ -94,7 +131,16 @@ public struct FullGramPluginMetadata: Codable, Equatable {
                 id = "plugin_\(fnv % 100000)"
             }
         }
-        return FullGramPluginMetadata(id: id, name: name, version: version, author: author, description: description, permissions: permissions)
+        return FullGramPluginMetadata(
+            id: id,
+            name: name,
+            version: version,
+            author: author,
+            description: description,
+            permissions: permissions,
+            backgroundEnabled: backgroundEnabled,
+            backgroundInterval: backgroundInterval
+        )
     }
 
     private static func extractTag(_ tag: String, from line: String) -> String? {
@@ -116,6 +162,9 @@ public struct FullGramPluginDescriptor: Codable, Equatable {
     public var isEnabled: Bool
     public var isBuiltIn: Bool
     public var updatedAt: TimeInterval
+    public var permissions: [String]
+    public var backgroundEnabled: Bool
+    public var backgroundInterval: Int
 
     public init(
         id: String,
@@ -127,7 +176,10 @@ public struct FullGramPluginDescriptor: Codable, Equatable {
         code: String,
         isEnabled: Bool = false,
         isBuiltIn: Bool = false,
-        updatedAt: TimeInterval = Date().timeIntervalSince1970
+        updatedAt: TimeInterval = Date().timeIntervalSince1970,
+        permissions: [String] = [],
+        backgroundEnabled: Bool = false,
+        backgroundInterval: Int = 30
     ) {
         self.id = id
         self.name = name
@@ -139,6 +191,31 @@ public struct FullGramPluginDescriptor: Codable, Equatable {
         self.isEnabled = isEnabled
         self.isBuiltIn = isBuiltIn
         self.updatedAt = updatedAt
+        self.permissions = permissions
+        self.backgroundEnabled = backgroundEnabled
+        self.backgroundInterval = min(3600, max(5, backgroundInterval))
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, language, version, author, description, code, isEnabled, isBuiltIn, updatedAt, permissions, backgroundEnabled, backgroundInterval
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.name = try c.decode(String.self, forKey: .name)
+        self.language = try c.decode(FullGramPluginLanguage.self, forKey: .language)
+        self.version = try c.decodeIfPresent(String.self, forKey: .version) ?? "1.0"
+        self.author = try c.decodeIfPresent(String.self, forKey: .author) ?? "User"
+        self.description = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
+        self.code = try c.decode(String.self, forKey: .code)
+        self.isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        self.isBuiltIn = try c.decodeIfPresent(Bool.self, forKey: .isBuiltIn) ?? false
+        self.updatedAt = try c.decodeIfPresent(TimeInterval.self, forKey: .updatedAt) ?? Date().timeIntervalSince1970
+        self.permissions = try c.decodeIfPresent([String].self, forKey: .permissions) ?? []
+        self.backgroundEnabled = try c.decodeIfPresent(Bool.self, forKey: .backgroundEnabled) ?? false
+        let rawInterval = try c.decodeIfPresent(Int.self, forKey: .backgroundInterval) ?? 30
+        self.backgroundInterval = min(3600, max(5, rawInterval))
     }
 }
 

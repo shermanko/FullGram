@@ -5,6 +5,7 @@ on:
     branches: [ master, 'release/**' ]
     paths-ignore:
       - 'tools/cloudflare-worker/**'
+      - 'assets/**'
       - '**.md'
   pull_request:
     branches: [ master, 'release/**' ]
@@ -323,6 +324,7 @@ jobs:
             echo "::error::Build finished without producing Telegram.ipa"
             exit 1
           fi
+          ccache -s || true
 
           python3 - "$IPA_PATH" <<'PY'
           import stat, sys, zipfile
@@ -484,5 +486,6 @@ jobs:
           fi
 
           gh release create "$TAG" "${FILES[@]}" \
-            --title "FullGram v1.6.1 (${APP_VERSION} • ${BUILD_NUMBER})" \
-            --notes "FullGram v1.6.1 (${APP_VERSION} • ${BUILD_NUMBER}) from commit ${GITHUB_SHA}: Sponsor+ role, translucent deleted messages, leading FullGram badges for Telegram Premium users, strict owner-only bot lockdown, pre-send audio trim & splice studio, per-chat send confirmation, timed subtitles for video circles, native docx/xlsx/pdf viewer, zip/rar archive preview, file rename before send, smart transfer queue & auto-resume, automatic screenshot status-bar cropping, video circle cover frame picker, editable message forwarding, and Bazel/ccache + project optimizations."
+            --prerelease \
+            --title "FullGram v1.7.0 Beta Test (${APP_VERSION} • ${BUILD_NUMBER})" \
+            --notes "FullGram v1.7.0 Beta Test (${APP_VERSION} • ${BUILD_NUMBER}) from commit ${GITHUB_SHA}: closed beta invite links, fixed FullGram avatar frames (indexed APNG + Cloudflare edge proxy + AvatarComponent support), Swift 6 concurrency & economy cloud-sync fixes, and build optimizations."

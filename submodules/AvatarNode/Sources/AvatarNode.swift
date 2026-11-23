@@ -1337,8 +1337,11 @@ public final class AvatarNode: ASDisplayNode {
     private func updateFullGramFrame() {
         guard self.isNodeLoaded else { return }
         guard !self.fullGramSuppressFrame else {
-            self.fullGramFrameView?.isHidden = true
-            self.fullGramFrameView?.stop()
+            if let existing = self.fullGramFrameView {
+                existing.configure(with: nil)
+                existing.stop()
+                existing.isHidden = true
+            }
             return
         }
         guard let peerId = self.fullGramPeerId, peerId != 0 else {
@@ -1368,6 +1371,8 @@ public final class AvatarNode: ASDisplayNode {
             self.view.addSubview(created)
             frameView = created
         }
+        self.clipsToBounds = false
+        frameView.isHidden = false
         if frameView.frame != self.bounds {
             frameView.frame = self.bounds
         }

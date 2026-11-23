@@ -9445,9 +9445,9 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
                     tf.autocorrectionType = .no
                 }
                 alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-                alert.addAction(UIAlertAction(title: "Отправить", style: .default, handler: { [weak self] _ in
+                alert.addAction(UIAlertAction(title: "Отправить", style: .default, handler: { [weak self, weak alert] _ in
                     guard let self else { return }
-                    let rawNew = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    let rawNew = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                     let finalName = rawNew.isEmpty ? fName : rawNew
                     var updatedMessages = messages
                     if case let .message(text, attributes, inlineStickers, _, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets) = messages[idx] {
@@ -9497,7 +9497,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
             }
         }
 
-        // Feature 3: Audio trim & splice studio before send
+        // Feature 3: Audio & video circle trim & splice studio before send
         if !fullGramAudioEdited && FullGramExtras.shared.audioTrimSpliceBeforeSend {
             var targetIndex: Int?
             var targetFile: TelegramMediaFile?
@@ -9505,7 +9505,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
             for (idx, msg) in messages.enumerated() {
                 if case let .message(_, _, _, mediaRef, _, _, _, _, _, _) = msg,
                    let file = mediaRef?.media as? TelegramMediaFile,
-                   !file.isVoice && (file.isMusic || file.mimeType.hasPrefix("audio/")),
+                   file.isInstantVideo || file.isVoice || file.isMusic || file.mimeType.hasPrefix("audio/"),
                    let localRef = file.resource as? LocalFileReferenceMediaResource,
                    FileManager.default.fileExists(atPath: localRef.localFilePath) {
                     targetIndex = idx
@@ -9515,37 +9515,42 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
                 }
             }
             if let idx = targetIndex, let file = targetFile, let path = localPath {
+                let isVideoCircle = file.isInstantVideo
                 let studio = FullGramAudioTrimSpliceController(
                     initialURL: URL(fileURLWithPath: path),
-                    title: file.fileName ?? "Audio",
+                    title: file.fileName ?? (isVideoCircle ? "Circle" : "Audio"),
+                    isVideoCircle: isVideoCircle,
                     onComplete: { [weak self] editedURL, newDuration in
                         guard let self else { return }
                         var updatedMessages = messages
                         if case let .message(text, attributes, inlineStickers, _, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets) = messages[idx] {
-                            let newDataSize = (try? FileManager.default.attributesOfItem(atPath: editedURL.path)[.size] as? Int64)
+                            let newDataSize = ((try? FileManager.default.attributesOfItem(atPath: editedURL.path))?[.size] as? NSNumber)?.int64Value
                             let newRes = LocalFileReferenceMediaResource(localFilePath: editedURL.path, randomId: Int64.random(in: 1 ... Int64.max))
                             var newAttrs: [TelegramMediaFileAttribute] = file.attributes.map { attr in
                                 switch attr {
                                 case let .Audio(isVoice, _, title, performer, waveform):
                                     return .Audio(isVoice: isVoice, duration: Int(max(1.0, round(newDuration))), title: title, performer: performer, waveform: waveform)
+                                case let .Video(_, size, flags, preloadSize, coverTime, videoCodec):
+                                    return .Video(duration: Double(max(1.0, round(newDuration))), size: size, flags: flags, preloadSize: preloadSize, coverTime: coverTime, videoCodec: videoCodec)
                                 case let .FileName(fName):
                                     let stem = (fName as NSString).deletingPathExtension
-                                    return .FileName(fileName: stem.isEmpty ? "edited_audio.m4a" : "\(stem)_edit.m4a")
+                                    let ext = isVideoCircle ? "mp4" : "m4a"
+                                    return .FileName(fileName: stem.isEmpty ? "edited.\(ext)" : "\(stem)_edit.\(ext)")
                                 default:
                                     return attr
                                 }
                             }
-                            if !newAttrs.contains(where: { if case .Audio = $0 { return true }; return false }) {
-                                newAttrs.append(.Audio(isVoice: false, duration: Int(max(1.0, round(newDuration))), title: file.fileName, performer: nil, waveform: nil))
+                            if !isVideoCircle && !newAttrs.contains(where: { if case .Audio = $0 { return true }; return false }) {
+                                newAttrs.append(.Audio(isVoice: file.isVoice, duration: Int(max(1.0, round(newDuration))), title: file.fileName, performer: nil, waveform: nil))
                             }
                             let newFile = TelegramMediaFile(
                                 fileId: EngineMedia.Id(namespace: Namespaces.Media.LocalFile, id: Int64.random(in: Int64.min ... Int64.max)),
                                 partialReference: nil,
                                 resource: newRes,
                                 previewRepresentations: file.previewRepresentations,
-                                videoThumbnails: [],
-                                immediateThumbnailData: nil,
-                                mimeType: "audio/mp4",
+                                videoThumbnails: file.videoThumbnails,
+                                immediateThumbnailData: file.immediateThumbnailData,
+                                mimeType: isVideoCircle ? "video/mp4" : "audio/mp4",
                                 size: newDataSize,
                                 attributes: newAttrs,
                                 alternativeRepresentations: []
@@ -9592,13 +9597,67 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
             }
         }
 
-        // Feature 4: Send confirmation prompt for selected chats
-        if !fullGramConfirmed && FullGramExtras.shared.shouldConfirmSend(forPeerId: peerId.toInt64()) {
+        var messages = messages
+        if FullGramExtras.shared.autoLayoutFixCommand || FullGramExtras.shared.smartTypographyEnabled {
+            messages = messages.map { msg in
+                if case let .message(text, attributes, inlineStickers, mediaReference, threadId, replyToMessageId, replyToStoryId, localGroupingKey, correlationId, bubbleUpEmojiOrStickersets) = msg, !text.isEmpty {
+                    var transformed = FullGramExtras.shared.applyAutoLayoutFixIfNeeded(text)
+                    transformed = FullGramExtras.shared.applySmartTypography(transformed)
+                    if transformed != text {
+                        return .message(
+                            text: transformed,
+                            attributes: attributes,
+                            inlineStickers: inlineStickers,
+                            mediaReference: mediaReference,
+                            threadId: threadId,
+                            replyToMessageId: replyToMessageId,
+                            replyToStoryId: replyToStoryId,
+                            localGroupingKey: localGroupingKey,
+                            correlationId: correlationId,
+                            bubbleUpEmojiOrStickersets: bubbleUpEmojiOrStickersets
+                        )
+                    }
+                }
+                return msg
+            }
+        }
+
+        // Feature 4: Send confirmation prompt for selected chats (per media type)
+        let sendKind: FullGramExtras.ConfirmSendMediaKind = {
+            for msg in messages {
+                if case let .message(_, _, _, mediaRef, _, _, _, _, _, _) = msg,
+                   let media = mediaRef?.media {
+                    if let file = media as? TelegramMediaFile {
+                        if file.isVoice {
+                            return .voice
+                        } else if file.isInstantVideo {
+                            return .videoNote
+                        } else if file.isVideo || file.isAnimated {
+                            return .video
+                        } else {
+                            return .file
+                        }
+                    } else if media is TelegramMediaImage {
+                        return .video
+                    }
+                }
+            }
+            return .text
+        }()
+        if !fullGramConfirmed && FullGramExtras.shared.shouldConfirmSend(forPeerId: peerId.toInt64(), kind: sendKind) {
+            let confirmPromptText: String
+            switch sendKind {
+            case .voice: confirmPromptText = "Вы точно хотите отправить голосовое сообщение?"
+            case .videoNote: confirmPromptText = "Вы точно хотите отправить видеокружок?"
+            case .video: confirmPromptText = "Вы точно хотите отправить фото/видео?"
+            case .file: confirmPromptText = "Вы точно хотите отправить файл?"
+            case .text: confirmPromptText = "Вы точно хотите отправить сообщение?"
+            }
             let alert = textAlertController(
                 context: self.context,
                 updatedPresentationData: self.updatedPresentationData,
                 title: "Подтверждение отправки",
-                text: "Вы точно хотите это отправить?",
+                text: confirmPromptText,
                 actions: [
                     TextAlertAction(type: .genericAction, title: self.presentationData.strings.Common_Cancel, action: {}),
                     TextAlertAction(type: .defaultAction, title: "Отправить", action: { [weak self] in

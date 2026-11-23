@@ -1,11 +1,201 @@
 import Foundation
 import UIKit
+import CryptoKit
 
 public enum FullGramPluginNotifications {
     public static let pluginsDidChange = Notification.Name("FullGram.PluginsDidChange")
     public static let toastRequested = Notification.Name("FullGram.PluginToastRequested")
+    public static let alertRequested = Notification.Name("FullGram.PluginAlertRequested")
     public static let runCommandInChatRequested = Notification.Name("FullGram.PluginRunCommandInChatRequested")
     public static let openUIRequested = Notification.Name("FullGram.PluginOpenUIRequested")
+    public static let profileUpdateRequested = Notification.Name("FullGram.PluginProfileUpdateRequested")
+    public static let sendMessageRequested = Notification.Name("FullGram.PluginSendMessageRequested")
+    public static let setDraftRequested = Notification.Name("FullGram.PluginSetDraftRequested")
+    public static let backgroundStateDidChange = Notification.Name("FullGram.PluginBackgroundStateDidChange")
+}
+
+public struct FullGramPluginAccountProfile: Codable, Equatable {
+    public var peerId: Int64
+    public var firstName: String
+    public var lastName: String
+    public var username: String
+    public var bio: String
+    public var phone: String
+    public var originalFirstName: String
+    public var originalLastName: String
+    public var updatedAt: TimeInterval
+
+    public var fullName: String {
+        let f = self.firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let l = self.lastName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if f.isEmpty { return l }
+        if l.isEmpty { return f }
+        return "\(f) \(l)"
+    }
+
+    public init(
+        peerId: Int64 = 0,
+        firstName: String = "",
+        lastName: String = "",
+        username: String = "",
+        bio: String = "",
+        phone: String = "",
+        originalFirstName: String = "",
+        originalLastName: String = "",
+        updatedAt: TimeInterval = Date().timeIntervalSince1970
+    ) {
+        self.peerId = peerId
+        self.firstName = firstName
+        self.lastName = lastName
+        self.username = username
+        self.bio = bio
+        self.phone = phone
+        self.originalFirstName = originalFirstName
+        self.originalLastName = originalLastName
+        self.updatedAt = updatedAt
+    }
+
+    public func toPluginValue() -> FullGramPluginValue {
+        return .table(FullGramPluginTableBox(dict: [
+            "id": .int(self.peerId),
+            "peer_id": .int(self.peerId),
+            "first_name": .string(self.firstName),
+            "last_name": .string(self.lastName),
+            "full_name": .string(self.fullName),
+            "name": .string(self.fullName),
+            "username": .string(self.username),
+            "bio": .string(self.bio),
+            "phone": .string(self.phone),
+            "original_first_name": .string(self.originalFirstName),
+            "original_last_name": .string(self.originalLastName),
+            "updated_at": .double(self.updatedAt)
+        ]))
+    }
+}
+
+public enum FullGramPluginTimeHelper {
+    private static let boldDigits: [Character] = Array("𝟎𝟏𝟐𝟑𝟒𝟓𝟔𝟕𝟖𝟗")
+    private static let monoDigits: [Character] = Array("𝟶𝟷𝟸𝟹𝟺𝟻𝟼𝟽𝟾𝟿")
+    private static let doubleDigits: [Character] = Array("𝟘𝟙𝟚𝟛𝟜𝟝𝟞𝟟𝟠𝟡")
+    private static let sansDigits: [Character] = Array("𝟢𝟣𝟤𝟥𝟦𝟧𝟨𝟩𝟪𝟫")
+    private static let circledDigits: [Character] = Array("⓪①②③④⑤⑥⑦⑧⑨")
+    private static let clockEmojis: [String] = [
+        "🕛", "🕧", "🕐", "🕜", "🕑", "🕝", "🕒", "🕞",
+        "🕓", "🕟", "🕔", "🕠", "🕕", "🕡", "🕖", "🕢",
+        "🕗", "🕣", "🕘", "🕤", "🕙", "🕥", "🕚", "🕦"
+    ]
+
+    public static func stylizeDigits(_ text: String, style: String) -> String {
+        let target: [Character]?
+        switch style.lowercased() {
+        case "bold", "serif_bold": target = Self.boldDigits
+        case "mono", "monospace": target = Self.monoDigits
+        case "double", "blackboard": target = Self.doubleDigits
+        case "sans": target = Self.sansDigits
+        case "circled", "fancy", "bubble": target = Self.circledDigits
+        default: target = nil
+        }
+        guard let target else { return text }
+        var out = ""
+        out.reserveCapacity(text.count * 2)
+        for ch in text {
+            if let ascii = ch.asciiValue, ascii >= 48, ascii <= 57 {
+                out.append(target[Int(ascii - 48)])
+            } else {
+                out.append(ch)
+            }
+        }
+        return out
+    }
+
+    public static func clockEmoji(hour: Int, minute: Int) -> String {
+        let h12 = hour % 12
+        let half = minute >= 30 ? 1 : 0
+        let idx = (h12 * 2 + half) % Self.clockEmojis.count
+        return Self.clockEmojis[idx]
+    }
+
+    public static func buildPhoneTimeDict(date: Date = Date()) -> [String: FullGramPluginValue] {
+        let cal = Calendar.current
+        let tz = TimeZone.current
+        let comps = cal.dateComponents([.year, .month, .day, .hour, .minute, .second, .weekday], from: date)
+        let year = comps.year ?? 1970
+        let month = comps.month ?? 1
+        let day = comps.day ?? 1
+        let hour = comps.hour ?? 0
+        let minute = comps.minute ?? 0
+        let second = comps.second ?? 0
+        let rawWday = comps.weekday ?? 1 // 1 = Sunday
+        let isoWday = rawWday == 1 ? 7 : (rawWday - 1) // 1 = Mon .. 7 = Sun
+
+        let hm = String(format: "%02d:%02d", hour, minute)
+        let hms = String(format: "%02d:%02d:%02d", hour, minute, second)
+        let dateStr = String(format: "%02d.%02d.%04d", day, month, year)
+        let formatted = "\(dateStr) \(hms)"
+
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "ru_RU")
+        df.timeZone = tz
+        df.dateFormat = "EEEE"
+        let weekdayName = df.string(from: date).capitalized
+        df.dateFormat = "EEE"
+        let weekdayShort = df.string(from: date).capitalized
+        df.dateFormat = "MMMM"
+        let monthName = df.string(from: date).capitalized
+
+        let offsetSec = tz.secondsFromGMT(for: date)
+        let sign = offsetSec >= 0 ? "+" : "-"
+        let absOff = abs(offsetSec)
+        let offsetStr = String(format: "%@%02d:%02d", sign, absOff / 3600, (absOff % 3600) / 60)
+
+        let jFmt = DateFormatter.dateFormat(fromTemplate: "j", options: 0, locale: Locale.current) ?? "HH"
+        let is24h = !jFmt.contains("a")
+        let iso = ISO8601DateFormatter().string(from: date)
+
+        return [
+            "timestamp": .double(date.timeIntervalSince1970),
+            "unix": .int(Int64(date.timeIntervalSince1970)),
+            "unix_ms": .int(Int64(date.timeIntervalSince1970 * 1000.0)),
+            "hm": .string(hm),
+            "hms": .string(hms),
+            "formatted": .string(formatted),
+            "date": .string(dateStr),
+            "iso": .string(iso),
+            "year": .int(Int64(year)),
+            "month": .int(Int64(month)),
+            "day": .int(Int64(day)),
+            "hour": .int(Int64(hour)),
+            "minute": .int(Int64(minute)),
+            "second": .int(Int64(second)),
+            "weekday": .int(Int64(isoWday)),
+            "weekday_name": .string(weekdayName),
+            "weekday_short": .string(weekdayShort),
+            "month_name": .string(monthName),
+            "timezone": .string(tz.identifier),
+            "timezone_abbr": .string(tz.abbreviation(for: date) ?? ""),
+            "utc_offset": .int(Int64(offsetSec)),
+            "utc_offset_str": .string(offsetStr),
+            "is_24h": .bool(is24h),
+            "bold_hm": .string(Self.stylizeDigits(hm, style: "bold")),
+            "mono_hm": .string(Self.stylizeDigits(hm, style: "mono")),
+            "double_hm": .string(Self.stylizeDigits(hm, style: "double")),
+            "fancy_hm": .string(Self.stylizeDigits(hm, style: "circled")),
+            "clock_emoji": .string(Self.clockEmoji(hour: hour, minute: minute))
+        ]
+    }
+
+    public static func formatTime(format: String?, timestamp: Double?, style: String?) -> String {
+        let date = timestamp.map { Date(timeIntervalSince1970: $0) } ?? Date()
+        let df = DateFormatter()
+        df.locale = Locale.current
+        df.timeZone = TimeZone.current
+        df.dateFormat = (format?.isEmpty == false) ? format! : "dd.MM.yyyy HH:mm:ss"
+        let rendered = df.string(from: date)
+        if let style, !style.isEmpty {
+            return Self.stylizeDigits(rendered, style: style)
+        }
+        return rendered
+    }
 }
 
 public struct FullGramRemotePluginItem: Codable, Equatable {
@@ -30,12 +220,19 @@ private final class FullGramLoadedPlugin {
     var pythonVM: FullGramPythonVM?
     var rustVM: FullGramRustVM?
     var registeredCommands: [String: ([FullGramPluginValue]) throws -> FullGramPluginValue] = [:]
+    var eventListeners: [String: [([FullGramPluginValue]) throws -> FullGramPluginValue]] = [:]
     var lastError: String?
 
     var hasOutgoingHook: Bool = false
     var hasRenderHook: Bool = false
     var hasCommandHook: Bool = false
     var hasMessageActionHook: Bool = false
+    var hasBackgroundHook: Bool = false
+    var backgroundHookName: String?
+    var hasAppStateHook: Bool = false
+    var hasIncomingHook: Bool = false
+    var hasLoadHook: Bool = false
+    var hasUnloadHook: Bool = false
 
     init(descriptor: FullGramPluginDescriptor) {
         self.descriptor = descriptor
@@ -46,10 +243,27 @@ public final class FullGramPluginManager {
     public static let shared = FullGramPluginManager()
     public static let officialCatalogURL = "https://fullgram.korsakovx.workers.dev/plugins.json"
 
+    private struct DeviceSnapshot {
+        var model: String = UIDevice.current.model
+        var systemName: String = UIDevice.current.systemName
+        var systemVersion: String = UIDevice.current.systemVersion
+        var batteryLevel: Int = -1
+        var batteryState: String = "unknown"
+        var isCharging: Bool = false
+        var appState: String = "foreground"
+        var isBackground: Bool = false
+    }
+
     private let lock = NSRecursiveLock()
     private let systemEnabledKey = "fullgram.plugins.systemEnabled"
+    private let backgroundEnabledKey = "fullgram.plugins.backgroundEnabled"
     private let catalogURLKey = "fullgram.plugins.catalogURL"
+    private let cachedProfileKey = "fullgram.plugins.cachedProfile"
+    private let originalNickKey = "fullgram.plugins.originalNickname"
     private static let layoutFixerModeKey = "fullgram.plugin.store.fg_layout_fixer.mode"
+
+    // Nick Clock keys shared with fg_nick_clock plugin storage
+    private static let nickClockPrefix = "fullgram.plugin.store.fg_nick_clock."
 
     public var layoutFixerMode: String {
         get {
@@ -73,14 +287,46 @@ public final class FullGramPluginManager {
             return "Рус → Англ"
         }
     }
+
     private var descriptors: [FullGramPluginDescriptor] = []
     private var loaded: [String: FullGramLoadedPlugin] = [:]
     private var cachedOrderedPlugins: [FullGramLoadedPlugin] = []
     private var cachedRenderPlugins: [FullGramLoadedPlugin] = []
     private var logsByPlugin: [String: [String]] = [:]
     private var cachedSystemEnabled: Bool?
+    private var cachedBackgroundEnabled: Bool?
     private var hasRenderHooks: Bool = false
     private var didInitialize = false
+    private var isInsideRenderHook = false
+
+    // Background execution engine
+    private let backgroundQueue = DispatchQueue(label: "com.fullgram.plugins.background", qos: .utility)
+    private var backgroundTimer: DispatchSourceTimer?
+    private var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
+    private var didRegisterLifecycleObservers = false
+    private var lifecycleObservers: [NSObjectProtocol] = []
+    private var backgroundTickCount: Int64 = 0
+    private var lastTickByPlugin: [String: TimeInterval] = [:]
+    private var tickCountByPlugin: [String: Int64] = [:]
+    private var runtimeIntervalsByPlugin: [String: Int] = [:]
+    private var deviceSnapshot = DeviceSnapshot()
+
+    // Account profile cache & Telegram bridge
+    private var cachedProfile = FullGramPluginAccountProfile()
+    private var lastAppliedFirstName: String?
+    private var lastAppliedLastName: String?
+    private var lastAppliedBio: String?
+    private var lastNicknameRequestTime: TimeInterval = 0
+    private var pendingNicknameUpdate: (firstName: String, lastName: String)?
+    private var pendingNicknameWorkItem: DispatchWorkItem?
+    private let minNicknameUpdateInterval: TimeInterval = 15.0
+
+    private var bridgeUpdateName: ((String, String, ((Bool) -> Void)?) -> Void)?
+    private var bridgeUpdateUsername: ((String, ((Bool) -> Void)?) -> Void)?
+    private var bridgeUpdateBio: ((String, ((Bool) -> Void)?) -> Void)?
+    private var bridgeSendMessage: ((Int64?, String) -> Bool)?
+    private var bridgeSetDraft: ((Int64?, String) -> Bool)?
+    private var bridgeActiveChatInfo: (() -> [String: FullGramPluginValue]?)?
 
     private static let logDateFormatter: DateFormatter = {
         let df = DateFormatter()
@@ -106,7 +352,9 @@ public final class FullGramPluginManager {
         }
     }
 
-    private init() {}
+    private init() {
+        self.loadCachedProfileFromDisk()
+    }
 
     public var isSystemEnabled: Bool {
         get {
@@ -130,7 +378,194 @@ public final class FullGramPluginManager {
             self.lock.unlock()
             UserDefaults.standard.set(newValue, forKey: self.systemEnabledKey)
             self.reloadRuntime()
-            NotificationCenter.default.post(name: FullGramPluginNotifications.pluginsDidChange, object: nil)
+            self.postPluginsDidChange()
+        }
+    }
+
+    public var isBackgroundExecutionEnabled: Bool {
+        get {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            if let cached = self.cachedBackgroundEnabled {
+                return cached
+            }
+            let resolved: Bool
+            if UserDefaults.standard.object(forKey: self.backgroundEnabledKey) == nil {
+                resolved = true
+            } else {
+                resolved = UserDefaults.standard.bool(forKey: self.backgroundEnabledKey)
+            }
+            self.cachedBackgroundEnabled = resolved
+            return resolved
+        }
+        set {
+            self.lock.lock()
+            self.cachedBackgroundEnabled = newValue
+            self.lock.unlock()
+            UserDefaults.standard.set(newValue, forKey: self.backgroundEnabledKey)
+            self.lock.lock()
+            self.syncBackgroundSchedulerLocked()
+            self.lock.unlock()
+            self.postPluginsDidChange()
+            self.postBackgroundStateChanged()
+        }
+    }
+
+    // MARK: - Nick & Clock Shared Settings
+
+    public var nickClockEnabled: Bool {
+        get { return Self.readPluginStoreBool(prefix: Self.nickClockPrefix, key: "clock_enabled", default: false) }
+        set {
+            Self.writePluginStoreValue(prefix: Self.nickClockPrefix, key: "clock_enabled", value: newValue)
+            if newValue {
+                if self.plugin(id: "fg_nick_clock")?.isEnabled == false {
+                    self.setPluginEnabled(id: "fg_nick_clock", enabled: true)
+                }
+                self.captureOriginalNicknameIfNeeded()
+                _ = self.applyLiveNicknameClockNow()
+            } else {
+                _ = self.restoreOriginalNickname(pluginId: "fg_nick_clock")
+            }
+            self.lock.lock()
+            self.syncBackgroundSchedulerLocked()
+            self.lock.unlock()
+            self.postPluginsDidChange()
+        }
+    }
+
+    public var nickClockTemplate: String {
+        get {
+            let val = Self.readPluginStoreString(prefix: Self.nickClockPrefix, key: "clock_template") ?? ""
+            return val.isEmpty ? "{name} | ⌚ {time}" : val
+        }
+        set {
+            let clean = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            Self.writePluginStoreValue(prefix: Self.nickClockPrefix, key: "clock_template", value: clean.isEmpty ? "{name} | ⌚ {time}" : clean)
+            if self.nickClockEnabled {
+                _ = self.applyLiveNicknameClockNow(force: true)
+            }
+            self.postPluginsDidChange()
+        }
+    }
+
+    public var nickClockStyle: String {
+        get {
+            let val = Self.readPluginStoreString(prefix: Self.nickClockPrefix, key: "clock_style") ?? "bold"
+            return val.isEmpty ? "bold" : val
+        }
+        set {
+            Self.writePluginStoreValue(prefix: Self.nickClockPrefix, key: "clock_style", value: newValue)
+            if self.nickClockEnabled {
+                _ = self.applyLiveNicknameClockNow(force: true)
+            }
+            self.postPluginsDidChange()
+        }
+    }
+
+    public var nickClockBaseFirstName: String {
+        get {
+            let stored = Self.readPluginStoreString(prefix: Self.nickClockPrefix, key: "base_first_name")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !stored.isEmpty { return stored }
+            let prof = self.currentProfile()
+            return prof.originalFirstName.isEmpty ? prof.firstName : prof.originalFirstName
+        }
+        set {
+            Self.writePluginStoreValue(prefix: Self.nickClockPrefix, key: "base_first_name", value: newValue.trimmingCharacters(in: .whitespacesAndNewlines))
+            if self.nickClockEnabled {
+                _ = self.applyLiveNicknameClockNow(force: true)
+            }
+        }
+    }
+
+    public var nickClockBaseLastName: String {
+        get {
+            if let stored = Self.readPluginStoreString(prefix: Self.nickClockPrefix, key: "base_last_name") {
+                return stored
+            }
+            let prof = self.currentProfile()
+            return prof.originalLastName.isEmpty ? prof.lastName : prof.originalLastName
+        }
+        set {
+            Self.writePluginStoreValue(prefix: Self.nickClockPrefix, key: "base_last_name", value: newValue.trimmingCharacters(in: .whitespacesAndNewlines))
+            if self.nickClockEnabled {
+                _ = self.applyLiveNicknameClockNow(force: true)
+            }
+        }
+    }
+
+    public var nickClockInterval: Int {
+        get {
+            let raw = Self.readPluginStoreInt(prefix: Self.nickClockPrefix, key: "clock_interval", default: 30)
+            return min(3600, max(10, raw))
+        }
+        set {
+            let clamped = min(3600, max(10, newValue))
+            Self.writePluginStoreValue(prefix: Self.nickClockPrefix, key: "clock_interval", value: clamped)
+            self.setPluginBackground(id: "fg_nick_clock", enabled: true, interval: clamped)
+        }
+    }
+
+    public var nickClockUpdateBio: Bool {
+        get { return Self.readPluginStoreBool(prefix: Self.nickClockPrefix, key: "bio_enabled", default: false) }
+        set {
+            Self.writePluginStoreValue(prefix: Self.nickClockPrefix, key: "bio_enabled", value: newValue)
+            if newValue {
+                _ = self.applyLiveBioClockNow()
+            }
+            self.postPluginsDidChange()
+        }
+    }
+
+    public var nickClockBioTemplate: String {
+        get {
+            let val = Self.readPluginStoreString(prefix: Self.nickClockPrefix, key: "bio_template") ?? ""
+            return val.isEmpty ? "⌚ {time} • 📅 {date} • 🔋 {battery}%" : val
+        }
+        set {
+            let clean = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            Self.writePluginStoreValue(prefix: Self.nickClockPrefix, key: "bio_template", value: clean.isEmpty ? "⌚ {time} • 📅 {date}" : clean)
+            if self.nickClockUpdateBio {
+                _ = self.applyLiveBioClockNow()
+            }
+        }
+    }
+
+    private static func readPluginStoreRaw(prefix: String, key: String) -> Any? {
+        guard let stored = UserDefaults.standard.object(forKey: prefix + key) else { return nil }
+        if let data = stored as? Data,
+           let obj = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) {
+            return obj
+        }
+        return stored
+    }
+
+    private static func readPluginStoreBool(prefix: String, key: String, default fallback: Bool) -> Bool {
+        guard let raw = Self.readPluginStoreRaw(prefix: prefix, key: key) else { return fallback }
+        if let b = raw as? Bool { return b }
+        if let n = raw as? NSNumber { return n.boolValue }
+        if let s = raw as? String { return ["true", "1", "yes", "on"].contains(s.lowercased()) }
+        return fallback
+    }
+
+    private static func readPluginStoreInt(prefix: String, key: String, default fallback: Int) -> Int {
+        guard let raw = Self.readPluginStoreRaw(prefix: prefix, key: key) else { return fallback }
+        if let n = raw as? NSNumber { return n.intValue }
+        if let s = raw as? String, let v = Int(s) { return v }
+        return fallback
+    }
+
+    private static func readPluginStoreString(prefix: String, key: String) -> String? {
+        guard let raw = Self.readPluginStoreRaw(prefix: prefix, key: key) else { return nil }
+        if let s = raw as? String { return s }
+        return String(describing: raw)
+    }
+
+    private static func writePluginStoreValue(prefix: String, key: String, value: Any) {
+        if JSONSerialization.isValidJSONObject(value),
+           let data = try? JSONSerialization.data(withJSONObject: value, options: []) {
+            UserDefaults.standard.set(data, forKey: prefix + key)
+        } else {
+            UserDefaults.standard.set(value, forKey: prefix + key)
         }
     }
 
@@ -153,6 +588,8 @@ public final class FullGramPluginManager {
         defer { self.lock.unlock() }
         guard !self.didInitialize else { return }
         self.didInitialize = true
+
+        self.registerLifecycleObserversIfNeeded()
 
         if let data = try? Data(contentsOf: self.manifestURL),
            let decoded = try? JSONDecoder().decode([FullGramPluginDescriptor].self, from: data) {
@@ -257,7 +694,9 @@ public final class FullGramPluginManager {
         name: String,
         language: FullGramPluginLanguage,
         code: String,
-        enabled: Bool? = nil
+        enabled: Bool? = nil,
+        backgroundEnabled: Bool? = nil,
+        backgroundInterval: Int? = nil
     ) -> FullGramPluginDescriptor {
         self.ensureLoaded()
         let meta = FullGramPluginMetadata.parse(from: code, fallbackName: name, language: language)
@@ -271,6 +710,11 @@ public final class FullGramPluginManager {
         let existingIndex = self.descriptors.firstIndex(where: { $0.id == resolvedId })
         let wasEnabled = existingIndex.map { self.descriptors[$0].isEnabled } ?? true
         let wasBuiltIn = existingIndex.map { self.descriptors[$0].isBuiltIn } ?? false
+        let prevBgEnabled = existingIndex.map { self.descriptors[$0].backgroundEnabled } ?? false
+        let prevBgInterval = existingIndex.map { self.descriptors[$0].backgroundInterval } ?? 30
+        let resolvedBgEnabled = backgroundEnabled ?? (meta.backgroundEnabled ? true : prevBgEnabled)
+        let resolvedBgInterval = min(3600, max(5, backgroundInterval ?? (meta.backgroundEnabled ? meta.backgroundInterval : prevBgInterval)))
+
         let descriptor = FullGramPluginDescriptor(
             id: resolvedId,
             name: meta.name.isEmpty ? name : meta.name,
@@ -281,7 +725,10 @@ public final class FullGramPluginManager {
             code: code,
             isEnabled: enabled ?? wasEnabled,
             isBuiltIn: wasBuiltIn,
-            updatedAt: Date().timeIntervalSince1970
+            updatedAt: Date().timeIntervalSince1970,
+            permissions: meta.permissions,
+            backgroundEnabled: resolvedBgEnabled,
+            backgroundInterval: resolvedBgInterval
         )
         if let idx = existingIndex {
             self.descriptors[idx] = descriptor
@@ -306,6 +753,16 @@ public final class FullGramPluginManager {
         }
     }
 
+    private func postBackgroundStateChanged() {
+        if Thread.isMainThread {
+            NotificationCenter.default.post(name: FullGramPluginNotifications.backgroundStateDidChange, object: nil)
+        } else {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: FullGramPluginNotifications.backgroundStateDidChange, object: nil)
+            }
+        }
+    }
+
     public func setPluginEnabled(id: String, enabled: Bool) {
         self.ensureLoaded()
         self.lock.lock()
@@ -318,18 +775,46 @@ public final class FullGramPluginManager {
         self.postPluginsDidChange()
     }
 
+    public func setPluginBackground(id: String, enabled: Bool, interval: Int? = nil) {
+        self.ensureLoaded()
+        self.lock.lock()
+        if let idx = self.descriptors.firstIndex(where: { $0.id == id }) {
+            self.descriptors[idx].backgroundEnabled = enabled
+            if let interval {
+                let clamped = min(3600, max(5, interval))
+                self.descriptors[idx].backgroundInterval = clamped
+                self.runtimeIntervalsByPlugin[id] = clamped
+            }
+            if !enabled {
+                self.runtimeIntervalsByPlugin.removeValue(forKey: id)
+            }
+            self.persistLocked()
+            self.syncBackgroundSchedulerLocked()
+        }
+        self.lock.unlock()
+        self.postPluginsDidChange()
+        self.postBackgroundStateChanged()
+    }
+
     public func deletePlugin(id: String) {
         self.ensureLoaded()
         self.lock.lock()
         if let idx = self.descriptors.firstIndex(where: { $0.id == id }) {
+            if let old = self.loaded[id], old.hasUnloadHook {
+                self.invokeLifecycleHook(plugin: old, name: "on_unload", args: [])
+            }
             let item = self.descriptors.remove(at: idx)
             let scriptURL = self.pluginsDirectoryURL.appendingPathComponent("\(item.id).\(item.language.fileExtension)")
             try? FileManager.default.removeItem(at: scriptURL)
             self.loaded.removeValue(forKey: id)
             self.cachedOrderedPlugins.removeAll { $0.descriptor.id == id }
             self.cachedRenderPlugins.removeAll { $0.descriptor.id == id }
+            self.lastTickByPlugin.removeValue(forKey: id)
+            self.tickCountByPlugin.removeValue(forKey: id)
+            self.runtimeIntervalsByPlugin.removeValue(forKey: id)
             self.hasRenderHooks = !self.cachedRenderPlugins.isEmpty
             self.persistLocked()
+            self.syncBackgroundSchedulerLocked()
         }
         self.lock.unlock()
         self.postPluginsDidChange()
@@ -379,11 +864,17 @@ public final class FullGramPluginManager {
     }
 
     private func reloadRuntimeLocked() {
+        for old in self.cachedOrderedPlugins where old.hasUnloadHook {
+            self.invokeLifecycleHook(plugin: old, name: "on_unload", args: [])
+        }
         self.loaded.removeAll()
         self.cachedOrderedPlugins.removeAll()
         self.cachedRenderPlugins.removeAll()
         self.hasRenderHooks = false
-        guard self.isSystemEnabled else { return }
+        guard self.isSystemEnabled else {
+            self.syncBackgroundSchedulerLocked()
+            return
+        }
 
         var anyRender = false
         for descriptor in self.descriptors where descriptor.isEnabled {
@@ -396,28 +887,739 @@ public final class FullGramPluginManager {
             self.cachedOrderedPlugins.append(runtime)
         }
         self.hasRenderHooks = anyRender
+
+        for plugin in self.cachedOrderedPlugins where plugin.hasLoadHook {
+            self.invokeLifecycleHook(plugin: plugin, name: "on_load", args: [])
+        }
+        self.syncBackgroundSchedulerLocked()
+    }
+
+    // MARK: - Profile Cache, Nickname Management & Telegram Bridge
+
+    private func loadCachedProfileFromDisk() {
+        if let data = UserDefaults.standard.data(forKey: self.cachedProfileKey),
+           let decoded = try? JSONDecoder().decode(FullGramPluginAccountProfile.self, from: data) {
+            self.cachedProfile = decoded
+        }
+        if let origData = UserDefaults.standard.data(forKey: self.originalNickKey),
+           let orig = try? JSONDecoder().decode([String: String].self, from: origData) {
+            if let f = orig["first"], !f.isEmpty {
+                self.cachedProfile.originalFirstName = f
+                self.cachedProfile.originalLastName = orig["last"] ?? ""
+            }
+        }
+    }
+
+    private func saveCachedProfileLocked() {
+        if let data = try? JSONEncoder().encode(self.cachedProfile) {
+            UserDefaults.standard.set(data, forKey: self.cachedProfileKey)
+        }
+    }
+
+    public func currentProfile() -> FullGramPluginAccountProfile {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.cachedProfile
+    }
+
+    public func captureOriginalNicknameIfNeeded() {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        if self.cachedProfile.originalFirstName.isEmpty && !self.cachedProfile.firstName.isEmpty {
+            self.cachedProfile.originalFirstName = self.cachedProfile.firstName
+            self.cachedProfile.originalLastName = self.cachedProfile.lastName
+            if let data = try? JSONEncoder().encode(["first": self.cachedProfile.originalFirstName, "last": self.cachedProfile.originalLastName]) {
+                UserDefaults.standard.set(data, forKey: self.originalNickKey)
+            }
+            self.saveCachedProfileLocked()
+        }
+    }
+
+    public func updateCachedAccountProfile(
+        peerId: Int64,
+        firstName: String,
+        lastName: String,
+        username: String,
+        phone: String,
+        bio: String? = nil
+    ) {
+        self.lock.lock()
+        self.cachedProfile.peerId = peerId
+        self.cachedProfile.firstName = firstName
+        self.cachedProfile.lastName = lastName
+        self.cachedProfile.username = username
+        self.cachedProfile.phone = phone
+        if let bio {
+            self.cachedProfile.bio = bio
+        }
+        if self.cachedProfile.originalFirstName.isEmpty && !firstName.isEmpty {
+            self.cachedProfile.originalFirstName = firstName
+            self.cachedProfile.originalLastName = lastName
+            if let data = try? JSONEncoder().encode(["first": firstName, "last": lastName]) {
+                UserDefaults.standard.set(data, forKey: self.originalNickKey)
+            }
+        }
+        self.cachedProfile.updatedAt = Date().timeIntervalSince1970
+        self.saveCachedProfileLocked()
+        self.lock.unlock()
+    }
+
+    public func registerTelegramBridge(
+        updateName: @escaping (String, String, ((Bool) -> Void)?) -> Void,
+        updateUsername: @escaping (String, ((Bool) -> Void)?) -> Void,
+        updateBio: @escaping (String, ((Bool) -> Void)?) -> Void,
+        sendMessage: @escaping (Int64?, String) -> Bool,
+        setDraft: @escaping (Int64?, String) -> Bool,
+        activeChatInfo: @escaping () -> [String: FullGramPluginValue]?
+    ) {
+        self.lock.lock()
+        self.bridgeUpdateName = updateName
+        self.bridgeUpdateUsername = updateUsername
+        self.bridgeUpdateBio = updateBio
+        self.bridgeSendMessage = sendMessage
+        self.bridgeSetDraft = setDraft
+        self.bridgeActiveChatInfo = activeChatInfo
+        self.lock.unlock()
+    }
+
+    public func formatNicknameTemplate(
+        _ template: String,
+        baseFirstName: String? = nil,
+        baseLastName: String? = nil,
+        style: String = "normal"
+    ) -> (firstName: String, lastName: String) {
+        let profile = self.currentProfile()
+        let resolvedFirst = (baseFirstName?.isEmpty == false) ? baseFirstName! : (profile.originalFirstName.isEmpty ? profile.firstName : profile.originalFirstName)
+        let resolvedLast = baseLastName ?? (profile.originalLastName.isEmpty ? profile.lastName : profile.originalLastName)
+        let resolvedFull = resolvedLast.isEmpty ? resolvedFirst : "\(resolvedFirst) \(resolvedLast)"
+
+        let timeDict = FullGramPluginTimeHelper.buildPhoneTimeDict()
+        let hmRaw = timeDict["hm"]?.asString ?? "00:00"
+        let hmsRaw = timeDict["hms"]?.asString ?? "00:00:00"
+        let styledHm = FullGramPluginTimeHelper.stylizeDigits(hmRaw, style: style)
+        let styledHms = FullGramPluginTimeHelper.stylizeDigits(hmsRaw, style: style)
+        let dateStr = timeDict["date"]?.asString ?? ""
+        let weekday = timeDict["weekday_name"]?.asString ?? ""
+        let weekdayShort = timeDict["weekday_short"]?.asString ?? ""
+        let clockEmoji = timeDict["clock_emoji"]?.asString ?? "⌚"
+        let boldHm = timeDict["bold_hm"]?.asString ?? hmRaw
+        let monoHm = timeDict["mono_hm"]?.asString ?? hmRaw
+        let fancyHm = timeDict["fancy_hm"]?.asString ?? hmRaw
+        let devInfo = self.currentDeviceSnapshot()
+        let batteryStr = devInfo.batteryLevel >= 0 ? "\(devInfo.batteryLevel)" : "100"
+
+        var rendered = template
+        let replacements: [(String, String)] = [
+            ("{time}", styledHm),
+            ("{time_sec}", styledHms),
+            ("{time_raw}", hmRaw),
+            ("{time_bold}", boldHm),
+            ("{time_mono}", monoHm),
+            ("{time_fancy}", fancyHm),
+            ("{clock}", clockEmoji),
+            ("{date}", dateStr),
+            ("{weekday}", weekday),
+            ("{weekday_short}", weekdayShort),
+            ("{battery}", batteryStr),
+            ("{first_name}", resolvedFirst),
+            ("{last_name}", resolvedLast),
+            ("{name}", resolvedFull.isEmpty ? "FullGram" : resolvedFull)
+        ]
+        for (token, val) in replacements {
+            rendered = rendered.replacingOccurrences(of: token, with: val)
+        }
+
+        // Telegram firstName limit is 64 chars, lastName limit is 64 chars
+        if let pipeRange = rendered.range(of: "||") {
+            let fn = String(rendered[..<pipeRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let ln = String(rendered[pipeRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let clampedFn = fn.isEmpty ? (resolvedFirst.isEmpty ? styledHm : resolvedFirst) : String(fn.prefix(64))
+            return (clampedFn, String(ln.prefix(64)))
+        }
+        let clean = rendered.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (clean.isEmpty ? styledHm : String(clean.prefix(64)), resolvedLast)
+    }
+
+    @discardableResult
+    public func requestSetNickname(
+        firstName: String,
+        lastName: String = "",
+        pluginId: String = "system",
+        force: Bool = false
+    ) -> Bool {
+        let cleanFirst = String(firstName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(64))
+        let cleanLast = String(lastName.trimmingCharacters(in: .whitespacesAndNewlines).prefix(64))
+        guard !cleanFirst.isEmpty else { return false }
+
+        self.captureOriginalNicknameIfNeeded()
+
+        self.lock.lock()
+        if !force && self.lastAppliedFirstName == cleanFirst && self.lastAppliedLastName == cleanLast {
+            self.lock.unlock()
+            return true
+        }
+        let now = Date().timeIntervalSince1970
+        let elapsed = now - self.lastNicknameRequestTime
+        if !force && elapsed < self.minNicknameUpdateInterval {
+            self.pendingNicknameUpdate = (cleanFirst, cleanLast)
+            if self.pendingNicknameWorkItem == nil {
+                let delay = max(1.0, self.minNicknameUpdateInterval - elapsed + 0.2)
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    self.lock.lock()
+                    let pending = self.pendingNicknameUpdate
+                    self.pendingNicknameUpdate = nil
+                    self.pendingNicknameWorkItem = nil
+                    self.lock.unlock()
+                    if let pending {
+                        _ = self.requestSetNickname(firstName: pending.firstName, lastName: pending.lastName, pluginId: pluginId, force: true)
+                    }
+                }
+                self.pendingNicknameWorkItem = work
+                self.backgroundQueue.asyncAfter(deadline: .now() + delay, execute: work)
+            }
+            self.lock.unlock()
+            return true
+        }
+
+        self.lastNicknameRequestTime = now
+        self.lastAppliedFirstName = cleanFirst
+        self.lastAppliedLastName = cleanLast
+        self.cachedProfile.firstName = cleanFirst
+        self.cachedProfile.lastName = cleanLast
+        self.cachedProfile.updatedAt = now
+        self.saveCachedProfileLocked()
+        let bridge = self.bridgeUpdateName
+        self.lock.unlock()
+
+        self.appendLog(pluginId: pluginId, message: "Nickname -> \(cleanFirst)\(cleanLast.isEmpty ? "" : " \(cleanLast)")")
+
+        DispatchQueue.main.async {
+            if let bridge {
+                bridge(cleanFirst, cleanLast, nil)
+            } else {
+                NotificationCenter.default.post(
+                    name: FullGramPluginNotifications.profileUpdateRequested,
+                    object: nil,
+                    userInfo: ["kind": "name", "firstName": cleanFirst, "lastName": cleanLast, "pluginId": pluginId]
+                )
+            }
+        }
+        return true
+    }
+
+    @discardableResult
+    public func restoreOriginalNickname(pluginId: String = "system") -> Bool {
+        self.lock.lock()
+        let origFirst = self.cachedProfile.originalFirstName
+        let origLast = self.cachedProfile.originalLastName
+        self.pendingNicknameWorkItem?.cancel()
+        self.pendingNicknameWorkItem = nil
+        self.pendingNicknameUpdate = nil
+        self.lock.unlock()
+
+        guard !origFirst.isEmpty else { return false }
+        return self.requestSetNickname(firstName: origFirst, lastName: origLast, pluginId: pluginId, force: true)
+    }
+
+    @discardableResult
+    public func requestSetUsername(_ username: String, pluginId: String = "system") -> Bool {
+        let clean = username.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "@", with: "")
+        self.lock.lock()
+        self.cachedProfile.username = clean
+        self.cachedProfile.updatedAt = Date().timeIntervalSince1970
+        self.saveCachedProfileLocked()
+        let bridge = self.bridgeUpdateUsername
+        self.lock.unlock()
+
+        DispatchQueue.main.async {
+            if let bridge {
+                bridge(clean, nil)
+            } else {
+                NotificationCenter.default.post(
+                    name: FullGramPluginNotifications.profileUpdateRequested,
+                    object: nil,
+                    userInfo: ["kind": "username", "username": clean, "pluginId": pluginId]
+                )
+            }
+        }
+        return true
+    }
+
+    @discardableResult
+    public func requestSetBio(_ bio: String, pluginId: String = "system") -> Bool {
+        let clean = String(bio.trimmingCharacters(in: .whitespacesAndNewlines).prefix(140))
+        self.lock.lock()
+        if self.lastAppliedBio == clean {
+            self.lock.unlock()
+            return true
+        }
+        self.lastAppliedBio = clean
+        self.cachedProfile.bio = clean
+        self.cachedProfile.updatedAt = Date().timeIntervalSince1970
+        self.saveCachedProfileLocked()
+        let bridge = self.bridgeUpdateBio
+        self.lock.unlock()
+
+        DispatchQueue.main.async {
+            if let bridge {
+                bridge(clean, nil)
+            } else {
+                NotificationCenter.default.post(
+                    name: FullGramPluginNotifications.profileUpdateRequested,
+                    object: nil,
+                    userInfo: ["kind": "bio", "bio": clean, "pluginId": pluginId]
+                )
+            }
+        }
+        return true
+    }
+
+    @discardableResult
+    public func applyLiveNicknameClockNow(force: Bool = false) -> String {
+        let pair = self.formatNicknameTemplate(
+            self.nickClockTemplate,
+            baseFirstName: self.nickClockBaseFirstName,
+            baseLastName: self.nickClockBaseLastName,
+            style: self.nickClockStyle
+        )
+        _ = self.requestSetNickname(firstName: pair.firstName, lastName: pair.lastName, pluginId: "fg_nick_clock", force: force)
+        return pair.lastName.isEmpty ? pair.firstName : "\(pair.firstName) \(pair.lastName)"
+    }
+
+    @discardableResult
+    public func applyLiveBioClockNow() -> String {
+        let pair = self.formatNicknameTemplate(
+            self.nickClockBioTemplate,
+            baseFirstName: self.nickClockBaseFirstName,
+            baseLastName: self.nickClockBaseLastName,
+            style: self.nickClockStyle
+        )
+        _ = self.requestSetBio(pair.firstName, pluginId: "fg_nick_clock")
+        return pair.firstName
+    }
+
+    // MARK: - Background Execution & Device Lifecycle
+
+    private func registerLifecycleObserversIfNeeded() {
+        guard !self.didRegisterLifecycleObservers else { return }
+        self.didRegisterLifecycleObservers = true
+
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                UIDevice.current.isBatteryMonitoringEnabled = true
+                self?.refreshDeviceSnapshotOnMain()
+            }
+        }
+
+        let nc = NotificationCenter.default
+        self.lifecycleObservers.append(nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                self.refreshDeviceSnapshotOnMain(appState: "background", isBackground: true)
+                self.beginBackgroundKeepAliveIfNeededOnMain()
+            }
+            self.backgroundQueue.async {
+                self.dispatchAppStateHooks(state: "background")
+                _ = self.triggerBackgroundTick(force: true)
+            }
+        })
+        self.lifecycleObservers.append(nc.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                self.endBackgroundTaskOnMain()
+                self.refreshDeviceSnapshotOnMain(appState: "foreground", isBackground: false)
+            }
+            self.backgroundQueue.async {
+                self.dispatchAppStateHooks(state: "foreground")
+                _ = self.triggerBackgroundTick(force: true)
+            }
+        })
+        self.lifecycleObservers.append(nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                self.endBackgroundTaskOnMain()
+                self.refreshDeviceSnapshotOnMain(appState: "foreground", isBackground: false)
+            }
+        })
+        self.lifecycleObservers.append(nc.addObserver(forName: UIDevice.batteryLevelDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                self.refreshDeviceSnapshotOnMain()
+            }
+        })
+        self.lifecycleObservers.append(nc.addObserver(forName: UIDevice.batteryStateDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                self.refreshDeviceSnapshotOnMain()
+            }
+        })
+    }
+
+    @MainActor
+    private func refreshDeviceSnapshotOnMain(appState: String? = nil, isBackground: Bool? = nil) {
+        let dev = UIDevice.current
+        if !dev.isBatteryMonitoringEnabled {
+            dev.isBatteryMonitoringEnabled = true
+        }
+        let levelRaw = dev.batteryLevel
+        let batteryPct = levelRaw >= 0 ? Int((levelRaw * 100.0).rounded()) : -1
+        let stateStr: String
+        let charging: Bool
+        switch dev.batteryState {
+        case .charging:
+            stateStr = "charging"
+            charging = true
+        case .full:
+            stateStr = "full"
+            charging = true
+        case .unplugged:
+            stateStr = "unplugged"
+            charging = false
+        default:
+            stateStr = "unknown"
+            charging = false
+        }
+        let resolvedAppState: String
+        let resolvedBg: Bool
+        if let appState, let isBackground {
+            resolvedAppState = appState
+            resolvedBg = isBackground
+        } else {
+            switch UIApplication.shared.applicationState {
+            case .background:
+                resolvedAppState = "background"
+                resolvedBg = true
+            case .inactive:
+                resolvedAppState = "inactive"
+                resolvedBg = false
+            default:
+                resolvedAppState = "foreground"
+                resolvedBg = false
+            }
+        }
+        self.lock.lock()
+        self.deviceSnapshot = DeviceSnapshot(
+            model: dev.model,
+            systemName: dev.systemName,
+            systemVersion: dev.systemVersion,
+            batteryLevel: batteryPct,
+            batteryState: stateStr,
+            isCharging: charging,
+            appState: resolvedAppState,
+            isBackground: resolvedBg
+        )
+        self.lock.unlock()
+    }
+
+    @MainActor
+    private func beginBackgroundKeepAliveIfNeededOnMain() {
+        self.lock.lock()
+        let hasActiveBg = self.isSystemEnabled && self.isBackgroundExecutionEnabled && self.cachedOrderedPlugins.contains { plugin in
+            let id = plugin.descriptor.id
+            let wantsBg = plugin.descriptor.backgroundEnabled || self.runtimeIntervalsByPlugin[id] != nil || (id == "fg_nick_clock" && self.nickClockEnabled)
+            return plugin.hasBackgroundHook && wantsBg
+        }
+        let alreadyActive = self.backgroundTaskId != .invalid
+        self.lock.unlock()
+
+        guard hasActiveBg, !alreadyActive else { return }
+        let taskId = UIApplication.shared.beginBackgroundTask(withName: "FullGramPluginBackground") { [weak self] in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self?.endBackgroundTaskOnMain()
+                }
+            }
+        }
+        self.lock.lock()
+        self.backgroundTaskId = taskId
+        self.lock.unlock()
+    }
+
+    @MainActor
+    private func endBackgroundTaskOnMain() {
+        self.lock.lock()
+        let taskId = self.backgroundTaskId
+        self.backgroundTaskId = .invalid
+        self.lock.unlock()
+        if taskId != .invalid {
+            UIApplication.shared.endBackgroundTask(taskId)
+        }
+    }
+
+    private func currentDeviceSnapshot() -> DeviceSnapshot {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.deviceSnapshot
+    }
+
+    private func buildDeviceInfoDict() -> [String: FullGramPluginValue] {
+        let snap = self.currentDeviceSnapshot()
+        return [
+            "model": .string(snap.model),
+            "system_name": .string(snap.systemName),
+            "system_version": .string(snap.systemVersion),
+            "battery_level": .int(Int64(snap.batteryLevel)),
+            "battery_percent": .int(Int64(snap.batteryLevel)),
+            "battery_state": .string(snap.batteryState),
+            "is_charging": .bool(snap.isCharging),
+            "is_low_power": .bool(ProcessInfo.processInfo.isLowPowerModeEnabled),
+            "locale": .string(Locale.current.identifier),
+            "timezone": .string(TimeZone.current.identifier),
+            "app_state": .string(snap.appState),
+            "is_background": .bool(snap.isBackground),
+            "uptime": .double(ProcessInfo.processInfo.systemUptime)
+        ]
+    }
+
+    private func syncBackgroundSchedulerLocked() {
+        let shouldRun = self.isSystemEnabled && self.isBackgroundExecutionEnabled && self.cachedOrderedPlugins.contains { plugin in
+            let id = plugin.descriptor.id
+            let wantsBg = plugin.descriptor.backgroundEnabled || self.runtimeIntervalsByPlugin[id] != nil || (id == "fg_nick_clock" && self.nickClockEnabled)
+            return plugin.hasBackgroundHook && wantsBg
+        }
+        if !shouldRun {
+            self.backgroundTimer?.cancel()
+            self.backgroundTimer = nil
+            return
+        }
+        if self.backgroundTimer != nil { return }
+        let timer = DispatchSource.makeTimerSource(queue: self.backgroundQueue)
+        timer.schedule(deadline: .now() + 2.0, repeating: .seconds(5), leeway: .seconds(1))
+        timer.setEventHandler { [weak self] in
+            _ = self?.triggerBackgroundTick(force: false)
+        }
+        self.backgroundTimer = timer
+        timer.resume()
+    }
+
+    public func backgroundStatusSummary() -> (running: Bool, activeCount: Int, totalTicks: Int64) {
+        self.ensureLoaded()
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        let count = self.cachedOrderedPlugins.filter { plugin in
+            let id = plugin.descriptor.id
+            let wantsBg = plugin.descriptor.backgroundEnabled || self.runtimeIntervalsByPlugin[id] != nil || (id == "fg_nick_clock" && self.nickClockEnabled)
+            return plugin.hasBackgroundHook && wantsBg
+        }.count
+        return (self.backgroundTimer != nil, count, self.backgroundTickCount)
+    }
+
+    private func invokeLifecycleHook(plugin: FullGramLoadedPlugin, name: String, args: [FullGramPluginValue]) {
+        self.vmLock.lock()
+        defer { self.vmLock.unlock() }
+        do {
+            if let lua = plugin.luaVM, lua.hasFunction(name) {
+                _ = try lua.callFunction(name, args: args)
+            } else if let py = plugin.pythonVM, py.hasFunction(name) {
+                _ = try py.callFunction(name, args: args)
+            } else if let rs = plugin.rustVM, rs.hasFunction(name) {
+                _ = try rs.callFunction(name, args: args)
+            }
+        } catch {
+            self.appendLog(pluginId: plugin.descriptor.id, message: "\(name) error: \(error.localizedDescription)")
+        }
+    }
+
+    private func dispatchAppStateHooks(state: String) {
+        self.ensureLoaded()
+        self.lock.lock()
+        guard self.isSystemEnabled else {
+            self.lock.unlock()
+            return
+        }
+        let targets = self.cachedOrderedPlugins.filter { $0.hasAppStateHook }
+        self.lock.unlock()
+        guard !targets.isEmpty else { return }
+
+        let timeTable = FullGramPluginTableBox(dict: FullGramPluginTimeHelper.buildPhoneTimeDict())
+        let ctx = FullGramPluginTableBox(dict: [
+            "state": .string(state),
+            "in_background": .bool(state == "background"),
+            "time": .table(timeTable)
+        ])
+        for plugin in targets {
+            self.invokeLifecycleHook(plugin: plugin, name: "on_app_state", args: [.table(ctx)])
+        }
+    }
+
+    @discardableResult
+    public func triggerBackgroundTick(pluginId: String? = nil, force: Bool = false) -> Int {
+        self.ensureLoaded()
+        self.lock.lock()
+        guard self.isSystemEnabled && (self.isBackgroundExecutionEnabled || force) else {
+            self.lock.unlock()
+            return 0
+        }
+        let ordered = self.cachedOrderedPlugins
+        let snap = self.deviceSnapshot
+        self.lock.unlock()
+
+        let now = Date().timeIntervalSince1970
+        var executed = 0
+
+        for plugin in ordered {
+            let id = plugin.descriptor.id
+            if let pluginId, id != pluginId { continue }
+            guard plugin.hasBackgroundHook, let hookName = plugin.backgroundHookName else { continue }
+
+            self.lock.lock()
+            let wantsBg = force || plugin.descriptor.backgroundEnabled || self.runtimeIntervalsByPlugin[id] != nil || (id == "fg_nick_clock" && self.nickClockEnabled)
+            let interval = TimeInterval(self.runtimeIntervalsByPlugin[id] ?? plugin.descriptor.backgroundInterval)
+            let lastTs = self.lastTickByPlugin[id] ?? 0
+            if !wantsBg || (!force && (now - lastTs) < max(5.0, interval)) {
+                self.lock.unlock()
+                continue
+            }
+            self.lastTickByPlugin[id] = now
+            self.backgroundTickCount += 1
+            let pluginTick = (self.tickCountByPlugin[id] ?? 0) + 1
+            self.tickCountByPlugin[id] = pluginTick
+            self.lock.unlock()
+
+            let timeBox = FullGramPluginTableBox(dict: FullGramPluginTimeHelper.buildPhoneTimeDict())
+            let profileVal = self.currentProfile().toPluginValue()
+            let deviceBox = FullGramPluginTableBox(dict: self.buildDeviceInfoDict())
+            let ctx = FullGramPluginTableBox(dict: [
+                "tick": .int(pluginTick),
+                "interval": .int(Int64(interval)),
+                "in_background": .bool(snap.isBackground),
+                "app_state": .string(snap.appState),
+                "time": .table(timeBox),
+                "profile": profileVal,
+                "device": .table(deviceBox)
+            ])
+
+            self.invokeLifecycleHook(plugin: plugin, name: hookName, args: [.table(ctx)])
+            executed += 1
+        }
+        return executed
+    }
+
+    public func processIncomingMessage(
+        text: String,
+        peerId: Int64,
+        senderName: String,
+        timestamp: Int32,
+        isGroup: Bool,
+        isChannel: Bool
+    ) {
+        self.ensureLoaded()
+        self.lock.lock()
+        guard self.isSystemEnabled else {
+            self.lock.unlock()
+            return
+        }
+        let targets = self.cachedOrderedPlugins.filter { $0.hasIncomingHook }
+        self.lock.unlock()
+        guard !targets.isEmpty else { return }
+
+        let ctx = FullGramPluginTableBox(dict: [
+            "text": .string(text),
+            "peer_id": .int(peerId),
+            "sender_name": .string(senderName),
+            "timestamp": .int(Int64(timestamp)),
+            "is_group": .bool(isGroup),
+            "is_channel": .bool(isChannel),
+            "time": .table(FullGramPluginTableBox(dict: FullGramPluginTimeHelper.buildPhoneTimeDict()))
+        ])
+        self.backgroundQueue.async { [weak self] in
+            guard let self else { return }
+            for plugin in targets {
+                self.invokeLifecycleHook(plugin: plugin, name: "on_incoming_message", args: [.table(ctx)])
+            }
+        }
     }
 
     private static let chatStatsThreadKey = "FullGram.Plugin.ChatStats"
 
+    private func performSyncHTTPRequest(
+        urlString: String,
+        method: String = "GET",
+        body: String? = nil,
+        headers: [String: String] = [:],
+        timeout: Double = 8.0,
+        pluginId: String
+    ) -> (status: Int, body: String?, error: String?) {
+        guard let url = URL(string: urlString),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "https" || scheme == "http" else {
+            return (0, nil, "Invalid URL")
+        }
+        if Thread.isMainThread {
+            self.appendLog(pluginId: pluginId, message: "WARN: \(method) \(urlString) blocked on main thread")
+            return (0, nil, "Network calls are blocked on main thread")
+        }
+        self.vmLock.lock()
+        let insideRender = self.isInsideRenderHook
+        self.vmLock.unlock()
+        if insideRender {
+            self.appendLog(pluginId: pluginId, message: "BLOCKED: network call forbidden inside on_render_message")
+            return (0, nil, "Network calls forbidden in on_render_message")
+        }
+
+        let sem = DispatchSemaphore(value: 0)
+        let boxLock = NSLock()
+        var respBody: String?
+        var respStatus = 0
+        var respError: String?
+
+        var request = URLRequest(url: url)
+        request.httpMethod = method.uppercased()
+        request.timeoutInterval = min(20.0, max(1.0, timeout))
+        for (k, v) in headers {
+            request.setValue(v, forHTTPHeaderField: k)
+        }
+        if let body, !body.isEmpty {
+            request.httpBody = body.data(using: .utf8)
+            if request.value(forHTTPHeaderField: "Content-Type") == nil {
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            }
+        }
+
+        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            boxLock.lock()
+            respStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if let error {
+                respError = error.localizedDescription
+            } else if let data, data.count <= 1_048_576 {
+                respBody = String(data: data, encoding: .utf8)
+            }
+            boxLock.unlock()
+            sem.signal()
+        }
+        task.resume()
+        if sem.wait(timeout: .now() + min(21.0, max(1.5, timeout + 0.5))) == .timedOut {
+            task.cancel()
+            return (0, nil, "Request timed out")
+        }
+        boxLock.lock()
+        let result = (respStatus, respBody, respError)
+        boxLock.unlock()
+        return result
+    }
+
     private func makeHostAPI(
         pluginId: String,
         commandsBox: FullGramLoadedPlugin?,
+        isSandboxTest: Bool = false,
         logCapture: ((String) -> Void)? = nil
     ) -> [String: FullGramPluginValue] {
         let storagePrefix = "fullgram.plugin.store.\(pluginId)."
+        let sharedPrefix = "fullgram.plugin.shared."
 
-        return [
-            "log": .function { [weak self] args in
-                let text = args.map { $0.asString }.joined(separator: " ")
-                logCapture?(text)
-                self?.appendLog(pluginId: pluginId, message: text)
-                return .nil
-            },
-            "toast": .function { args in
-                let text = args.first?.asString ?? ""
-                guard !text.isEmpty else { return .nil }
-                logCapture?("[toast] \(text)")
+        let logFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
+            let text = args.map { $0.asString }.joined(separator: " ")
+            logCapture?(text)
+            self?.appendLog(pluginId: pluginId, message: text)
+            return .nil
+        }
+
+        let toastFn: ([FullGramPluginValue]) -> FullGramPluginValue = { args in
+            let text = args.first?.asString ?? ""
+            guard !text.isEmpty else { return .nil }
+            logCapture?("[toast] \(text)")
+            if !isSandboxTest {
                 DispatchQueue.main.async {
                     NotificationCenter.default.post(
                         name: FullGramPluginNotifications.toastRequested,
@@ -425,24 +1627,43 @@ public final class FullGramPluginManager {
                         userInfo: ["text": text, "pluginId": pluginId]
                     )
                 }
-                return .nil
-            },
-            "open_ui": .function { args in
-                let first = args.first ?? .nil
-                var specDict: [String: Any] = ["pluginId": pluginId]
-                switch first {
-                case let .string(kind):
-                    specDict["kind"] = kind
-                case let .table(box):
-                    if let dict = box.toJSONObject() as? [String: Any] {
-                        for (k, v) in dict {
-                            specDict[k] = v
-                        }
-                    }
-                default:
-                    break
+            }
+            return .nil
+        }
+
+        let alertFn: ([FullGramPluginValue]) -> FullGramPluginValue = { args in
+            let title = args.first?.asString ?? "Плагин"
+            let message = args.count > 1 ? args[1].asString : ""
+            logCapture?("[alert] \(title): \(message)")
+            if !isSandboxTest {
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(
+                        name: FullGramPluginNotifications.alertRequested,
+                        object: nil,
+                        userInfo: ["title": title, "message": message, "pluginId": pluginId]
+                    )
                 }
-                logCapture?("[open_ui] \(specDict["kind"] ?? pluginId)")
+            }
+            return .bool(true)
+        }
+
+        let openUIFn: ([FullGramPluginValue]) -> FullGramPluginValue = { args in
+            let first = args.first ?? .nil
+            var specDict: [String: Any] = ["pluginId": pluginId]
+            switch first {
+            case let .string(kind):
+                specDict["kind"] = kind
+            case let .table(box):
+                if let dict = box.toJSONObject() as? [String: Any] {
+                    for (k, v) in dict {
+                        specDict[k] = v
+                    }
+                }
+            default:
+                break
+            }
+            logCapture?("[open_ui] \(specDict["kind"] ?? pluginId)")
+            if !isSandboxTest {
                 DispatchQueue.main.async {
                     NotificationCenter.default.post(
                         name: FullGramPluginNotifications.openUIRequested,
@@ -450,29 +1671,63 @@ public final class FullGramPluginManager {
                         userInfo: specDict
                     )
                 }
-                return .bool(true)
-            },
-            "clipboard_set": .function { args in
-                let text = args.first?.asString ?? ""
+            }
+            return .bool(true)
+        }
+
+        let clipboardSetFn: ([FullGramPluginValue]) -> FullGramPluginValue = { args in
+            let text = args.first?.asString ?? ""
+            if !isSandboxTest {
                 DispatchQueue.main.async {
                     UIPasteboard.general.string = text
                 }
-                return .bool(true)
-            },
-            "clipboard_get": .function { _ in
-                if Thread.isMainThread {
-                    return .string(UIPasteboard.general.string ?? "")
+            }
+            return .bool(true)
+        }
+
+        let clipboardGetFn: ([FullGramPluginValue]) -> FullGramPluginValue = { _ in
+            if Thread.isMainThread {
+                return .string(UIPasteboard.general.string ?? "")
+            }
+            var val = ""
+            DispatchQueue.main.sync {
+                val = UIPasteboard.general.string ?? ""
+            }
+            return .string(val)
+        }
+
+        let hapticFn: ([FullGramPluginValue]) -> FullGramPluginValue = { args in
+            let style = (args.first?.asString ?? "light").lowercased()
+            if !isSandboxTest {
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        switch style {
+                        case "success":
+                            UINotificationFeedbackGenerator().notificationOccurred(.success)
+                        case "warning":
+                            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                        case "error":
+                            UINotificationFeedbackGenerator().notificationOccurred(.error)
+                        case "selection":
+                            UISelectionFeedbackGenerator().selectionChanged()
+                        case "medium":
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        case "heavy":
+                            UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+                        default:
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        }
+                    }
                 }
-                var val = ""
-                DispatchQueue.main.sync {
-                    val = UIPasteboard.general.string ?? ""
-                }
-                return .string(val)
-            },
-            "storage_get": .function { args in
+            }
+            return .bool(true)
+        }
+
+        let makeStorageGet: (String) -> ([FullGramPluginValue]) -> FullGramPluginValue = { prefix in
+            return { args in
                 let key = args.first?.asString ?? ""
                 let fallback = args.count > 1 ? args[1] : .nil
-                guard !key.isEmpty, let stored = UserDefaults.standard.object(forKey: storagePrefix + key) else {
+                guard !key.isEmpty, let stored = UserDefaults.standard.object(forKey: prefix + key) else {
                     return fallback
                 }
                 if let data = stored as? Data,
@@ -480,81 +1735,548 @@ public final class FullGramPluginManager {
                     return FullGramPluginValue.fromJSONObject(obj, forPython: true)
                 }
                 return FullGramPluginValue.fromJSONObject(stored, forPython: true)
-            },
-            "storage_set": .function { args in
+            }
+        }
+
+        let makeStorageSet: (String) -> ([FullGramPluginValue]) -> FullGramPluginValue = { prefix in
+            return { args in
                 let key = args.first?.asString ?? ""
                 guard !key.isEmpty else { return .bool(false) }
                 let val = args.count > 1 ? args[1] : .nil
                 if case .nil = val {
-                    UserDefaults.standard.removeObject(forKey: storagePrefix + key)
+                    UserDefaults.standard.removeObject(forKey: prefix + key)
                 } else {
                     let obj = val.toJSONObject()
                     if JSONSerialization.isValidJSONObject(obj),
                        let data = try? JSONSerialization.data(withJSONObject: obj, options: []) {
-                        UserDefaults.standard.set(data, forKey: storagePrefix + key)
+                        UserDefaults.standard.set(data, forKey: prefix + key)
                     } else if obj is NSNull {
-                        UserDefaults.standard.removeObject(forKey: storagePrefix + key)
+                        UserDefaults.standard.removeObject(forKey: prefix + key)
                     } else {
-                        UserDefaults.standard.set(obj, forKey: storagePrefix + key)
+                        UserDefaults.standard.set(obj, forKey: prefix + key)
                     }
                 }
                 return .bool(true)
-            },
-            "register_command": .function { [weak commandsBox] args in
-                guard args.count >= 2, case let .function(fn) = args[1] else { return .nil }
-                let raw = args[0].asString.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                let cmd = raw.hasPrefix(".") ? String(raw.dropFirst()) : raw
-                if !cmd.isEmpty {
-                    commandsBox?.registeredCommands[cmd] = fn
-                    commandsBox?.hasCommandHook = true
-                }
-                return .nil
-            },
-            "get_chat_stats": .function { _ in
-                if let stats = Thread.current.threadDictionary[FullGramPluginManager.chatStatsThreadKey] as? [String: FullGramPluginValue] {
-                    return .table(FullGramPluginTableBox(dict: stats))
-                }
-                return .nil
-            },
-            "http_get": .function { [weak self] args in
-                let rawURL = args.first?.asString ?? ""
-                guard let url = URL(string: rawURL),
-                      let scheme = url.scheme?.lowercased(),
-                      scheme == "https" || scheme == "http" else {
-                    return .nil
-                }
-                if Thread.isMainThread {
-                    self?.appendLog(pluginId: pluginId, message: "WARN: http_get blocked on main thread")
-                    return .nil
-                }
-                let sem = DispatchSemaphore(value: 0)
-                let boxLock = NSLock()
-                var body: String?
-                var request = URLRequest(url: url)
-                request.timeoutInterval = 8.0
-                let task = URLSession.shared.dataTask(with: request) { data, _, _ in
-                    if let data, data.count <= 1_048_576, let text = String(data: data, encoding: .utf8) {
-                        boxLock.lock()
-                        body = text
-                        boxLock.unlock()
-                    }
-                    sem.signal()
-                }
-                task.resume()
-                if sem.wait(timeout: .now() + 8.5) == .timedOut {
-                    task.cancel()
-                }
-                boxLock.lock()
-                let result = body
-                boxLock.unlock()
-                return result.map { .string($0) } ?? .nil
             }
+        }
+
+        let storageGetFn = makeStorageGet(storagePrefix)
+        let storageSetFn = makeStorageSet(storagePrefix)
+        let storageDeleteFn: ([FullGramPluginValue]) -> FullGramPluginValue = { args in
+            let key = args.first?.asString ?? ""
+            guard !key.isEmpty else { return .bool(false) }
+            UserDefaults.standard.removeObject(forKey: storagePrefix + key)
+            return .bool(true)
+        }
+        let storageKeysFn: ([FullGramPluginValue]) -> FullGramPluginValue = { _ in
+            let keys = UserDefaults.standard.dictionaryRepresentation().keys
+                .filter { $0.hasPrefix(storagePrefix) }
+                .map { String($0.dropFirst(storagePrefix.count)) }
+                .sorted()
+            return .table(FullGramPluginTableBox(array: keys.map { .string($0) }))
+        }
+        let storageClearFn: ([FullGramPluginValue]) -> FullGramPluginValue = { _ in
+            let keys = UserDefaults.standard.dictionaryRepresentation().keys.filter { $0.hasPrefix(storagePrefix) }
+            for k in keys { UserDefaults.standard.removeObject(forKey: k) }
+            return .bool(true)
+        }
+
+        let sharedGetFn = makeStorageGet(sharedPrefix)
+        let sharedSetFn = makeStorageSet(sharedPrefix)
+
+        // Phone Time API
+        let getTimeFn: ([FullGramPluginValue]) -> FullGramPluginValue = { args in
+            let ts = args.first?.asDouble
+            let date = ts.map { Date(timeIntervalSince1970: $0) } ?? Date()
+            return .table(FullGramPluginTableBox(dict: FullGramPluginTimeHelper.buildPhoneTimeDict(date: date)))
+        }
+        let formatTimeFn: ([FullGramPluginValue]) -> FullGramPluginValue = { args in
+            let fmt = args.first.flatMap { val -> String? in
+                if case .nil = val { return nil }
+                return val.asString
+            }
+            let ts = args.count > 1 ? args[1].asDouble : nil
+            let style = args.count > 2 ? args[2].asString : nil
+            return .string(FullGramPluginTimeHelper.formatTime(format: fmt, timestamp: ts, style: style))
+        }
+        let stylizeTimeFn: ([FullGramPluginValue]) -> FullGramPluginValue = { args in
+            let text = args.first?.asString ?? ""
+            let style = args.count > 1 ? args[1].asString : "bold"
+            return .string(FullGramPluginTimeHelper.stylizeDigits(text, style: style))
+        }
+
+        // Device Info API
+        let getDeviceInfoFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] _ in
+            guard let self else { return .table(FullGramPluginTableBox()) }
+            return .table(FullGramPluginTableBox(dict: self.buildDeviceInfoDict()))
+        }
+        let getBatteryFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] _ in
+            guard let self else { return .table(FullGramPluginTableBox()) }
+            let snap = self.currentDeviceSnapshot()
+            return .table(FullGramPluginTableBox(dict: [
+                "level": .int(Int64(snap.batteryLevel)),
+                "percent": .int(Int64(snap.batteryLevel)),
+                "state": .string(snap.batteryState),
+                "is_charging": .bool(snap.isCharging),
+                "is_low_power": .bool(ProcessInfo.processInfo.isLowPowerModeEnabled)
+            ]))
+        }
+
+        // Profile & Nickname API
+        let getProfileFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] _ in
+            return self?.currentProfile().toPluginValue() ?? .table(FullGramPluginTableBox())
+        }
+        let setNicknameFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
+            guard let self, let first = args.first?.asString else { return .bool(false) }
+            let last = args.count > 1 ? (args[1].asString == "nil" ? "" : args[1].asString) : ""
+            logCapture?("[set_nickname] \(first) \(last)")
+            if isSandboxTest { return .bool(true) }
+            return .bool(self.requestSetNickname(firstName: first, lastName: last, pluginId: pluginId))
+        }
+        let restoreNicknameFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] _ in
+            guard let self else { return .bool(false) }
+            logCapture?("[restore_nickname]")
+            if isSandboxTest { return .bool(true) }
+            return .bool(self.restoreOriginalNickname(pluginId: pluginId))
+        }
+        let setUsernameFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
+            guard let self else { return .bool(false) }
+            let username = args.first?.asString ?? ""
+            logCapture?("[set_username] \(username)")
+            if isSandboxTest { return .bool(true) }
+            return .bool(self.requestSetUsername(username, pluginId: pluginId))
+        }
+        let setBioFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
+            guard let self else { return .bool(false) }
+            let bio = args.first?.asString ?? ""
+            logCapture?("[set_bio] \(bio)")
+            if isSandboxTest { return .bool(true) }
+            return .bool(self.requestSetBio(bio, pluginId: pluginId))
+        }
+        let formatNickFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
+            guard let self else { return .string("") }
+            let tpl = args.first?.asString ?? "{name} | ⌚ {time}"
+            let style = args.count > 1 ? args[1].asString : "normal"
+            let baseFirst = args.count > 2 ? args[2].asString : nil
+            let pair = self.formatNicknameTemplate(tpl, baseFirstName: baseFirst, style: style)
+            return .string(pair.lastName.isEmpty ? pair.firstName : "\(pair.firstName) \(pair.lastName)")
+        }
+        let applyNickTemplateFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
+            guard let self else { return .bool(false) }
+            let tpl = args.first?.asString ?? self.nickClockTemplate
+            let style = args.count > 1 ? args[1].asString : self.nickClockStyle
+            let baseFirst = args.count > 2 ? args[2].asString : nil
+            let pair = self.formatNicknameTemplate(tpl, baseFirstName: baseFirst, style: style)
+            logCapture?("[apply_nick_template] \(pair.firstName)")
+            if isSandboxTest { return .bool(true) }
+            return .bool(self.requestSetNickname(firstName: pair.firstName, lastName: pair.lastName, pluginId: pluginId))
+        }
+
+        // Background & Event Bus API
+        let setIntervalFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
+            guard let self else { return .bool(false) }
+            let sec = Int(args.first?.asInt ?? 30)
+            let clamped = min(3600, max(5, sec))
+            logCapture?("[set_interval] \(clamped)s")
+            if !isSandboxTest {
+                self.lock.lock()
+                self.runtimeIntervalsByPlugin[pluginId] = clamped
+                if let idx = self.descriptors.firstIndex(where: { $0.id == pluginId }) {
+                    self.descriptors[idx].backgroundEnabled = true
+                    self.descriptors[idx].backgroundInterval = clamped
+                    self.persistLocked()
+                }
+                self.syncBackgroundSchedulerLocked()
+                self.lock.unlock()
+                self.postBackgroundStateChanged()
+            }
+            return .bool(true)
+        }
+        let stopIntervalFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] _ in
+            guard let self else { return .bool(false) }
+            logCapture?("[stop_interval]")
+            if !isSandboxTest {
+                self.lock.lock()
+                self.runtimeIntervalsByPlugin.removeValue(forKey: pluginId)
+                if let idx = self.descriptors.firstIndex(where: { $0.id == pluginId }) {
+                    self.descriptors[idx].backgroundEnabled = false
+                    self.persistLocked()
+                }
+                self.syncBackgroundSchedulerLocked()
+                self.lock.unlock()
+                self.postBackgroundStateChanged()
+            }
+            return .bool(true)
+        }
+        let getBgStatusFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] _ in
+            guard let self else { return .table(FullGramPluginTableBox()) }
+            self.lock.lock()
+            let desc = self.descriptors.first(where: { $0.id == pluginId })
+            let interval = self.runtimeIntervalsByPlugin[pluginId] ?? desc?.backgroundInterval ?? 30
+            let ticks = self.tickCountByPlugin[pluginId] ?? 0
+            let snap = self.deviceSnapshot
+            let sysBg = self.isBackgroundExecutionEnabled
+            self.lock.unlock()
+            return .table(FullGramPluginTableBox(dict: [
+                "system_enabled": .bool(sysBg),
+                "plugin_enabled": .bool(desc?.backgroundEnabled ?? false),
+                "interval": .int(Int64(interval)),
+                "tick_count": .int(ticks),
+                "app_state": .string(snap.appState),
+                "in_background": .bool(snap.isBackground)
+            ]))
+        }
+        let onEventFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak commandsBox] args in
+            guard args.count >= 2, case let .function(fn) = args[1] else { return .bool(false) }
+            let eventName = args[0].asString.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !eventName.isEmpty else { return .bool(false) }
+            var list = commandsBox?.eventListeners[eventName] ?? []
+            list.append(fn)
+            commandsBox?.eventListeners[eventName] = list
+            return .bool(true)
+        }
+        let emitEventFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
+            guard let self else { return .int(0) }
+            let eventName = args.first?.asString.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !eventName.isEmpty else { return .int(0) }
+            let payload = args.count > 1 ? args[1] : .nil
+            self.lock.lock()
+            let plugins = self.cachedOrderedPlugins
+            self.lock.unlock()
+            var count: Int64 = 0
+            for p in plugins {
+                if let listeners = p.eventListeners[eventName] {
+                    for fn in listeners {
+                        do {
+                            _ = try fn([payload])
+                            count += 1
+                        } catch {
+                            self.appendLog(pluginId: p.descriptor.id, message: "Event '\(eventName)' error: \(error.localizedDescription)")
+                        }
+                    }
+                }
+            }
+            return .int(count)
+        }
+
+        // Chat & Message API
+        let registerCmdFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak commandsBox] args in
+            guard args.count >= 2, case let .function(fn) = args[1] else { return .nil }
+            let raw = args[0].asString.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let cmd = raw.hasPrefix(".") ? String(raw.dropFirst()) : raw
+            if !cmd.isEmpty {
+                commandsBox?.registeredCommands[cmd] = fn
+                commandsBox?.hasCommandHook = true
+            }
+            return .nil
+        }
+        let getChatStatsFn: ([FullGramPluginValue]) -> FullGramPluginValue = { _ in
+            if let stats = Thread.current.threadDictionary[FullGramPluginManager.chatStatsThreadKey] as? [String: FullGramPluginValue] {
+                return .table(FullGramPluginTableBox(dict: stats))
+            }
+            return .nil
+        }
+        let getActiveChatFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] _ in
+            guard let self else { return .nil }
+            self.lock.lock()
+            let fn = self.bridgeActiveChatInfo
+            self.lock.unlock()
+            if let info = fn?() {
+                return .table(FullGramPluginTableBox(dict: info))
+            }
+            return .nil
+        }
+        let sendMessageFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
+            guard let self else { return .bool(false) }
+            self.vmLock.lock()
+            let insideRender = self.isInsideRenderHook
+            self.vmLock.unlock()
+            guard !insideRender else { return .bool(false) }
+
+            let text = args.first?.asString ?? ""
+            guard !text.isEmpty else { return .bool(false) }
+            let peerId = args.count > 1 ? args[1].asInt : nil
+            logCapture?("[send_message] \(text)")
+            if isSandboxTest { return .bool(true) }
+
+            self.lock.lock()
+            let bridge = self.bridgeSendMessage
+            self.lock.unlock()
+            if let bridge {
+                return .bool(bridge(peerId, text))
+            }
+            var info: [String: Any] = ["text": text, "pluginId": pluginId]
+            if let peerId { info["peerId"] = peerId }
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: FullGramPluginNotifications.sendMessageRequested, object: nil, userInfo: info)
+            }
+            return .bool(true)
+        }
+        let setDraftFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
+            guard let self else { return .bool(false) }
+            let text = args.first?.asString ?? ""
+            let peerId = args.count > 1 ? args[1].asInt : nil
+            logCapture?("[set_draft] \(text)")
+            if isSandboxTest { return .bool(true) }
+            self.lock.lock()
+            let bridge = self.bridgeSetDraft
+            self.lock.unlock()
+            if let bridge {
+                return .bool(bridge(peerId, text))
+            }
+            var info: [String: Any] = ["text": text, "pluginId": pluginId]
+            if let peerId { info["peerId"] = peerId }
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: FullGramPluginNotifications.setDraftRequested, object: nil, userInfo: info)
+            }
+            return .bool(true)
+        }
+
+        // Network API
+        let extractHeaders: (FullGramPluginValue?) -> [String: String] = { val in
+            var dict: [String: String] = [:]
+            if case let .table(box)? = val {
+                for (k, v) in box.mapPart {
+                    dict[k] = v.asString
+                }
+            }
+            return dict
+        }
+        let httpGetFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
+            guard let self else { return .nil }
+            let url = args.first?.asString ?? ""
+            let headers = args.count > 1 ? extractHeaders(args[1]) : [:]
+            let res = self.performSyncHTTPRequest(urlString: url, method: "GET", headers: headers, pluginId: pluginId)
+            return res.body.map { .string($0) } ?? .nil
+        }
+        let httpPostFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
+            guard let self else { return .nil }
+            let url = args.first?.asString ?? ""
+            let body: String? = args.count > 1 ? (args[1].asString == "nil" ? nil : args[1].asString) : nil
+            let headers = args.count > 2 ? extractHeaders(args[2]) : [:]
+            let res = self.performSyncHTTPRequest(urlString: url, method: "POST", body: body, headers: headers, pluginId: pluginId)
+            return res.body.map { .string($0) } ?? .nil
+        }
+        let httpRequestFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
+            guard let self, case let .table(box)? = args.first else {
+                return .table(FullGramPluginTableBox(dict: ["ok": .bool(false), "status": .int(0), "error": .string("Invalid spec")]))
+            }
+            let url = box.get(key: .string("url")).asString
+            let method = box.get(key: .string("method"))
+            let methodStr = (method.isTruthy ? method.asString : "GET")
+            let bodyVal = box.get(key: .string("body"))
+            let bodyStr: String? = {
+                if case .nil = bodyVal { return nil }
+                if case let .table(b) = bodyVal {
+                    let obj = b.toJSONObject()
+                    if JSONSerialization.isValidJSONObject(obj),
+                       let data = try? JSONSerialization.data(withJSONObject: obj),
+                       let str = String(data: data, encoding: .utf8) {
+                        return str
+                    }
+                }
+                return bodyVal.asString
+            }()
+            let headers = extractHeaders(box.get(key: .string("headers")))
+            let timeout = box.get(key: .string("timeout")).asDouble ?? 8.0
+            let res = self.performSyncHTTPRequest(urlString: url, method: methodStr, body: bodyStr, headers: headers, timeout: timeout, pluginId: pluginId)
+            return .table(FullGramPluginTableBox(dict: [
+                "ok": .bool((200 ..< 300).contains(res.status)),
+                "status": .int(Int64(res.status)),
+                "body": res.body.map { .string($0) } ?? .nil,
+                "error": res.error.map { .string($0) } ?? .nil
+            ]))
+        }
+
+        // Crypto & Encoding API
+        let base64EncodeFn: ([FullGramPluginValue]) -> FullGramPluginValue = { args in
+            let data = (args.first?.asString ?? "").data(using: .utf8) ?? Data()
+            return .string(data.base64EncodedString())
+        }
+        let base64DecodeFn: ([FullGramPluginValue]) -> FullGramPluginValue = { args in
+            guard let data = Data(base64Encoded: args.first?.asString ?? ""),
+                  let str = String(data: data, encoding: .utf8) else { return .nil }
+            return .string(str)
+        }
+        let urlEncodeFn: ([FullGramPluginValue]) -> FullGramPluginValue = { args in
+            let s = args.first?.asString ?? ""
+            return .string(s.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? s)
+        }
+        let urlDecodeFn: ([FullGramPluginValue]) -> FullGramPluginValue = { args in
+            let s = args.first?.asString ?? ""
+            return .string(s.removingPercentEncoding ?? s)
+        }
+        let sha256Fn: ([FullGramPluginValue]) -> FullGramPluginValue = { args in
+            let data = Data((args.first?.asString ?? "").utf8)
+            let digest = SHA256.hash(data: data)
+            return .string(digest.map { String(format: "%02x", $0) }.joined())
+        }
+        let uuidFn: ([FullGramPluginValue]) -> FullGramPluginValue = { _ in
+            return .string(UUID().uuidString)
+        }
+
+        // Namespaced modules (Plugin API v2.0)
+        let profileNamespace = FullGramPluginTableBox(dict: [
+            "get": .function(getProfileFn),
+            "set_name": .function(setNicknameFn),
+            "set_nickname": .function(setNicknameFn),
+            "restore_name": .function(restoreNicknameFn),
+            "restore_nickname": .function(restoreNicknameFn),
+            "set_username": .function(setUsernameFn),
+            "set_bio": .function(setBioFn),
+            "format_nick": .function(formatNickFn),
+            "apply_template": .function(applyNickTemplateFn)
+        ])
+
+        let timeNamespace = FullGramPluginTableBox(dict: [
+            "now": .function(getTimeFn),
+            "get": .function(getTimeFn),
+            "format": .function(formatTimeFn),
+            "stylize": .function(stylizeTimeFn),
+            "timestamp": .function { _ in .double(Date().timeIntervalSince1970) },
+            "unix_ms": .function { _ in .int(Int64(Date().timeIntervalSince1970 * 1000.0)) }
+        ])
+
+        let deviceNamespace = FullGramPluginTableBox(dict: [
+            "info": .function(getDeviceInfoFn),
+            "battery": .function(getBatteryFn),
+            "haptic": .function(hapticFn),
+            "app_state": .function { [weak self] _ in .string(self?.currentDeviceSnapshot().appState ?? "foreground") }
+        ])
+
+        let backgroundNamespace = FullGramPluginTableBox(dict: [
+            "set_interval": .function(setIntervalFn),
+            "stop_interval": .function(stopIntervalFn),
+            "status": .function(getBgStatusFn),
+            "on": .function(onEventFn),
+            "emit": .function(emitEventFn)
+        ])
+
+        let chatNamespace = FullGramPluginTableBox(dict: [
+            "send": .function(sendMessageFn),
+            "set_draft": .function(setDraftFn),
+            "active": .function(getActiveChatFn),
+            "stats": .function(getChatStatsFn)
+        ])
+
+        let storageNamespace = FullGramPluginTableBox(dict: [
+            "get": .function(storageGetFn),
+            "set": .function(storageSetFn),
+            "delete": .function(storageDeleteFn),
+            "keys": .function(storageKeysFn),
+            "clear": .function(storageClearFn),
+            "shared_get": .function(sharedGetFn),
+            "shared_set": .function(sharedSetFn)
+        ])
+
+        let netNamespace = FullGramPluginTableBox(dict: [
+            "get": .function(httpGetFn),
+            "post": .function(httpPostFn),
+            "request": .function(httpRequestFn)
+        ])
+
+        let cryptoNamespace = FullGramPluginTableBox(dict: [
+            "sha256": .function(sha256Fn),
+            "base64_encode": .function(base64EncodeFn),
+            "base64_decode": .function(base64DecodeFn),
+            "url_encode": .function(urlEncodeFn),
+            "url_decode": .function(urlDecodeFn),
+            "uuid": .function(uuidFn)
+        ])
+
+        let uiNamespace = FullGramPluginTableBox(dict: [
+            "log": .function(logFn),
+            "toast": .function(toastFn),
+            "alert": .function(alertFn),
+            "open": .function(openUIFn),
+            "notify": .function(toastFn),
+            "clipboard_get": .function(clipboardGetFn),
+            "clipboard_set": .function(clipboardSetFn)
+        ])
+
+        return [
+            "api_version": .string("2.0"),
+            "version": .string("2.0.0"),
+
+            // Namespaced API v2.0 modules
+            "profile": .table(profileNamespace),
+            "time": .table(timeNamespace),
+            "device": .table(deviceNamespace),
+            "background": .table(backgroundNamespace),
+            "chat": .table(chatNamespace),
+            "storage": .table(storageNamespace),
+            "net": .table(netNamespace),
+            "crypto": .table(cryptoNamespace),
+            "ui": .table(uiNamespace),
+
+            // Flat API (v1 compatible + v2 extensions)
+            "log": .function(logFn),
+            "toast": .function(toastFn),
+            "alert": .function(alertFn),
+            "open_ui": .function(openUIFn),
+            "system_notify": .function(toastFn),
+            "clipboard_set": .function(clipboardSetFn),
+            "clipboard_get": .function(clipboardGetFn),
+            "haptic": .function(hapticFn),
+
+            "storage_get": .function(storageGetFn),
+            "storage_set": .function(storageSetFn),
+            "storage_delete": .function(storageDeleteFn),
+            "storage_keys": .function(storageKeysFn),
+            "storage_clear": .function(storageClearFn),
+            "shared_get": .function(sharedGetFn),
+            "shared_set": .function(sharedSetFn),
+
+            "get_time": .function(getTimeFn),
+            "format_time": .function(formatTimeFn),
+            "stylize_time": .function(stylizeTimeFn),
+            "get_device_info": .function(getDeviceInfoFn),
+            "get_battery": .function(getBatteryFn),
+
+            "get_profile": .function(getProfileFn),
+            "set_nickname": .function(setNicknameFn),
+            "set_name": .function(setNicknameFn),
+            "restore_nickname": .function(restoreNicknameFn),
+            "set_username": .function(setUsernameFn),
+            "set_bio": .function(setBioFn),
+            "format_nick": .function(formatNickFn),
+            "apply_nick_template": .function(applyNickTemplateFn),
+
+            "set_interval": .function(setIntervalFn),
+            "stop_interval": .function(stopIntervalFn),
+            "get_background_status": .function(getBgStatusFn),
+            "on_event": .function(onEventFn),
+            "emit_event": .function(emitEventFn),
+
+            "register_command": .function(registerCmdFn),
+            "get_chat_stats": .function(getChatStatsFn),
+            "get_active_chat": .function(getActiveChatFn),
+            "send_message": .function(sendMessageFn),
+            "set_draft": .function(setDraftFn),
+
+            "http_get": .function(httpGetFn),
+            "http_post": .function(httpPostFn),
+            "http_request": .function(httpRequestFn),
+
+            "base64_encode": .function(base64EncodeFn),
+            "base64_decode": .function(base64DecodeFn),
+            "url_encode": .function(urlEncodeFn),
+            "url_decode": .function(urlDecodeFn),
+            "sha256": .function(sha256Fn),
+            "uuid": .function(uuidFn)
         ]
     }
 
     private func compile(descriptor: FullGramPluginDescriptor) -> FullGramLoadedPlugin {
         let holder = FullGramLoadedPlugin(descriptor: descriptor)
         let hostAPI = self.makeHostAPI(pluginId: descriptor.id, commandsBox: holder)
+
+        let inspectBackgroundHook: ((String) -> Bool) -> String? = { hasFn in
+            for candidate in ["on_background_tick", "on_tick", "on_timer"] {
+                if hasFn(candidate) { return candidate }
+            }
+            return nil
+        }
 
         do {
             switch descriptor.language {
@@ -568,6 +2290,12 @@ public final class FullGramPluginManager {
                 holder.hasRenderHook = vm.hasFunction("on_render_message")
                 holder.hasCommandHook = holder.hasCommandHook || vm.hasFunction("on_command")
                 holder.hasMessageActionHook = vm.hasFunction("on_message_action")
+                holder.backgroundHookName = inspectBackgroundHook { vm.hasFunction($0) }
+                holder.hasBackgroundHook = holder.backgroundHookName != nil
+                holder.hasAppStateHook = vm.hasFunction("on_app_state")
+                holder.hasIncomingHook = vm.hasFunction("on_incoming_message")
+                holder.hasLoadHook = vm.hasFunction("on_load")
+                holder.hasUnloadHook = vm.hasFunction("on_unload")
             case .python:
                 let vm = FullGramPythonVM(hostAPI: hostAPI) { [weak self] msg in
                     self?.appendLog(pluginId: descriptor.id, message: msg)
@@ -578,6 +2306,12 @@ public final class FullGramPluginManager {
                 holder.hasRenderHook = vm.hasFunction("on_render_message")
                 holder.hasCommandHook = holder.hasCommandHook || vm.hasFunction("on_command")
                 holder.hasMessageActionHook = vm.hasFunction("on_message_action")
+                holder.backgroundHookName = inspectBackgroundHook { vm.hasFunction($0) }
+                holder.hasBackgroundHook = holder.backgroundHookName != nil
+                holder.hasAppStateHook = vm.hasFunction("on_app_state")
+                holder.hasIncomingHook = vm.hasFunction("on_incoming_message")
+                holder.hasLoadHook = vm.hasFunction("on_load")
+                holder.hasUnloadHook = vm.hasFunction("on_unload")
             case .rust:
                 let vm = FullGramRustVM(hostAPI: hostAPI) { [weak self] msg in
                     self?.appendLog(pluginId: descriptor.id, message: msg)
@@ -588,6 +2322,12 @@ public final class FullGramPluginManager {
                 holder.hasRenderHook = vm.hasFunction("on_render_message")
                 holder.hasCommandHook = holder.hasCommandHook || vm.hasFunction("on_command")
                 holder.hasMessageActionHook = vm.hasFunction("on_message_action")
+                holder.backgroundHookName = inspectBackgroundHook { vm.hasFunction($0) }
+                holder.hasBackgroundHook = holder.backgroundHookName != nil
+                holder.hasAppStateHook = vm.hasFunction("on_app_state")
+                holder.hasIncomingHook = vm.hasFunction("on_incoming_message")
+                holder.hasLoadHook = vm.hasFunction("on_load")
+                holder.hasUnloadHook = vm.hasFunction("on_unload")
             }
         } catch {
             holder.lastError = error.localizedDescription
@@ -866,7 +2606,11 @@ public final class FullGramPluginManager {
         self.lock.unlock()
 
         self.vmLock.lock()
-        defer { self.vmLock.unlock() }
+        self.isInsideRenderHook = true
+        defer {
+            self.isInsideRenderHook = false
+            self.vmLock.unlock()
+        }
 
         var currentText = text
         for plugin in renderPlugins {
@@ -904,15 +2648,29 @@ public final class FullGramPluginManager {
     ) -> (output: String, logs: [String], error: String?) {
         var capturedLogs: [String] = []
         let holder = FullGramLoadedPlugin(descriptor: FullGramPluginDescriptor(id: "__test__", name: "Test", language: language, code: code))
-        let hostAPI = self.makeHostAPI(pluginId: "__test__", commandsBox: holder) { line in
+        let hostAPI = self.makeHostAPI(pluginId: "__test__", commandsBox: holder, isSandboxTest: true) { line in
             capturedLogs.append(line)
         }
 
         do {
+            let trimmed = sampleInput.trimmingCharacters(in: .whitespacesAndNewlines)
+            var cmd = ""
+            var argsStr = ""
+            if trimmed.hasPrefix(".") && trimmed.count > 1 {
+                let withoutDot = String(trimmed.dropFirst())
+                if let sp = withoutDot.firstIndex(where: { $0.isWhitespace }) {
+                    cmd = String(withoutDot[..<sp]).lowercased()
+                    argsStr = String(withoutDot[withoutDot.index(after: sp)...]).trimmingCharacters(in: .whitespaces)
+                } else {
+                    cmd = withoutDot.lowercased()
+                }
+            }
+            let subcmd = argsStr.split(separator: " ").first.map { String($0).lowercased() } ?? ""
             let ctxTable = FullGramPluginTableBox(dict: [
                 "text": .string(sampleInput),
-                "command": .string(sampleInput.hasPrefix(".") ? String(sampleInput.dropFirst().split(separator: " ").first ?? "") : ""),
-                "args": .string(sampleInput.split(separator: " ").dropFirst().joined(separator: " ")),
+                "command": .string(cmd),
+                "subcommand": .string(subcmd),
+                "args": .string(argsStr),
                 "peer_id": .int(0),
                 "is_group": .bool(false),
                 "is_channel": .bool(false)
@@ -924,9 +2682,8 @@ public final class FullGramPluginManager {
                 }
                 try vm.load(code: code)
                 var resultText = ""
-                let cmd = ctxTable.get(key: .string("command")).asString
                 if !cmd.isEmpty {
-                    if let fn = holder.registeredCommands[cmd.lowercased()] {
+                    if let fn = holder.registeredCommands[cmd] {
                         resultText = try fn([.table(ctxTable)]).asString
                     } else if vm.hasFunction("on_command") {
                         resultText = try vm.callFunction("on_command", args: [.table(ctxTable)]).asString
@@ -942,9 +2699,8 @@ public final class FullGramPluginManager {
                 }
                 try vm.load(code: code)
                 var resultText = ""
-                let cmd = ctxTable.get(key: .string("command")).asString
                 if !cmd.isEmpty {
-                    if let fn = holder.registeredCommands[cmd.lowercased()] {
+                    if let fn = holder.registeredCommands[cmd] {
                         resultText = try fn([.table(ctxTable)]).asString
                     } else if vm.hasFunction("on_command") {
                         resultText = try vm.callFunction("on_command", args: [.table(ctxTable)]).asString
@@ -960,9 +2716,8 @@ public final class FullGramPluginManager {
                 }
                 try vm.load(code: code)
                 var resultText = ""
-                let cmd = ctxTable.get(key: .string("command")).asString
                 if !cmd.isEmpty {
-                    if let fn = holder.registeredCommands[cmd.lowercased()] {
+                    if let fn = holder.registeredCommands[cmd] {
                         resultText = try fn([.table(ctxTable)]).asString
                     } else if vm.hasFunction("on_command") {
                         resultText = try vm.callFunction("on_command", args: [.table(ctxTable)]).asString
@@ -972,6 +2727,59 @@ public final class FullGramPluginManager {
                     resultText = try vm.callFunction("on_outgoing_message", args: [.table(ctxTable)]).asString
                 }
                 return (resultText, capturedLogs, nil)
+            }
+        } catch {
+            return ("", capturedLogs, error.localizedDescription)
+        }
+    }
+
+    public func testBackgroundTick(
+        code: String,
+        language: FullGramPluginLanguage
+    ) -> (output: String, logs: [String], error: String?) {
+        var capturedLogs: [String] = []
+        let holder = FullGramLoadedPlugin(descriptor: FullGramPluginDescriptor(id: "__test_bg__", name: "BgTest", language: language, code: code))
+        let hostAPI = self.makeHostAPI(pluginId: "__test_bg__", commandsBox: holder, isSandboxTest: true) { line in
+            capturedLogs.append(line)
+        }
+        let snap = self.currentDeviceSnapshot()
+        let ctx = FullGramPluginTableBox(dict: [
+            "tick": .int(1),
+            "interval": .int(30),
+            "in_background": .bool(snap.isBackground),
+            "app_state": .string(snap.appState),
+            "time": .table(FullGramPluginTableBox(dict: FullGramPluginTimeHelper.buildPhoneTimeDict())),
+            "profile": self.currentProfile().toPluginValue(),
+            "device": .table(FullGramPluginTableBox(dict: self.buildDeviceInfoDict()))
+        ])
+
+        do {
+            let candidates = ["on_background_tick", "on_tick", "on_timer"]
+            switch language {
+            case .lua:
+                let vm = FullGramLuaVM(hostAPI: hostAPI) { line in capturedLogs.append(line) }
+                try vm.load(code: code)
+                for name in candidates where vm.hasFunction(name) {
+                    let res = try vm.callFunction(name, args: [.table(ctx)])
+                    return (res.asString, capturedLogs, nil)
+                }
+                return ("", capturedLogs, "Функция on_background_tick(ctx) не найдена в плагине.")
+            case .python:
+                let vm = FullGramPythonVM(hostAPI: hostAPI) { line in capturedLogs.append(line) }
+                try vm.load(code: code)
+                for name in candidates where vm.hasFunction(name) {
+                    let res = try vm.callFunction(name, args: [.table(ctx)])
+                    return (res.asString, capturedLogs, nil)
+                }
+                return ("", capturedLogs, "Функция on_background_tick(ctx) не найдена в плагине.")
+            case .rust:
+                let vm = FullGramRustVM(hostAPI: hostAPI) { line in capturedLogs.append(line) }
+                try vm.load(code: code)
+                for name in candidates where vm.hasFunction(name) {
+                    let res = try vm.callFunction(name, args: [.table(ctx)])
+                    return (res.asString, capturedLogs, nil)
+                }
+                return ("", capturedLogs, "Функция on_background_tick(ctx) не найдена в плагине.")
             }
         } catch {
             return ("", capturedLogs, error.localizedDescription)
@@ -1247,8 +3055,155 @@ def on_command(ctx):
                 code: Self.deadlinesPluginCode(),
                 isEnabled: true,
                 isBuiltIn: true
+            ),
+            FullGramPluginDescriptor(
+                id: "fg_nick_clock",
+                name: "Живой Ник и Часы (.nick / .time)",
+                language: .lua,
+                version: "2.0",
+                author: "FullGram",
+                description: "Управление ником в Telegram, часы со временем телефона в нике и работа в фоне (.nick, .time).",
+                code: Self.nickClockPluginCode(),
+                isEnabled: true,
+                isBuiltIn: true,
+                backgroundEnabled: true,
+                backgroundInterval: 30
             )
         ]
+    }
+
+    private static func nickClockPluginCode() -> String {
+        return """
+-- @name Живой Ник и Часы (.nick / .time)
+-- @id fg_nick_clock
+-- @version 2.0
+-- @author FullGram
+-- @background true
+-- @interval 30
+-- @description Управление ником в Telegram, часы со временем телефона в нике и фоновый тик (.nick, .time)
+
+function on_background_tick(ctx)
+    local clock_on = fullgram.storage_get("clock_enabled", false)
+    if clock_on == true then
+        local tpl = tostring(fullgram.storage_get("clock_template", "{name} | ⌚ {time}"))
+        local style = tostring(fullgram.storage_get("clock_style", "bold"))
+        local base_first = tostring(fullgram.storage_get("base_first_name", ""))
+        local formatted = fullgram.profile.format_nick(tpl, style, base_first)
+        fullgram.profile.set_name(formatted)
+    end
+    local bio_on = fullgram.storage_get("bio_enabled", false)
+    if bio_on == true then
+        local bio_tpl = tostring(fullgram.storage_get("bio_template", "⌚ {time} • 📅 {date} • 🔋 {battery}%"))
+        local bio_text = fullgram.profile.format_nick(bio_tpl, "normal")
+        fullgram.profile.set_bio(bio_text)
+    end
+end
+
+function on_command(ctx)
+    local cmd = ctx.command
+    local args = tostring(ctx.args or "")
+
+    if cmd == "time" then
+        local t = fullgram.time.now()
+        local dev = fullgram.device.info()
+        local msg = t.clock_emoji .. " Время на телефоне: " .. tostring(t.hms)
+            .. "\\n📅 Дата: " .. tostring(t.date) .. " (" .. tostring(t.weekday_name) .. ")"
+            .. "\\n🌍 Пояс: " .. tostring(t.timezone) .. " (UTC" .. tostring(t.utc_offset_str) .. ")"
+            .. "\\n🔋 Батарея: " .. tostring(dev.battery_level) .. "%"
+        if string.lower(args) == "send" then
+            return msg
+        end
+        return { cancel = true, toast = t.clock_emoji .. " " .. tostring(t.hms) .. " • " .. tostring(t.date) .. " • 🔋 " .. tostring(dev.battery_level) .. "%" }
+    end
+
+    if cmd ~= "nick" then
+        return nil
+    end
+
+    if args == "" or string.lower(args) == "ui" then
+        fullgram.open_ui({ kind = "nick_clock", title = "⌚ Живой Ник и Часы" })
+        return { cancel = true }
+    end
+
+    local lower = string.lower(args)
+    if lower == "reset" or lower == "restore" then
+        fullgram.storage_set("clock_enabled", false)
+        fullgram.storage_set("bio_enabled", false)
+        fullgram.profile.restore_name()
+        return { cancel = true, toast = "Исходный ник восстановлен!" }
+    end
+
+    if string.sub(lower, 1, 8) == "clock on" then
+        local tpl = string.sub(args, 9)
+        tpl = string.gsub(tpl, "^%s+", "")
+        if tpl == "" then
+            tpl = tostring(fullgram.storage_get("clock_template", "{name} | ⌚ {time}"))
+        else
+            fullgram.storage_set("clock_template", tpl)
+        end
+        local prof = fullgram.profile.get()
+        if tostring(fullgram.storage_get("base_first_name", "")) == "" and prof.original_first_name ~= "" then
+            fullgram.storage_set("base_first_name", prof.original_first_name)
+        end
+        fullgram.storage_set("clock_enabled", true)
+        local style = tostring(fullgram.storage_get("clock_style", "bold"))
+        local base_first = tostring(fullgram.storage_get("base_first_name", ""))
+        local next_nick = fullgram.profile.format_nick(tpl, style, base_first)
+        fullgram.profile.set_name(next_nick)
+        fullgram.background.set_interval(tonumber(fullgram.storage_get("clock_interval", 30)) or 30)
+        return { cancel = true, toast = "⌚ Часы в нике включены: " .. next_nick }
+    end
+
+    if lower == "clock off" then
+        fullgram.storage_set("clock_enabled", false)
+        fullgram.profile.restore_name()
+        return { cancel = true, toast = "Часы в нике выключены, ник восстановлен." }
+    end
+
+    if string.sub(lower, 1, 6) == "style " then
+        local st = string.gsub(string.sub(lower, 7), "%s+", "")
+        fullgram.storage_set("clock_style", st)
+        if fullgram.storage_get("clock_enabled", false) == true then
+            local tpl = tostring(fullgram.storage_get("clock_template", "{name} | ⌚ {time}"))
+            local base_first = tostring(fullgram.storage_get("base_first_name", ""))
+            fullgram.profile.set_name(fullgram.profile.format_nick(tpl, st, base_first))
+        end
+        return { cancel = true, toast = "Стиль часов: " .. st }
+    end
+
+    if string.sub(lower, 1, 9) == "interval " then
+        local sec = tonumber(string.match(args, "(%d+)")) or 30
+        if sec < 10 then sec = 10 end
+        fullgram.storage_set("clock_interval", sec)
+        fullgram.background.set_interval(sec)
+        return { cancel = true, toast = "Интервал обновления: " .. tostring(sec) .. " сек." }
+    end
+
+    if string.sub(lower, 1, 4) == "bio " then
+        local raw_bio = string.sub(args, 5)
+        local formatted_bio = fullgram.profile.format_nick(raw_bio, "normal")
+        fullgram.profile.set_bio(formatted_bio)
+        return { cancel = true, toast = "Био обновлено: " .. formatted_bio }
+    end
+
+    local raw_name = args
+    if string.sub(lower, 1, 4) == "set " then
+        raw_name = string.sub(args, 5)
+    end
+    local sep = string.find(raw_name, "|", 1, true)
+    if sep then
+        local first = string.gsub(string.sub(raw_name, 1, sep - 1), "^%s*(.-)%s*$", "%1")
+        local last = string.gsub(string.sub(raw_name, sep + 1), "^%s*(.-)%s*$", "%1")
+        local rendered_first = fullgram.profile.format_nick(first, tostring(fullgram.storage_get("clock_style", "bold")), first)
+        fullgram.profile.set_name(rendered_first, last)
+        return { cancel = true, toast = "Ник обновлён: " .. rendered_first .. (last ~= "" and (" " .. last) or "") }
+    else
+        local rendered = fullgram.profile.format_nick(raw_name, tostring(fullgram.storage_get("clock_style", "bold")), raw_name)
+        fullgram.profile.set_name(rendered, "")
+        return { cancel = true, toast = "Ник обновлён: " .. rendered }
+    end
+end
+"""
     }
 
     private static func layoutFixerPluginCode() -> String {

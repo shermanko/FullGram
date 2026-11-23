@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import UserNotifications
 @preconcurrency import WebKit
 import Display
 import Postbox
@@ -9,6 +10,7 @@ import SwiftSignalKit
 import AccountContext
 import ChatInterfaceState
 import UndoUI
+import PeerInfoScreen
 
 // MARK: - Local Telegram Context Builder for AI Agent
 
@@ -1173,9 +1175,12 @@ final class FullGramAIOverlayCoordinator {
     private var petView: FullGramMascotPetView?
     private var windowView: FullGramAIChatWindowView?
     private var currentPeerId: PeerId?
-    private var observers: [NSObjectProtocol] = []
+    private nonisolated(unsafe) var observers: [NSObjectProtocol] = []
     private var autoResponderDisposable: Disposable?
+    private var profileSyncDisposable: Disposable?
     private var seenAutoReplyMessageIds = Set<MessageId>()
+    private var seenPluginIncomingMessageIds = Set<MessageId>()
+    private let coordinatorLaunchTimestamp = Int32(Date().timeIntervalSince1970)
 
     init(context: AccountContext, rootController: TelegramRootController) {
         self.context = context
@@ -1183,6 +1188,7 @@ final class FullGramAIOverlayCoordinator {
         self.theme = context.sharedContext.currentPresentationData.with { $0 }.theme
 
         self.observeNotifications()
+        self.setupPluginTelegramBridge()
         self.startAutoResponderMonitor()
         DispatchQueue.main.async { [weak self] in
             self?.syncPetVisibility()
@@ -1191,6 +1197,7 @@ final class FullGramAIOverlayCoordinator {
 
     deinit {
         self.autoResponderDisposable?.dispose()
+        self.profileSyncDisposable?.dispose()
         for obs in self.observers {
             NotificationCenter.default.removeObserver(obs)
         }
@@ -1209,6 +1216,114 @@ final class FullGramAIOverlayCoordinator {
         }
     }
 
+    private func setupPluginTelegramBridge() {
+        let context = self.context
+        let profileKey = TelegramEngine.EngineData.Item.Peer.Peer(id: context.account.peerId)
+        let aboutKey = TelegramEngine.EngineData.Item.Peer.AboutText(id: context.account.peerId)
+        self.profileSyncDisposable = (context.engine.data.subscribe(profileKey, aboutKey)
+        |> deliverOnMainQueue).start(next: { peer, aboutItem in
+            guard case let .user(user) = peer else { return }
+            let bio: String?
+            if case let .known(val) = aboutItem {
+                bio = val ?? ""
+            } else {
+                bio = nil
+            }
+            FullGramPluginManager.shared.updateCachedAccountProfile(
+                peerId: user.id.toInt64(),
+                firstName: user.firstName ?? "",
+                lastName: user.lastName ?? "",
+                username: user.addressName ?? "",
+                phone: user.phone ?? "",
+                bio: bio
+            )
+        })
+
+        FullGramPluginManager.shared.registerTelegramBridge(
+            updateName: { firstName, lastName, completion in
+                let _ = (context.engine.accountData.updateAccountPeerName(firstName: firstName, lastName: lastName)
+                |> deliverOnMainQueue).startStandalone(completed: {
+                    completion?(true)
+                })
+            },
+            updateUsername: { username, completion in
+                let clean: String? = username.isEmpty ? nil : username
+                let _ = (context.engine.peers.updateAddressName(domain: .account, name: clean)
+                |> deliverOnMainQueue).startStandalone(error: { _ in
+                    completion?(false)
+                }, completed: {
+                    completion?(true)
+                })
+            },
+            updateBio: { bio, completion in
+                let clean: String? = bio.isEmpty ? nil : bio
+                let _ = (context.engine.accountData.updateAbout(about: clean)
+                |> deliverOnMainQueue).startStandalone(error: { _ in
+                    completion?(false)
+                }, completed: {
+                    completion?(true)
+                })
+            },
+            sendMessage: { [weak self] peerIdRaw, text in
+                guard !text.isEmpty else { return false }
+                let sendTo: (PeerId) -> Void = { targetPeerId in
+                    let _ = enqueueMessages(account: context.account, peerId: targetPeerId, messages: [
+                        EnqueueMessage.message(
+                            text: text,
+                            attributes: [],
+                            inlineStickers: [:],
+                            mediaReference: nil,
+                            threadId: nil,
+                            replyToMessageId: nil,
+                            replyToStoryId: nil,
+                            localGroupingKey: nil,
+                            correlationId: nil,
+                            bubbleUpEmojiOrStickersets: []
+                        )
+                    ]).startStandalone()
+                }
+                if let peerIdRaw, peerIdRaw != 0 {
+                    sendTo(PeerId(peerIdRaw))
+                    return true
+                }
+                DispatchQueue.main.async {
+                    if let activePeer = self?.activeChatController()?.chatLocation.peerId ?? self?.currentPeerId {
+                        sendTo(activePeer)
+                    }
+                }
+                return true
+            },
+            setDraft: { [weak self] _, text in
+                DispatchQueue.main.async {
+                    guard let chat = self?.activeChatController() else { return }
+                    chat.updateChatPresentationInterfaceState(animated: true, interactive: true, {
+                        $0.updatedInterfaceState {
+                            $0.withUpdatedComposeInputState(ChatTextInputState(inputText: NSAttributedString(string: text), selectionRange: text.utf16.count ..< text.utf16.count))
+                        }
+                    })
+                }
+                return true
+            },
+            activeChatInfo: { [weak self] in
+                guard Thread.isMainThread, let self, let chat = self.activeChatController(), let peerId = chat.chatLocation.peerId else {
+                    if let peerId = self?.currentPeerId {
+                        return [
+                            "peer_id": .int(peerId.toInt64()),
+                            "is_group": .bool(peerId.namespace == Namespaces.Peer.CloudGroup),
+                            "is_channel": .bool(peerId.namespace == Namespaces.Peer.CloudChannel)
+                        ]
+                    }
+                    return nil
+                }
+                return [
+                    "peer_id": .int(peerId.toInt64()),
+                    "is_group": .bool(peerId.namespace == Namespaces.Peer.CloudGroup),
+                    "is_channel": .bool(peerId.namespace == Namespaces.Peer.CloudChannel)
+                ]
+            }
+        )
+    }
+
     private func startAutoResponderMonitor() {
         let signal = self.context.account.viewTracker.tailChatListView(
             groupId: .root,
@@ -1222,17 +1337,80 @@ final class FullGramAIOverlayCoordinator {
         self.autoResponderDisposable = signal.start(next: { [weak self] view, _ in
             guard let self else { return }
             let settings = FullGramAutoResponderSettings.shared
-            guard settings.isEnabled else { return }
             let minTimestamp = settings.enabledSinceTimestamp
 
             for entry in view.entries {
                 guard case let .MessageEntry(data) = entry else { continue }
-                guard let unreadCount = data.readState?.state.count, unreadCount > 0 else { continue }
                 guard let lastMsg = data.messages.last else { continue }
-                guard lastMsg.flags.contains(.Incoming) else { continue }
-                guard lastMsg.timestamp >= minTimestamp else { continue }
-
                 let peerId = lastMsg.id.peerId
+
+                // Anti-scam raid & moderation rules monitoring in groups
+                if (peerId.namespace == Namespaces.Peer.CloudGroup || peerId.namespace == Namespaces.Peer.CloudChannel),
+                   lastMsg.timestamp >= self.coordinatorLaunchTimestamp,
+                   lastMsg.author?.id != selfPeerId {
+                    for media in lastMsg.media {
+                        if let action = media as? TelegramMediaAction {
+                            var joinedCount = 0
+                            if case .joinedByLink = action.action {
+                                joinedCount = 1
+                            } else if case let .addedMembers(ids) = action.action {
+                                joinedCount = max(1, ids.count)
+                            }
+                            if joinedCount > 0 {
+                                if let raidWarning = FullGramAntiScam.shared.recordMemberJoin(
+                                    chatPeerId: peerId.toInt64(),
+                                    userId: lastMsg.author?.id.id._internalGetInt64Value() ?? 0,
+                                    timestamp: lastMsg.timestamp
+                                ) {
+                                    let title = data.renderedPeer.chatMainPeer.map { EnginePeer($0).compactDisplayTitle } ?? "Группа"
+                                    self.postLocalHomeNotification(title: "🛡 Анти-скам: \(title)", body: raidWarning)
+                                }
+                            }
+                        }
+                    }
+                    let authorUser = lastMsg.author as? TelegramUser
+                    if let ruleHit = FullGramAntiScam.shared.inspectModerationRules(
+                        text: lastMsg.text,
+                        authorRawId: lastMsg.author?.id.id._internalGetInt64Value() ?? 0,
+                        hasUsername: (authorUser?.addressName?.isEmpty == false),
+                        hasAvatar: !(authorUser?.photo.isEmpty ?? true),
+                        chatPeerId: peerId.toInt64()
+                    ) {
+                        if FullGramAntiScam.shared.ruleAutoBanInAdminGroups,
+                           let authorId = lastMsg.author?.id,
+                           case let .channel(channel) = data.renderedPeer.chatMainPeer,
+                           channel.hasPermission(.banMembers) {
+                            let _ = self.context.peerChannelMemberCategoriesContextsManager.updateMemberBannedRights(
+                                engine: self.context.engine,
+                                peerId: peerId,
+                                memberId: authorId,
+                                bannedRights: TelegramChatBannedRights(flags: [.banReadMessages], untilDate: Int32.max)
+                            ).startStandalone()
+                            let title = EnginePeer(.channel(channel)).compactDisplayTitle
+                            self.postLocalHomeNotification(title: "🛡 Авто-бан в \(title)", body: "\(ruleHit.rule): \(ruleHit.reason)")
+                        }
+                    }
+                }
+
+                guard let unreadCount = data.readState?.state.count, unreadCount > 0 else { continue }
+                guard lastMsg.flags.contains(.Incoming) else { continue }
+
+                if lastMsg.timestamp >= self.coordinatorLaunchTimestamp &&
+                   peerId != selfPeerId &&
+                   self.seenPluginIncomingMessageIds.insert(lastMsg.id).inserted {
+                    let senderName = lastMsg.author.map { EnginePeer($0).compactDisplayTitle } ?? ""
+                    FullGramPluginManager.shared.processIncomingMessage(
+                        text: lastMsg.text,
+                        peerId: peerId.toInt64(),
+                        senderName: senderName,
+                        timestamp: lastMsg.timestamp,
+                        isGroup: peerId.namespace == Namespaces.Peer.CloudGroup,
+                        isChannel: peerId.namespace == Namespaces.Peer.CloudChannel
+                    )
+                }
+
+                guard settings.isEnabled else { continue }
+                guard lastMsg.timestamp >= minTimestamp else { continue }
                 guard peerId != selfPeerId, peerId.id._internalGetInt64Value() != 777000 else { continue }
 
                 if peerId.namespace == Namespaces.Peer.CloudUser {
@@ -1253,12 +1431,27 @@ final class FullGramAIOverlayCoordinator {
                 guard settings.canReply(to: peerRaw) else { continue }
                 settings.markReplied(to: peerRaw)
 
-                self.dispatchAutoReply(to: peerId, incomingText: lastMsg.text, mode: settings.mode, fallbackText: settings.effectiveReplyText)
+                let chatTitle = data.renderedPeer.chatMainPeer.map { EnginePeer($0).compactDisplayTitle } ?? "Telegram"
+                self.dispatchAutoReply(to: peerId, chatTitle: chatTitle, incomingText: lastMsg.text, mode: settings.mode, fallbackText: settings.effectiveReplyText)
             }
         })
     }
 
-    private func dispatchAutoReply(to peerId: PeerId, incomingText: String, mode: FullGramAutoResponderSettings.Mode, fallbackText: String) {
+    private func postLocalHomeNotification(title: String, body: String) {
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+            guard granted else { return }
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = body
+            content.sound = .default
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.3, repeats: false)
+            let request = UNNotificationRequest(identifier: "fullgram_local_\(UUID().uuidString)", content: content, trigger: trigger)
+            center.add(request, withCompletionHandler: nil)
+        }
+    }
+
+    private func dispatchAutoReply(to peerId: PeerId, chatTitle: String, incomingText: String, mode: FullGramAutoResponderSettings.Mode, fallbackText: String) {
         let sendNow: (String) -> Void = { [weak self] replyText in
             guard let self, !replyText.isEmpty else { return }
             let _ = enqueueMessages(account: self.context.account, peerId: peerId, messages: [
@@ -1275,6 +1468,12 @@ final class FullGramAIOverlayCoordinator {
                     bubbleUpEmojiOrStickersets: []
                 )
             ]).startStandalone()
+            if FullGramAutoResponderSettings.shared.notifyOnHomeScreen {
+                self.postLocalHomeNotification(
+                    title: "🤖 Авто-ответчик FullGram → \(chatTitle)",
+                    body: replyText
+                )
+            }
         }
 
         guard mode == .aiSmart else {
@@ -1333,87 +1532,204 @@ final class FullGramAIOverlayCoordinator {
     private func observeNotifications() {
         let nc = NotificationCenter.default
         self.observers.append(nc.addObserver(forName: FullGramAINotifications.openWindow, object: nil, queue: .main) { [weak self] note in
-            guard let self else { return }
             let prompt = note.userInfo?["prompt"] as? String
             let peerRaw = note.userInfo?["peerId"] as? Int64
             let autoSend = (note.userInfo?["autoSend"] as? Bool) ?? false
-            self.openWindow(initialPrompt: prompt, explicitPeerId: peerRaw.map { PeerId($0) }, autoSend: autoSend)
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.openWindow(initialPrompt: prompt, explicitPeerId: peerRaw.map { PeerId($0) }, autoSend: autoSend)
+            }
         })
 
         self.observers.append(nc.addObserver(forName: FullGramAINotifications.minimizeWindow, object: nil, queue: .main) { [weak self] _ in
-            guard let self, let win = self.windowView, let host = self.hostContainerView() else { return }
-            win.setMode(.minimized, in: host.bounds, safeInsets: host.safeAreaInsets)
+            MainActor.assumeIsolated {
+                guard let self, let win = self.windowView, let host = self.hostContainerView() else { return }
+                win.setMode(.minimized, in: host.bounds, safeInsets: host.safeAreaInsets)
+            }
         })
 
         self.observers.append(nc.addObserver(forName: FullGramAINotifications.petVisibilityChanged, object: nil, queue: .main) { [weak self] _ in
-            self?.syncPetVisibility()
+            MainActor.assumeIsolated {
+                self?.syncPetVisibility()
+            }
         })
 
         self.observers.append(nc.addObserver(forName: FullGramAINotifications.conversationChanged, object: nil, queue: .main) { [weak self] _ in
-            self?.windowView?.reloadConversation()
+            MainActor.assumeIsolated {
+                self?.windowView?.reloadConversation()
+            }
         })
 
         self.observers.append(nc.addObserver(forName: UIResponder.keyboardWillShowNotification, object: nil, queue: .main) { [weak self] note in
-            guard let self, let win = self.windowView, !win.isHidden,
-                  let host = self.hostContainerView(),
-                  let kbFrame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
-            let converted = host.convert(kbFrame, from: nil)
-            let overlap = max(0.0, host.bounds.maxY - converted.minY)
-            win.updateKeyboardHeight(overlap, in: host.bounds, safeInsets: host.safeAreaInsets)
+            let kbFrame = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
+            MainActor.assumeIsolated {
+                guard let self, let win = self.windowView, !win.isHidden,
+                      let host = self.hostContainerView(),
+                      let kbFrame else { return }
+                let converted = host.convert(kbFrame, from: nil)
+                let overlap = max(0.0, host.bounds.maxY - converted.minY)
+                win.updateKeyboardHeight(overlap, in: host.bounds, safeInsets: host.safeAreaInsets)
+            }
         })
 
         self.observers.append(nc.addObserver(forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { [weak self] _ in
-            guard let self, let win = self.windowView, !win.isHidden, let host = self.hostContainerView() else { return }
-            win.updateKeyboardHeight(0.0, in: host.bounds, safeInsets: host.safeAreaInsets)
+            MainActor.assumeIsolated {
+                guard let self, let win = self.windowView, !win.isHidden, let host = self.hostContainerView() else { return }
+                win.updateKeyboardHeight(0.0, in: host.bounds, safeInsets: host.safeAreaInsets)
+            }
         })
 
         self.observers.append(nc.addObserver(forName: UIDevice.orientationDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            guard let self, let host = self.hostContainerView() else { return }
-            self.petView?.restorePosition(in: host.bounds, safeInsets: host.safeAreaInsets)
-            if let win = self.windowView, !win.isHidden {
-                win.layoutInHost(bounds: host.bounds, safeInsets: host.safeAreaInsets)
+            MainActor.assumeIsolated {
+                guard let self, let host = self.hostContainerView() else { return }
+                self.petView?.restorePosition(in: host.bounds, safeInsets: host.safeAreaInsets)
+                if let win = self.windowView, !win.isHidden {
+                    win.layoutInHost(bounds: host.bounds, safeInsets: host.safeAreaInsets)
+                }
             }
         })
 
         self.observers.append(nc.addObserver(forName: FullGramPluginNotifications.runCommandInChatRequested, object: nil, queue: .main) { [weak self] note in
-            guard let self else { return }
             let peerRaw = note.userInfo?["peerId"] as? Int64
-            let targetPeerId = peerRaw.map { PeerId($0) } ?? self.activeChatController()?.chatLocation.peerId
             let chatTitle = (note.userInfo?["title"] as? String) ?? "Чат"
             let showPicker = (note.userInfo?["showPicker"] as? Bool) ?? false
             let command = note.userInfo?["command"] as? String
-            if showPicker {
-                self.presentPluginActionsPicker(peerId: targetPeerId, chatTitle: chatTitle)
-            } else if let command, !command.isEmpty {
-                self.executePluginCommand(command, peerId: targetPeerId, chatTitle: chatTitle)
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let targetPeerId = peerRaw.map { PeerId($0) } ?? self.activeChatController()?.chatLocation.peerId
+                if showPicker {
+                    self.presentPluginActionsPicker(peerId: targetPeerId, chatTitle: chatTitle)
+                } else if let command, !command.isEmpty {
+                    self.executePluginCommand(command, peerId: targetPeerId, chatTitle: chatTitle)
+                }
             }
         })
 
         self.observers.append(nc.addObserver(forName: FullGramPluginNotifications.openUIRequested, object: nil, queue: .main) { [weak self] note in
-            guard let self else { return }
             let info = (note.userInfo as? [String: Any]) ?? [:]
-            self.presentPluginGUI(spec: info)
+            MainActor.assumeIsolated {
+                self?.presentPluginGUI(spec: info)
+            }
         })
 
         self.observers.append(nc.addObserver(forName: FullGramPluginNotifications.toastRequested, object: nil, queue: .main) { [weak self] note in
-            guard let self,
-                  let text = (note.userInfo as? [String: Any])?["text"] as? String,
-                  !text.isEmpty else { return }
-            let presentationData = self.context.sharedContext.currentPresentationData.with { $0 }
-            let overlay = UndoOverlayController(
-                presentationData: presentationData,
-                content: .succeed(text: text, timeout: nil, customUndoText: nil),
-                elevatedLayout: false,
-                action: { _ in return false }
-            )
-            if let chatController = self.activeChatController() {
-                chatController.present(overlay, in: .current)
-            } else if let topController = self.rootController?.viewControllers.last as? ViewController {
-                topController.present(overlay, in: .window(.root))
-            } else {
-                self.context.sharedContext.presentGlobalController(overlay, nil)
+            guard let text = (note.userInfo as? [String: Any])?["text"] as? String, !text.isEmpty else { return }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let presentationData = self.context.sharedContext.currentPresentationData.with { $0 }
+                let overlay = UndoOverlayController(
+                    presentationData: presentationData,
+                    content: .succeed(text: text, timeout: nil, customUndoText: nil),
+                    elevatedLayout: false,
+                    action: { _ in return false }
+                )
+                if let chatController = self.activeChatController() {
+                    chatController.present(overlay, in: .current)
+                } else if let topController = self.rootController?.viewControllers.last as? ViewController {
+                    topController.present(overlay, in: .window(.root))
+                } else {
+                    self.context.sharedContext.presentGlobalController(overlay, nil)
+                }
             }
         })
+
+        self.observers.append(nc.addObserver(forName: FullGramPluginNotifications.alertRequested, object: nil, queue: .main) { [weak self] note in
+            guard let info = note.userInfo as? [String: Any] else { return }
+            let title = (info["title"] as? String) ?? "Плагин"
+            let message = (info["message"] as? String) ?? ""
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "OK", style: .default))
+                self.presentNativeUIKitController(alert)
+            }
+        })
+
+        self.observers.append(nc.addObserver(forName: FullGramChatGiftPayload.openCardNotification, object: nil, queue: .main) { [weak self] note in
+            guard let data = note.userInfo?["payload"] as? Data,
+                  let payload = try? JSONDecoder().decode(FullGramChatGiftPayload.self, from: data) else {
+                return
+            }
+            let peerRaw = note.userInfo?["peerId"] as? Int64 ?? 0
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let peerId = peerRaw != 0 ? EnginePeer.Id(peerRaw) : self.context.account.peerId
+                self.presentChatGiftCardSheet(payload: payload, peerId: peerId)
+            }
+        })
+
+        self.observers.append(nc.addObserver(forName: FullGramEconomy.openGiftMarketNotification, object: nil, queue: .main) { [weak self] note in
+            let peerRaw = note.userInfo?["peerId"] as? Int64
+            let peerName = note.userInfo?["peerName"] as? String
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let targetPeer = peerRaw.map { EnginePeer.Id($0) }
+                let vc = fullGramGiftMarketController(context: self.context, targetPeerId: targetPeer, targetPeerName: peerName)
+                if let nav = self.rootController {
+                    nav.pushViewController(vc)
+                } else {
+                    self.context.sharedContext.presentGlobalController(vc, nil)
+                }
+            }
+        })
+    }
+
+    private func presentChatGiftCardSheet(payload: FullGramChatGiftPayload, peerId: EnginePeer.Id) {
+        if payload.kind == .stars {
+            let vc = fullGramEconomyHubController(context: self.context)
+            if let nav = self.rootController {
+                nav.pushViewController(vc)
+            } else {
+                self.context.sharedContext.presentGlobalController(vc, nil)
+            }
+            return
+        }
+        if let owned = FullGramEconomy.shared.findOwnedGift(id: payload.giftRecordId) {
+            let vc = fullGramGiftUpgradeController(context: self.context, ownedGift: owned)
+            if let nav = self.rootController {
+                nav.pushViewController(vc)
+            } else {
+                self.context.sharedContext.presentGlobalController(vc, nil)
+            }
+            return
+        }
+        var lines: [String] = []
+        if let num = payload.number {
+            lines.append("Номер: #\(num)")
+        }
+        if let model = payload.modelName, !model.isEmpty {
+            lines.append("Модель: \(model)")
+        }
+        if let bg = payload.backdropName, !bg.isEmpty {
+            lines.append("Фон: \(bg)")
+        }
+        if let pat = payload.patternName, !pat.isEmpty {
+            lines.append("Узор: \(pat)")
+        }
+        if !payload.comment.isEmpty {
+            lines.append("Комментарий: «\(payload.comment)»")
+        }
+        if payload.starsPrice > 0 {
+            lines.append("Цена: ★ \(payload.starsPrice)")
+        }
+        let alert = UIAlertController(
+            title: "\(payload.emoji) \(payload.title)",
+            message: lines.isEmpty ? "Коллекционный подарок FullGram" : lines.joined(separator: "\n"),
+            preferredStyle: .alert
+        )
+        if payload.canUpgrade {
+            alert.addAction(UIAlertAction(title: "Улучшить до NFT", style: .default) { [weak self] _ in
+                guard let self else { return }
+                let vc = fullGramMyGiftsAndUpgradesController(context: self.context, peerId: peerId)
+                if let nav = self.rootController {
+                    nav.pushViewController(vc)
+                } else {
+                    self.context.sharedContext.presentGlobalController(vc, nil)
+                }
+            })
+        }
+        alert.addAction(UIAlertAction(title: "OK", style: .cancel))
+        self.presentNativeUIKitController(alert)
     }
 
     private func presentNativeUIKitController(_ vc: UIViewController, retryCount: Int = 0) {
@@ -1473,6 +1789,8 @@ final class FullGramAIOverlayCoordinator {
             webVC.modalPresentationStyle = .fullScreen
             self.presentNativeUIKitController(webVC, retryCount: retryCount)
             return
+        } else if kind == "nick_clock" || kind == "fg_nick_clock" {
+            vc = FullGramNickClockGUIViewController()
         } else if kind.contains("deadline") || kind.contains("dl") {
             vc = FullGramDeadlinesGUIViewController(onSendToChat: sendToChat)
         } else {
@@ -1496,6 +1814,9 @@ final class FullGramAIOverlayCoordinator {
         })
         sheet.addAction(UIAlertAction(title: "⏰ Открыть Дедлайны (Графический UI)", style: .default) { [weak self] _ in
             self?.presentPluginGUI(spec: ["kind": "deadlines", "pluginId": "fg_deadlines"])
+        })
+        sheet.addAction(UIAlertAction(title: "⌚ Живой Ник и Часы (.nick)", style: .default) { [weak self] _ in
+            self?.presentPluginGUI(spec: ["kind": "nick_clock", "pluginId": "fg_nick_clock"])
         })
         if FullGramPluginManager.shared.isSystemEnabled {
             let commands = FullGramPluginManager.shared.availableCommands()
@@ -1935,6 +2256,364 @@ func fullGramBuildChatStatsSignal(
 }
 
 // MARK: - Graphical UI Engine for Lua & Python Plugins (`fullgram.open_ui`)
+
+// MARK: - Graphical Live Nickname & Phone Clock Manager (`fg_nick_clock`)
+
+private final class FullGramNickClockGUIViewController: UIViewController {
+    private let scrollView = UIScrollView()
+    private let previewLabel = UILabel()
+    private let phoneTimeLabel = UILabel()
+    private let clockSwitch = UISwitch()
+    private let bioSwitch = UISwitch()
+    private let baseNameField = UITextField()
+    private let templateField = UITextField()
+    private let bioTemplateField = UITextField()
+    private let styleControl = UISegmentedControl(items: ["Обычный", "Жирный", "Моно", "Контур", "Круг"])
+    private let intervalControl = UISegmentedControl(items: ["15с", "30с", "60с", "5м"])
+    private var liveTimer: Timer?
+
+    private let styleKeys = ["normal", "bold", "mono", "double", "circled"]
+    private let intervalValues = [15, 30, 60, 300]
+
+    init() {
+        super.init(nibName: nil, bundle: nil)
+        self.title = "⌚ Живой Ник и Часы"
+    }
+
+    required init?(coder: NSCoder) { return nil }
+
+    deinit {
+        self.liveTimer?.invalidate()
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        self.view.backgroundColor = .systemGroupedBackground
+        self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Закрыть", style: .plain, target: self, action: #selector(self.closeTapped))
+        self.navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Сбросить", style: .plain, target: self, action: #selector(self.resetTapped))
+
+        self.scrollView.translatesAutoresizingMaskIntoConstraints = false
+        self.scrollView.keyboardDismissMode = .interactive
+        self.view.addSubview(self.scrollView)
+        NSLayoutConstraint.activate([
+            self.scrollView.topAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.topAnchor),
+            self.scrollView.bottomAnchor.constraint(equalTo: self.view.bottomAnchor),
+            self.scrollView.leadingAnchor.constraint(equalTo: self.view.leadingAnchor),
+            self.scrollView.trailingAnchor.constraint(equalTo: self.view.trailingAnchor)
+        ])
+
+        let stack = UIStackView()
+        stack.axis = .vertical
+        stack.spacing = 12.0
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        self.scrollView.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: self.scrollView.contentLayoutGuide.topAnchor, constant: 14.0),
+            stack.bottomAnchor.constraint(equalTo: self.scrollView.contentLayoutGuide.bottomAnchor, constant: -28.0),
+            stack.leadingAnchor.constraint(equalTo: self.scrollView.contentLayoutGuide.leadingAnchor, constant: 16.0),
+            stack.trailingAnchor.constraint(equalTo: self.scrollView.contentLayoutGuide.trailingAnchor, constant: -16.0),
+            stack.widthAnchor.constraint(equalTo: self.scrollView.frameLayoutGuide.widthAnchor, constant: -32.0)
+        ])
+
+        let mgr = FullGramPluginManager.shared
+
+        // Preview Card
+        let previewCard = UIView()
+        previewCard.backgroundColor = .secondarySystemGroupedBackground
+        previewCard.layer.cornerRadius = 14.0
+        let previewHeader = UILabel()
+        previewHeader.text = "ПРЕДПРОСМОТР НИКА В TELEGRAM"
+        previewHeader.font = .systemFont(ofSize: 11.5, weight: .semibold)
+        previewHeader.textColor = .secondaryLabel
+        previewHeader.translatesAutoresizingMaskIntoConstraints = false
+
+        self.previewLabel.font = .systemFont(ofSize: 20.0, weight: .bold)
+        self.previewLabel.numberOfLines = 2
+        self.previewLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        self.phoneTimeLabel.font = .monospacedSystemFont(ofSize: 12.5, weight: .regular)
+        self.phoneTimeLabel.textColor = .secondaryLabel
+        self.phoneTimeLabel.numberOfLines = 0
+        self.phoneTimeLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        previewCard.addSubview(previewHeader)
+        previewCard.addSubview(self.previewLabel)
+        previewCard.addSubview(self.phoneTimeLabel)
+        NSLayoutConstraint.activate([
+            previewHeader.topAnchor.constraint(equalTo: previewCard.topAnchor, constant: 12.0),
+            previewHeader.leadingAnchor.constraint(equalTo: previewCard.leadingAnchor, constant: 14.0),
+            previewHeader.trailingAnchor.constraint(equalTo: previewCard.trailingAnchor, constant: -14.0),
+            self.previewLabel.topAnchor.constraint(equalTo: previewHeader.bottomAnchor, constant: 6.0),
+            self.previewLabel.leadingAnchor.constraint(equalTo: previewCard.leadingAnchor, constant: 14.0),
+            self.previewLabel.trailingAnchor.constraint(equalTo: previewCard.trailingAnchor, constant: -14.0),
+            self.phoneTimeLabel.topAnchor.constraint(equalTo: self.previewLabel.bottomAnchor, constant: 6.0),
+            self.phoneTimeLabel.leadingAnchor.constraint(equalTo: previewCard.leadingAnchor, constant: 14.0),
+            self.phoneTimeLabel.trailingAnchor.constraint(equalTo: previewCard.trailingAnchor, constant: -14.0),
+            self.phoneTimeLabel.bottomAnchor.constraint(equalTo: previewCard.bottomAnchor, constant: -12.0)
+        ])
+        stack.addArrangedSubview(previewCard)
+
+        // Enable switch card
+        let switchCard = UIView()
+        switchCard.backgroundColor = .secondarySystemGroupedBackground
+        switchCard.layer.cornerRadius = 12.0
+        let switchTitle = UILabel()
+        switchTitle.text = "Часы в нике (в фоне)"
+        switchTitle.font = .systemFont(ofSize: 16.0, weight: .medium)
+        switchTitle.translatesAutoresizingMaskIntoConstraints = false
+        self.clockSwitch.isOn = mgr.nickClockEnabled
+        self.clockSwitch.addTarget(self, action: #selector(self.clockSwitchChanged), for: .valueChanged)
+        self.clockSwitch.translatesAutoresizingMaskIntoConstraints = false
+        switchCard.addSubview(switchTitle)
+        switchCard.addSubview(self.clockSwitch)
+        NSLayoutConstraint.activate([
+            switchTitle.topAnchor.constraint(equalTo: switchCard.topAnchor, constant: 12.0),
+            switchTitle.bottomAnchor.constraint(equalTo: switchCard.bottomAnchor, constant: -12.0),
+            switchTitle.leadingAnchor.constraint(equalTo: switchCard.leadingAnchor, constant: 14.0),
+            self.clockSwitch.centerYAnchor.constraint(equalTo: switchTitle.centerYAnchor),
+            self.clockSwitch.trailingAnchor.constraint(equalTo: switchCard.trailingAnchor, constant: -14.0)
+        ])
+        stack.addArrangedSubview(switchCard)
+
+        // Base name
+        stack.addArrangedSubview(self.makeSectionLabel("БАЗОВОЕ ИМЯ ({name})"))
+        self.configureTextField(self.baseNameField, text: mgr.nickClockBaseFirstName, placeholder: "Ваше имя")
+        self.baseNameField.addTarget(self, action: #selector(self.fieldsEdited), for: .editingChanged)
+        stack.addArrangedSubview(self.baseNameField)
+
+        // Nick template
+        stack.addArrangedSubview(self.makeSectionLabel("ШАБЛОН НИКА ({time}, {clock}, {date}, {battery}, {name})"))
+        self.configureTextField(self.templateField, text: mgr.nickClockTemplate, placeholder: "{name} | ⌚ {time}")
+        self.templateField.addTarget(self, action: #selector(self.fieldsEdited), for: .editingChanged)
+        stack.addArrangedSubview(self.templateField)
+
+        // Preset buttons
+        let presetsRow = UIStackView()
+        presetsRow.axis = .horizontal
+        presetsRow.spacing = 6.0
+        presetsRow.distribution = .fillEqually
+        for (title, tpl) in [
+            ("Имя | ⌚", "{name} | ⌚ {time}"),
+            ("⌚ + Имя", "{clock} {time} • {name}"),
+            ("[Время]", "{name} [{time}]"),
+            ("🔋 + ⌚", "{name} | 🔋{battery}% {time}")
+        ] {
+            let btn = UIButton(type: .system)
+            btn.setTitle(title, for: .normal)
+            btn.titleLabel?.font = .systemFont(ofSize: 12.0, weight: .semibold)
+            btn.backgroundColor = .secondarySystemGroupedBackground
+            btn.layer.cornerRadius = 8.0
+            btn.heightAnchor.constraint(equalToConstant: 32.0).isActive = true
+            btn.accessibilityHint = tpl
+            btn.addTarget(self, action: #selector(self.presetTapped(_:)), for: .touchUpInside)
+            presetsRow.addArrangedSubview(btn)
+        }
+        stack.addArrangedSubview(presetsRow)
+
+        // Style selector
+        stack.addArrangedSubview(self.makeSectionLabel("ШРИФТ ЦИФР ВРЕМЕНИ"))
+        let currentStyleIdx = self.styleKeys.firstIndex(of: mgr.nickClockStyle.lowercased()) ?? 1
+        self.styleControl.selectedSegmentIndex = currentStyleIdx
+        self.styleControl.addTarget(self, action: #selector(self.styleChanged), for: .valueChanged)
+        stack.addArrangedSubview(self.styleControl)
+
+        // Interval selector
+        stack.addArrangedSubview(self.makeSectionLabel("ИНТЕРВАЛ ФОНОВОГО ОБНОВЛЕНИЯ"))
+        let curInt = mgr.nickClockInterval
+        let nearestIdx = self.intervalValues.enumerated().min(by: { abs($0.element - curInt) < abs($1.element - curInt) })?.offset ?? 1
+        self.intervalControl.selectedSegmentIndex = nearestIdx
+        self.intervalControl.addTarget(self, action: #selector(self.intervalChanged), for: .valueChanged)
+        stack.addArrangedSubview(self.intervalControl)
+
+        // Bio auto-update card
+        let bioCard = UIView()
+        bioCard.backgroundColor = .secondarySystemGroupedBackground
+        bioCard.layer.cornerRadius = 12.0
+        let bioTitle = UILabel()
+        bioTitle.text = "Обновлять время в «О себе» (Био)"
+        bioTitle.font = .systemFont(ofSize: 15.0, weight: .medium)
+        bioTitle.translatesAutoresizingMaskIntoConstraints = false
+        self.bioSwitch.isOn = mgr.nickClockUpdateBio
+        self.bioSwitch.addTarget(self, action: #selector(self.bioSwitchChanged), for: .valueChanged)
+        self.bioSwitch.translatesAutoresizingMaskIntoConstraints = false
+        bioCard.addSubview(bioTitle)
+        bioCard.addSubview(self.bioSwitch)
+        NSLayoutConstraint.activate([
+            bioTitle.topAnchor.constraint(equalTo: bioCard.topAnchor, constant: 11.0),
+            bioTitle.bottomAnchor.constraint(equalTo: bioCard.bottomAnchor, constant: -11.0),
+            bioTitle.leadingAnchor.constraint(equalTo: bioCard.leadingAnchor, constant: 14.0),
+            self.bioSwitch.centerYAnchor.constraint(equalTo: bioTitle.centerYAnchor),
+            self.bioSwitch.trailingAnchor.constraint(equalTo: bioCard.trailingAnchor, constant: -14.0)
+        ])
+        stack.addArrangedSubview(bioCard)
+
+        self.configureTextField(self.bioTemplateField, text: mgr.nickClockBioTemplate, placeholder: "⌚ {time} • 📅 {date} • 🔋 {battery}%")
+        stack.addArrangedSubview(self.bioTemplateField)
+
+        // Action buttons
+        let applyBtn = self.makeActionButton(title: "✨ Применить в Telegram сейчас", color: .systemBlue, action: #selector(self.applyNowTapped))
+        let manualBtn = self.makeActionButton(title: "✏️ Сменить ник вручную", color: .systemIndigo, action: #selector(self.manualNickTapped))
+        let restoreBtn = self.makeActionButton(title: "↩️ Восстановить исходный ник", color: .systemRed, action: #selector(self.resetTapped))
+        stack.addArrangedSubview(applyBtn)
+        stack.addArrangedSubview(manualBtn)
+        stack.addArrangedSubview(restoreBtn)
+
+        self.refreshPreview()
+        self.liveTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.refreshPreview()
+        }
+    }
+
+    private func makeSectionLabel(_ text: String) -> UILabel {
+        let lbl = UILabel()
+        lbl.text = text
+        lbl.font = .systemFont(ofSize: 11.5, weight: .semibold)
+        lbl.textColor = .secondaryLabel
+        return lbl
+    }
+
+    private func configureTextField(_ tf: UITextField, text: String, placeholder: String) {
+        tf.text = text
+        tf.placeholder = placeholder
+        tf.backgroundColor = .secondarySystemGroupedBackground
+        tf.layer.cornerRadius = 10.0
+        tf.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 12, height: 1))
+        tf.leftViewMode = .always
+        tf.clearButtonMode = .whileEditing
+        tf.autocorrectionType = .no
+        tf.heightAnchor.constraint(equalToConstant: 42.0).isActive = true
+    }
+
+    private func makeActionButton(title: String, color: UIColor, action: Selector) -> UIButton {
+        let btn = UIButton(type: .system)
+        btn.setTitle(title, for: .normal)
+        btn.setTitleColor(.white, for: .normal)
+        btn.titleLabel?.font = .systemFont(ofSize: 15.0, weight: .semibold)
+        btn.backgroundColor = color
+        btn.layer.cornerRadius = 12.0
+        btn.heightAnchor.constraint(equalToConstant: 46.0).isActive = true
+        btn.addTarget(self, action: action, for: .touchUpInside)
+        return btn
+    }
+
+    private func selectedStyle() -> String {
+        let idx = max(0, min(self.styleKeys.count - 1, self.styleControl.selectedSegmentIndex))
+        return self.styleKeys[idx]
+    }
+
+    private func refreshPreview() {
+        let mgr = FullGramPluginManager.shared
+        let tpl = (self.templateField.text?.isEmpty == false) ? self.templateField.text! : mgr.nickClockTemplate
+        let base = (self.baseNameField.text?.isEmpty == false) ? self.baseNameField.text! : mgr.nickClockBaseFirstName
+        let pair = mgr.formatNicknameTemplate(tpl, baseFirstName: base, baseLastName: mgr.nickClockBaseLastName, style: self.selectedStyle())
+        self.previewLabel.text = pair.lastName.isEmpty ? pair.firstName : "\(pair.firstName) \(pair.lastName)"
+
+        let t = FullGramPluginTimeHelper.buildPhoneTimeDict()
+        let hms = t["hms"]?.asString ?? ""
+        let date = t["date"]?.asString ?? ""
+        let tz = t["timezone"]?.asString ?? ""
+        let clock = t["clock_emoji"]?.asString ?? "⌚"
+        let bg = mgr.backgroundStatusSummary()
+        self.phoneTimeLabel.text = "\(clock) Телефон: \(hms) • \(date) (\(tz))\nФоновый движок: \(bg.running ? "активен" : "на паузе") • тиков: \(bg.totalTicks)"
+    }
+
+    @objc private func fieldsEdited() {
+        self.refreshPreview()
+    }
+
+    @objc private func presetTapped(_ sender: UIButton) {
+        if let tpl = sender.accessibilityHint {
+            self.templateField.text = tpl
+            FullGramPluginManager.shared.nickClockTemplate = tpl
+            self.refreshPreview()
+        }
+    }
+
+    @objc private func clockSwitchChanged() {
+        self.saveFieldsToManager()
+        FullGramPluginManager.shared.nickClockEnabled = self.clockSwitch.isOn
+        self.refreshPreview()
+    }
+
+    @objc private func bioSwitchChanged() {
+        self.saveFieldsToManager()
+        FullGramPluginManager.shared.nickClockUpdateBio = self.bioSwitch.isOn
+        self.refreshPreview()
+    }
+
+    @objc private func styleChanged() {
+        FullGramPluginManager.shared.nickClockStyle = self.selectedStyle()
+        self.refreshPreview()
+    }
+
+    @objc private func intervalChanged() {
+        let idx = max(0, min(self.intervalValues.count - 1, self.intervalControl.selectedSegmentIndex))
+        FullGramPluginManager.shared.nickClockInterval = self.intervalValues[idx]
+        self.refreshPreview()
+    }
+
+    private func saveFieldsToManager() {
+        let mgr = FullGramPluginManager.shared
+        if let base = self.baseNameField.text?.trimmingCharacters(in: .whitespacesAndNewlines), !base.isEmpty {
+            mgr.nickClockBaseFirstName = base
+        }
+        if let tpl = self.templateField.text?.trimmingCharacters(in: .whitespacesAndNewlines), !tpl.isEmpty {
+            mgr.nickClockTemplate = tpl
+        }
+        if let bioTpl = self.bioTemplateField.text?.trimmingCharacters(in: .whitespacesAndNewlines), !bioTpl.isEmpty {
+            mgr.nickClockBioTemplate = bioTpl
+        }
+        mgr.nickClockStyle = self.selectedStyle()
+    }
+
+    @objc private func applyNowTapped() {
+        self.view.endEditing(true)
+        self.saveFieldsToManager()
+        let applied = FullGramPluginManager.shared.applyLiveNicknameClockNow(force: true)
+        if self.bioSwitch.isOn {
+            _ = FullGramPluginManager.shared.applyLiveBioClockNow()
+        }
+        self.refreshPreview()
+        let alert = UIAlertController(title: "Ник обновлён", message: "Установлено имя в Telegram:\n\(applied)", preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        self.present(alert, animated: true)
+    }
+
+    @objc private func manualNickTapped() {
+        let prof = FullGramPluginManager.shared.currentProfile()
+        let alert = UIAlertController(title: "Сменить ник в Telegram", message: "Можно использовать плейсхолдеры {time}, {date}, {battery}.", preferredStyle: .alert)
+        alert.addTextField { tf in
+            tf.placeholder = "Имя"
+            tf.text = prof.firstName
+        }
+        alert.addTextField { tf in
+            tf.placeholder = "Фамилия (необязательно)"
+            tf.text = prof.lastName
+        }
+        alert.addAction(UIAlertAction(title: "Сохранить", style: .default) { [weak self] _ in
+            let first = alert.textFields?.first?.text ?? ""
+            let last = alert.textFields?.last?.text ?? ""
+            guard !first.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            let pair = FullGramPluginManager.shared.formatNicknameTemplate("\(first) || \(last)", baseFirstName: first, baseLastName: last, style: self?.selectedStyle() ?? "normal")
+            _ = FullGramPluginManager.shared.requestSetNickname(firstName: pair.firstName, lastName: pair.lastName, pluginId: "fg_nick_clock", force: true)
+            self?.refreshPreview()
+        })
+        alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+        self.present(alert, animated: true)
+    }
+
+    @objc private func resetTapped() {
+        self.clockSwitch.isOn = false
+        self.bioSwitch.isOn = false
+        FullGramPluginManager.shared.nickClockUpdateBio = false
+        FullGramPluginManager.shared.nickClockEnabled = false
+        self.refreshPreview()
+    }
+
+    @objc private func closeTapped() {
+        self.dismiss(animated: true)
+    }
+}
 
 // MARK: - Graphical Deadlines Manager (`fg_deadlines`)
 

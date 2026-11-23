@@ -420,7 +420,8 @@ extension ChatControllerImpl {
     }
         
     func beginDeleteMessagesWithUndo(messageIds: Set<EngineMessage.Id>, type: InteractiveMessagesDeletionType) {
-        if FullGramExtras.shared.deletePaperAnimation {
+        let deleteStyle = FullGramExtras.shared.deleteAnimationStyle
+        if deleteStyle != .none {
             let hostView = self.chatDisplayNode.view
             var snapshots: [(view: UIView, frameInHost: CGRect)] = []
             self.chatDisplayNode.historyNode.forEachItemNode { itemNode in
@@ -435,7 +436,7 @@ extension ChatControllerImpl {
                 }
             }
             if !snapshots.isEmpty {
-                FullGramPaperTrashAnimator.animateDelete(snapshots: snapshots, in: hostView)
+                FullGramPaperTrashAnimator.animateDelete(snapshots: snapshots, in: hostView, styleRaw: deleteStyle.rawValue)
             }
         }
 

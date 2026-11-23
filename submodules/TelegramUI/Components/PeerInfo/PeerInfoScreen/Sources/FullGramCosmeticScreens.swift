@@ -363,11 +363,13 @@ private final class FullGramAvatarFramesViewController: ViewController, UITextFi
                 counts[item.category, default: 0] += 1
             }
             let preferredOrder = ["FullGram", "Кибер", "Неон", "Аниме", "Милые", "Стихия", "Космос", "Природа", "Игры", "Эмоции", "Эффект", "Флаги", "Discord"]
+            let favCount = FullGramAvatarFrames.favoriteFrameIds.count
             var result: [(String, Int)] = [
                 ("Все", allF.count),
+                ("★ Избранное", favCount),
                 ("⭐ Свои", FullGramAvatarFrames.customFullGramFrames.count)
             ]
-            var seen: Set<String> = ["Все", "⭐ Свои"]
+            var seen: Set<String> = ["Все", "★ Избранное", "⭐ Свои"]
             for cat in preferredOrder {
                 if let c = counts[cat], c > 0 {
                     result.append((cat, c))
@@ -385,8 +387,12 @@ private final class FullGramAvatarFramesViewController: ViewController, UITextFi
                 counts[item.category, default: 0] += 1
             }
             let preferredOrder = ["Кибер", "Аниме", "Милые", "Стихия", "Космос", "Природа", "Игры", "Discord"]
-            var result: [(String, Int)] = [("Все", allE.count)]
-            var seen: Set<String> = ["Все"]
+            let favCount = FullGramProfileEffects.favoriteEffectIds.count
+            var result: [(String, Int)] = [
+                ("Все", allE.count),
+                ("★ Избранное", favCount)
+            ]
+            var seen: Set<String> = ["Все", "★ Избранное"]
             for cat in preferredOrder {
                 if let c = counts[cat], c > 0 {
                     result.append((cat, c))
@@ -465,7 +471,10 @@ private final class FullGramAvatarFramesViewController: ViewController, UITextFi
 
         var frames = allF
         if self.activeTab == .frames && cat != "Все" {
-            if cat == "⭐ Свои" {
+            if cat == "★ Избранное" {
+                let favSet = Set(FullGramAvatarFrames.favoriteFrameIds)
+                frames = frames.filter { favSet.contains($0.id) }
+            } else if cat == "⭐ Свои" {
                 frames = frames.filter { Self.customFrameIds.contains($0.id) }
             } else {
                 frames = frames.filter { $0.category == cat }
@@ -480,7 +489,12 @@ private final class FullGramAvatarFramesViewController: ViewController, UITextFi
 
         var effects = allE
         if self.activeTab == .profileEffects && cat != "Все" {
-            effects = effects.filter { $0.category == cat }
+            if cat == "★ Избранное" {
+                let favSet = Set(FullGramProfileEffects.favoriteEffectIds)
+                effects = effects.filter { favSet.contains($0.id) }
+            } else {
+                effects = effects.filter { $0.category == cat }
+            }
         }
         if !q.isEmpty {
             effects = effects.filter {
@@ -620,7 +634,7 @@ private final class FullGramAvatarFramesViewController: ViewController, UITextFi
                    let idx = self.collectionView.indexPath(for: frameCell),
                    idx.item < self.filteredFrames.count {
                     let preset = self.filteredFrames[idx.item]
-                    frameCell.updateSelection(selected: activeId == preset.id, preset: preset, theme: theme)
+                    frameCell.updateSelection(selected: activeId == preset.id, favorite: FullGramAvatarFrames.isFavoriteFrame(preset.id), preset: preset, theme: theme)
                 }
             }
         } else {
@@ -630,7 +644,7 @@ private final class FullGramAvatarFramesViewController: ViewController, UITextFi
                    let idx = self.collectionView.indexPath(for: effectCell),
                    idx.item < self.filteredEffects.count {
                     let preset = self.filteredEffects[idx.item]
-                    effectCell.updateSelection(selected: activeId == preset.id, preset: preset, theme: theme)
+                    effectCell.updateSelection(selected: activeId == preset.id, favorite: FullGramProfileEffects.isFavoriteEffect(preset.id), preset: preset, theme: theme)
                 }
             }
         }
@@ -647,13 +661,29 @@ extension FullGramAvatarFramesViewController: UICollectionViewDataSource, UIColl
             let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "FrameCell", for: indexPath) as! FullGramFrameGridCell
             let preset = self.filteredFrames[indexPath.item]
             let activeId = FullGramAvatarFrames.selectedFrameId(forPeerId: self.selfPeerId)
-            cell.configure(preset: preset, selected: activeId == preset.id, theme: self.presentationData.theme)
+            cell.configure(preset: preset, selected: activeId == preset.id, favorite: FullGramAvatarFrames.isFavoriteFrame(preset.id), theme: self.presentationData.theme) { [weak self] in
+                FullGramAvatarFrames.toggleFavoriteFrame(preset.id)
+                self?.rebuildCategoryBar()
+                if self?.selectedCategory == "★ Избранное" {
+                    self?.applyFilter()
+                } else {
+                    self?.updateVisibleCellSelectionStates()
+                }
+            }
             return cell
         } else {
             let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "EffectCell", for: indexPath) as! FullGramProfileEffectGridCell
             let preset = self.filteredEffects[indexPath.item]
             let activeId = FullGramProfileEffects.selectedEffectId(forPeerId: self.selfPeerId)
-            cell.configure(preset: preset, selected: activeId == preset.id, theme: self.presentationData.theme)
+            cell.configure(preset: preset, selected: activeId == preset.id, favorite: FullGramProfileEffects.isFavoriteEffect(preset.id), theme: self.presentationData.theme) { [weak self] in
+                FullGramProfileEffects.toggleFavoriteEffect(preset.id)
+                self?.rebuildCategoryBar()
+                if self?.selectedCategory == "★ Избранное" {
+                    self?.applyFilter()
+                } else {
+                    self?.updateVisibleCellSelectionStates()
+                }
+            }
             return cell
         }
     }
@@ -712,8 +742,10 @@ private final class FullGramFrameGridCell: UICollectionViewCell {
     private let avatarCircle = UIView()
     private let frameView = FullGramAvatarFrameView()
     private let loadingSpinner = UIActivityIndicatorView(style: .medium)
+    private let starButton = UIButton(type: .system)
     private let titleLabel = UILabel()
     private let catLabel = UILabel()
+    private var onToggleFavorite: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -741,6 +773,11 @@ private final class FullGramFrameGridCell: UICollectionViewCell {
             }
         }
 
+        self.starButton.translatesAutoresizingMaskIntoConstraints = false
+        self.starButton.titleLabel?.font = UIFont.systemFont(ofSize: 13.0)
+        self.starButton.addTarget(self, action: #selector(self.starTapped), for: .touchUpInside)
+        self.contentView.addSubview(self.starButton)
+
         self.titleLabel.translatesAutoresizingMaskIntoConstraints = false
         self.titleLabel.font = UIFont.systemFont(ofSize: 11.0, weight: .semibold)
         self.titleLabel.textAlignment = .center
@@ -766,6 +803,11 @@ private final class FullGramFrameGridCell: UICollectionViewCell {
             self.loadingSpinner.centerXAnchor.constraint(equalTo: self.avatarCircle.centerXAnchor),
             self.loadingSpinner.centerYAnchor.constraint(equalTo: self.avatarCircle.centerYAnchor),
 
+            self.starButton.topAnchor.constraint(equalTo: self.contentView.topAnchor, constant: 2.0),
+            self.starButton.trailingAnchor.constraint(equalTo: self.contentView.trailingAnchor, constant: -2.0),
+            self.starButton.widthAnchor.constraint(equalToConstant: 24.0),
+            self.starButton.heightAnchor.constraint(equalToConstant: 24.0),
+
             self.titleLabel.topAnchor.constraint(equalTo: self.avatarCircle.bottomAnchor, constant: 9.0),
             self.titleLabel.leadingAnchor.constraint(equalTo: self.contentView.leadingAnchor, constant: 4.0),
             self.titleLabel.trailingAnchor.constraint(equalTo: self.contentView.trailingAnchor, constant: -4.0),
@@ -781,8 +823,13 @@ private final class FullGramFrameGridCell: UICollectionViewCell {
         fatalError("init(coder:) has not been implemented")
     }
 
+    @objc private func starTapped() {
+        self.onToggleFavorite?()
+    }
+
     override func prepareForReuse() {
         super.prepareForReuse()
+        self.onToggleFavorite = nil
         self.frameView.cancelPendingLoad()
         self.loadingSpinner.stopAnimating()
     }
@@ -792,17 +839,20 @@ private final class FullGramFrameGridCell: UICollectionViewCell {
         self.loadingSpinner.stopAnimating()
     }
 
-    func configure(preset: FullGramAvatarFramePreset, selected: Bool, theme: PresentationTheme) {
+    func configure(preset: FullGramAvatarFramePreset, selected: Bool, favorite: Bool, theme: PresentationTheme, onToggleFavorite: @escaping () -> Void) {
+        self.onToggleFavorite = onToggleFavorite
         self.titleLabel.text = preset.title
         self.titleLabel.textColor = theme.list.itemPrimaryTextColor
-        self.updateSelection(selected: selected, preset: preset, theme: theme)
+        self.updateSelection(selected: selected, favorite: favorite, preset: preset, theme: theme)
         self.frameView.configureThumbnail(with: preset)
     }
 
-    func updateSelection(selected: Bool, preset: FullGramAvatarFramePreset, theme: PresentationTheme) {
+    func updateSelection(selected: Bool, favorite: Bool, preset: FullGramAvatarFramePreset, theme: PresentationTheme) {
         self.contentView.backgroundColor = theme.list.itemBlocksBackgroundColor
         self.contentView.layer.borderWidth = selected ? 2.0 : 0.5
         self.contentView.layer.borderColor = (selected ? UIColor(rgb: preset.accentHex) : theme.list.itemBlocksSeparatorColor.withAlphaComponent(0.35)).cgColor
+        self.starButton.setTitle(favorite ? "★" : "☆", for: .normal)
+        self.starButton.setTitleColor(favorite ? UIColor(rgb: 0xFFCC00) : theme.list.itemSecondaryTextColor, for: .normal)
         self.catLabel.text = selected ? "✓ Активна" : preset.category
         self.catLabel.textColor = selected ? UIColor(rgb: preset.accentHex) : theme.list.itemSecondaryTextColor
     }
@@ -812,8 +862,10 @@ private final class FullGramProfileEffectGridCell: UICollectionViewCell {
     private let previewBox = UIView()
     private let effectView = FullGramProfileEffectOverlayView()
     private let loadingSpinner = UIActivityIndicatorView(style: .medium)
+    private let starButton = UIButton(type: .system)
     private let titleLabel = UILabel()
     private let catLabel = UILabel()
+    private var onToggleFavorite: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -844,6 +896,11 @@ private final class FullGramProfileEffectGridCell: UICollectionViewCell {
             }
         }
 
+        self.starButton.translatesAutoresizingMaskIntoConstraints = false
+        self.starButton.titleLabel?.font = UIFont.systemFont(ofSize: 13.0)
+        self.starButton.addTarget(self, action: #selector(self.starTapped), for: .touchUpInside)
+        self.contentView.addSubview(self.starButton)
+
         self.titleLabel.translatesAutoresizingMaskIntoConstraints = false
         self.titleLabel.font = UIFont.systemFont(ofSize: 11.0, weight: .semibold)
         self.titleLabel.textAlignment = .center
@@ -869,6 +926,11 @@ private final class FullGramProfileEffectGridCell: UICollectionViewCell {
             self.loadingSpinner.centerXAnchor.constraint(equalTo: self.previewBox.centerXAnchor),
             self.loadingSpinner.centerYAnchor.constraint(equalTo: self.previewBox.centerYAnchor),
 
+            self.starButton.topAnchor.constraint(equalTo: self.contentView.topAnchor, constant: 4.0),
+            self.starButton.trailingAnchor.constraint(equalTo: self.contentView.trailingAnchor, constant: -4.0),
+            self.starButton.widthAnchor.constraint(equalToConstant: 24.0),
+            self.starButton.heightAnchor.constraint(equalToConstant: 24.0),
+
             self.titleLabel.topAnchor.constraint(equalTo: self.previewBox.bottomAnchor, constant: 5.0),
             self.titleLabel.leadingAnchor.constraint(equalTo: self.contentView.leadingAnchor, constant: 4.0),
             self.titleLabel.trailingAnchor.constraint(equalTo: self.contentView.trailingAnchor, constant: -4.0),
@@ -884,8 +946,13 @@ private final class FullGramProfileEffectGridCell: UICollectionViewCell {
         fatalError("init(coder:) has not been implemented")
     }
 
+    @objc private func starTapped() {
+        self.onToggleFavorite?()
+    }
+
     override func prepareForReuse() {
         super.prepareForReuse()
+        self.onToggleFavorite = nil
         self.effectView.cancelPendingLoad()
         self.loadingSpinner.stopAnimating()
     }
@@ -895,17 +962,20 @@ private final class FullGramProfileEffectGridCell: UICollectionViewCell {
         self.loadingSpinner.stopAnimating()
     }
 
-    func configure(preset: FullGramProfileEffectPreset, selected: Bool, theme: PresentationTheme) {
+    func configure(preset: FullGramProfileEffectPreset, selected: Bool, favorite: Bool, theme: PresentationTheme, onToggleFavorite: @escaping () -> Void) {
+        self.onToggleFavorite = onToggleFavorite
         self.titleLabel.text = preset.title
         self.titleLabel.textColor = theme.list.itemPrimaryTextColor
-        self.updateSelection(selected: selected, preset: preset, theme: theme)
+        self.updateSelection(selected: selected, favorite: favorite, preset: preset, theme: theme)
         self.effectView.configureThumbnail(with: preset)
     }
 
-    func updateSelection(selected: Bool, preset: FullGramProfileEffectPreset, theme: PresentationTheme) {
+    func updateSelection(selected: Bool, favorite: Bool, preset: FullGramProfileEffectPreset, theme: PresentationTheme) {
         self.contentView.backgroundColor = theme.list.itemBlocksBackgroundColor
         self.contentView.layer.borderWidth = selected ? 2.0 : 0.5
         self.contentView.layer.borderColor = (selected ? UIColor(rgb: preset.accentHex) : theme.list.itemBlocksSeparatorColor.withAlphaComponent(0.35)).cgColor
+        self.starButton.setTitle(favorite ? "★" : "☆", for: .normal)
+        self.starButton.setTitleColor(favorite ? UIColor(rgb: 0xFFCC00) : .white, for: .normal)
         self.catLabel.text = selected ? "✓ В профиле" : preset.category
         self.catLabel.textColor = selected ? UIColor(rgb: preset.accentHex) : theme.list.itemSecondaryTextColor
     }

@@ -608,10 +608,24 @@ public final class SharedAccountContextImpl: SharedAccountContext {
         FullGramMiniLyrics.shared.fetch = { title, artist, duration in
             return FullGramLyricsFetcher.fetch(title: title, artist: artist, duration: duration)
             |> map { result -> [FullGramMiniLyrics.Line]? in
-                if case let .synced(lines) = result {
+                switch result {
+                case let .synced(lines):
                     return lines.map { FullGramMiniLyrics.Line(time: $0.time, endTime: $0.endTime, text: $0.text) }
+                case let .plain(plainText):
+                    let rawLines = plainText
+                        .components(separatedBy: .newlines)
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty }
+                    guard !rawLines.isEmpty else { return nil }
+                    let totalDur = max(duration, 30.0)
+                    let step = max(1.5, (totalDur - 4.0) / Double(rawLines.count))
+                    return rawLines.enumerated().map { idx, text in
+                        let start = 2.0 + Double(idx) * step
+                        return FullGramMiniLyrics.Line(time: start, endTime: start + step, text: text)
+                    }
+                case .empty:
+                    return nil
                 }
-                return nil
             }
         }
         self.fullGramPowerSavingObserver = NotificationCenter.default.addObserver(forName: FullGramPowerSaving.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -623,7 +637,23 @@ public final class SharedAccountContextImpl: SharedAccountContext {
         FullGramCloudCosmetics.shared.refreshIfNeeded(maxAge: 10.0)
         FullGramBadges.shared.refreshIfNeeded()
         FullGramSponsors.shared.refreshIfNeeded(maxAge: 10.0)
+        FullGramEconomy.shared.refreshCloudIfNeeded(maxAge: 15.0)
         FullGramDiscordCosmeticsCatalog.shared.refreshIfNeeded(maxAge: 21600.0)
+        FullGramGrantedNFTStore.shared.onServerNFTAction = { actorPeerId, targetPeerId, toPeerId, entryId, slug, action, modelName, backdropName, backdropId, patternName, number in
+            FullGramAdmin.shared.performNFTAction(
+                actorPeerId: actorPeerId,
+                targetPeerId: targetPeerId,
+                toPeerId: toPeerId,
+                entryId: entryId,
+                slug: slug,
+                action: action,
+                modelName: modelName,
+                backdropName: backdropName,
+                backdropId: backdropId,
+                patternName: patternName,
+                number: number
+            ) { _ in }
+        }
         self.fullGramForegroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { _ in
             FullGramCloudCosmetics.shared.refreshIfNeeded(maxAge: 20.0)
             FullGramBadges.shared.refreshIfNeeded()

@@ -991,7 +991,18 @@ private final class GiftViewSheetContent: CombinedComponent {
         }
 
         var canDeleteGift: Bool {
-            guard let arguments = self.subject.arguments, arguments.reference != nil, case let .generic(gift) = arguments.gift, gift.availability == nil else {
+            guard let arguments = self.subject.arguments, arguments.reference != nil else {
+                return false
+            }
+            if case let .unique(uniqueGift) = arguments.gift {
+                if uniqueGift.slug.lowercased().hasPrefix("fullgram-"),
+                   case let .peerId(ownerId) = uniqueGift.owner,
+                   ownerId == self.context.account.peerId {
+                    return true
+                }
+                return false
+            }
+            guard case let .generic(gift) = arguments.gift, gift.availability == nil else {
                 return false
             }
             if arguments.converted || arguments.upgraded || arguments.refunded {
@@ -2238,6 +2249,40 @@ private final class GiftViewSheetContent: CombinedComponent {
                         
                         self?.updateSavedToProfile(!displayed)
                     })))
+                } else if gift.slug.lowercased().hasPrefix("fullgram-"),
+                          case let .peerId(ownerId) = gift.owner,
+                          ownerId == self.context.account.peerId,
+                          let reference = arguments.reference {
+                    let isVisibleOnProfile = arguments.savedToProfile
+                    items.append(.action(ContextMenuActionItem(text: isVisibleOnProfile ? strings.Gift_View_Context_HideFromProfile : strings.Gift_View_Context_ShowOnProfile, icon: { theme in
+                        return generateTintedImage(image: UIImage(bundleImageName: isVisibleOnProfile ? "Peer Info/HideIcon" : "Peer Info/ShowIcon"), color: theme.contextMenu.primaryColor)
+                    }, action: { [weak self] c, _ in
+                        c?.dismiss(completion: nil)
+                        self?.updateSavedToProfile(!isVisibleOnProfile)
+                        if case let .profileGift(peerId, profileGift) = self?.subject {
+                            self?.subject = .profileGift(peerId, profileGift.withSavedToProfile(!isVisibleOnProfile))
+                        }
+                    })))
+                    let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+                    items.append(.action(ContextMenuActionItem(text: ru ? "Улучшить NFT (FullGram)" : "Upgrade NFT (FullGram)", icon: { theme in
+                        return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Edit"), color: theme.contextMenu.primaryColor)
+                    }, action: { [weak self, weak controller] c, _ in
+                        c?.dismiss(completion: nil)
+                        guard let self else { return }
+                        let signal: Signal<ProfileGiftsContext.State.StarGift, UpgradeStarGiftError>
+                        if let upgradeGift = controller?.upgradeGift {
+                            signal = upgradeGift(nil, reference, true)
+                        } else {
+                            signal = self.context.engine.payments.upgradeStarGift(formId: nil, reference: reference, keepOriginalInfo: true)
+                        }
+                        let _ = (signal |> deliverOnMainQueue).start(next: { [weak self, weak controller] updatedGift in
+                            if case let .profileGift(peerId, _) = self?.subject {
+                                self?.subject = .profileGift(peerId, updatedGift)
+                            }
+                            self?.updated(transition: .spring(duration: 0.35))
+                            controller?.animateSuccess()
+                        })
+                    })))
                 }
                           
                 if let _ = arguments.canCraftDate {
@@ -2298,11 +2343,20 @@ private final class GiftViewSheetContent: CombinedComponent {
                             guard let self, let peer else {
                                 return
                             }
-                            self.openPeer(peer, gifts: true)
+                            controller.openPeer(peer, gifts: true)
                             Queue.mainQueue().after(0.6) {
                                 controller.dismiss(animated: false, completion: nil)
                             }
                         })
+                    })))
+                }
+
+                if self.canDeleteGift {
+                    items.append(.action(ContextMenuActionItem(text: presentationData.strings.Gift_View_Context_Delete, textColor: .destructive, icon: { theme in
+                        return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Delete"), color: theme.contextMenu.destructiveColor)
+                    }, action: { [weak self] c, _ in
+                        c?.dismiss(completion: nil)
+                        self?.deleteGift()
                     })))
                 }
                 

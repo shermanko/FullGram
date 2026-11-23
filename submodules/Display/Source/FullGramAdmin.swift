@@ -1,6 +1,15 @@
 import Foundation
 import Security
 
+public enum FullGramVersion {
+    public static let shortVersion = "1.7.0"
+    public static let isBeta = true
+
+    public static func displayString(russian: Bool) -> String {
+        return russian ? "\(self.shortVersion) · Бета-тест" : "\(self.shortVersion) · Beta Test"
+    }
+}
+
 public final class FullGramAdmin: @unchecked Sendable {
     public static let shared = FullGramAdmin()
     /// UI-only hint for showing the entry point to the admin panel before server verification.
@@ -154,6 +163,10 @@ public final class FullGramAdmin: @unchecked Sendable {
             return true
         }
         return false
+    }
+
+    public func deviceSecretValue() -> String {
+        return self.getOrCreateDeviceSecret()
     }
 
     private func getOrCreateDeviceSecret() -> String {
@@ -680,8 +693,9 @@ public final class FullGramAdmin: @unchecked Sendable {
         }
     }
 
-    public func updateSponsorSelfBadge(
-        peerId: Int64,
+    public func updateSponsorBadge(
+        actorPeerId: Int64,
+        targetPeerId: Int64,
         enabled: Bool,
         roleId: String?,
         customEmojiId: Int64?,
@@ -691,10 +705,11 @@ public final class FullGramAdmin: @unchecked Sendable {
         color: String?,
         completion: @escaping @Sendable (Result<Void, Error>) -> Void
     ) {
-        let normId = FullGramCloudCosmetics.normalizedPeerId(peerId)
+        let normActorId = FullGramCloudCosmetics.normalizedPeerId(actorPeerId)
+        let normTargetId = FullGramCloudCosmetics.normalizedPeerId(targetPeerId)
         var payload: [String: Any] = [
             "enabled": enabled,
-            "peerId": String(normId)
+            "peerId": String(normTargetId)
         ]
         if let roleId, !roleId.isEmpty {
             payload["roleId"] = roleId
@@ -715,7 +730,7 @@ public final class FullGramAdmin: @unchecked Sendable {
             payload["color"] = color
         }
 
-        self.sendClientSessionJSONRequest(path: "/sponsor/badge", peerId: normId, payload: payload, didRetry: false) { result in
+        self.sendClientSessionJSONRequest(path: "/sponsor/badge", peerId: normActorId, payload: payload, didRetry: false) { result in
             switch result {
             case .success:
                 FullGramBadges.shared.refreshNow { _ in
@@ -725,6 +740,31 @@ public final class FullGramAdmin: @unchecked Sendable {
                 completion(.failure(error))
             }
         }
+    }
+
+    public func updateSponsorSelfBadge(
+        peerId: Int64,
+        enabled: Bool,
+        roleId: String?,
+        customEmojiId: Int64?,
+        emoji: String?,
+        label: String?,
+        shortLabel: String?,
+        color: String?,
+        completion: @escaping @Sendable (Result<Void, Error>) -> Void
+    ) {
+        self.updateSponsorBadge(
+            actorPeerId: peerId,
+            targetPeerId: peerId,
+            enabled: enabled,
+            roleId: roleId,
+            customEmojiId: customEmojiId,
+            emoji: emoji,
+            label: label,
+            shortLabel: shortLabel,
+            color: color,
+            completion: completion
+        )
     }
 
     public func grantSponsorNFT(
@@ -826,6 +866,84 @@ public final class FullGramAdmin: @unchecked Sendable {
         completion: @escaping @Sendable (Result<Void, Error>) -> Void
     ) {
         self.revokeSponsorNFT(actorPeerId: peerId, targetPeerId: peerId, entryId: entryId, completion: completion)
+    }
+
+    public func performNFTAction(
+        actorPeerId: Int64,
+        targetPeerId: Int64,
+        toPeerId: Int64? = nil,
+        entryId: String? = nil,
+        slug: String? = nil,
+        action: String,
+        modelName: String? = nil,
+        backdropName: String? = nil,
+        backdropId: Int32? = nil,
+        patternName: String? = nil,
+        number: Int32? = nil,
+        completion: @escaping @Sendable (Result<Void, Error>) -> Void
+    ) {
+        let normActor = FullGramCloudCosmetics.normalizedPeerId(actorPeerId)
+        let normTarget = FullGramCloudCosmetics.normalizedPeerId(targetPeerId)
+        var payload: [String: Any] = [
+            "action": action,
+            "peerId": String(normTarget)
+        ]
+        if let entryId, !entryId.isEmpty { payload["id"] = entryId }
+        if let slug, !slug.isEmpty { payload["slug"] = slug }
+        if let toPeerId { payload["toPeerId"] = String(FullGramCloudCosmetics.normalizedPeerId(toPeerId)) }
+        if let modelName, !modelName.isEmpty { payload["modelName"] = modelName }
+        if let backdropName, !backdropName.isEmpty { payload["backdropName"] = backdropName }
+        if let backdropId { payload["backdropId"] = Int(backdropId) }
+        if let patternName, !patternName.isEmpty { payload["patternName"] = patternName }
+        if let number, number >= 1 { payload["number"] = Int(number) }
+
+        self.sendClientSessionJSONRequest(path: "/nft/action", peerId: normActor, payload: payload, didRetry: false) { result in
+            switch result {
+            case .success:
+                completion(.success(()))
+            case let .failure(error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    public func grantEconomy(
+        actorPeerId: Int64,
+        targetPeerId: Int64,
+        useAdminEndpoint: Bool,
+        action: String,
+        amount: Double? = nil,
+        username: String? = nil,
+        number: String? = nil,
+        priceTon: Double? = nil,
+        isPrimary: Bool = true,
+        entryId: String? = nil,
+        completion: @escaping @Sendable (Result<[String: Any], Error>) -> Void
+    ) {
+        let normActor = FullGramCloudCosmetics.normalizedPeerId(actorPeerId)
+        let normTarget = FullGramCloudCosmetics.normalizedPeerId(targetPeerId)
+        var payload: [String: Any] = [
+            "action": action,
+            "peerId": String(normTarget),
+            "isPrimary": isPrimary
+        ]
+        if let amount { payload["amount"] = amount }
+        if let username, !username.isEmpty { payload["username"] = username }
+        if let number, !number.isEmpty { payload["number"] = number }
+        if let priceTon { payload["priceTon"] = priceTon }
+        if let entryId, !entryId.isEmpty { payload["id"] = entryId }
+
+        if useAdminEndpoint && self.hasToken {
+            do {
+                let req = try self.makeAdminRequest(path: "/admin/economy", method: "POST", body: payload)
+                self.sendJSONRequest(req, completion: completion)
+                return
+            } catch {
+                DispatchQueue.main.async { completion(.failure(error)) }
+                return
+            }
+        }
+        self.sendClientSessionJSONRequest(path: "/sponsor/economy", peerId: normActor, payload: payload, didRetry: false, completion: completion)
     }
 
     private func sendClientSessionJSONRequest(
@@ -1039,6 +1157,239 @@ public final class FullGramSponsors: @unchecked Sendable {
             self.sponsorTiers = parsedTiers
             self.lock.unlock()
             finish(true)
+        }.resume()
+    }
+}
+
+public final class FullGramBetaAccess: @unchecked Sendable {
+    public static let shared = FullGramBetaAccess()
+    public static let didChangeNotification = Notification.Name("FullGram.BetaAccessDidChange")
+
+    private let keychainService = "FullGram.Beta.Access"
+    private let receiptAccount = "beta_receipt_v1"
+    private let peerIdAccount = "beta_peer_v1"
+    private let lock = NSLock()
+    private var cachedActivated: Bool?
+    private var lastServerCheck: TimeInterval = 0
+
+    private init() {}
+
+    private func readKeychain(_ account: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: self.keychainService,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data,
+              let str = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        let trimmed = str.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func writeKeychain(_ value: String, account: String) {
+        self.deleteKeychain(account)
+        guard let data = value.data(using: .utf8), !value.isEmpty else { return }
+        let attrs: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: self.keychainService,
+            kSecAttrAccount as String: account,
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+        SecItemAdd(attrs as CFDictionary, nil)
+    }
+
+    private func deleteKeychain(_ account: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: self.keychainService,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+
+    public var isActivated: Bool {
+        self.lock.lock()
+        if let cached = self.cachedActivated {
+            self.lock.unlock()
+            return cached
+        }
+        let receipt = self.readKeychain(self.receiptAccount)
+        let valid = Self.isStructurallyValidReceipt(receipt)
+        self.cachedActivated = valid
+        self.lock.unlock()
+        return valid
+    }
+
+    public func isUnlocked(forPeerId peerId: Int64?) -> Bool {
+        if self.isActivated {
+            return true
+        }
+        if let peerId, FullGramCloudCosmetics.normalizedPeerId(peerId) == FullGramAdmin.ownerUserId {
+            return true
+        }
+        return false
+    }
+
+    private static func isStructurallyValidReceipt(_ receipt: String?) -> Bool {
+        guard let receipt, receipt.hasPrefix("fgba1.") else { return false }
+        let parts = receipt.split(separator: ".")
+        return parts.count == 3 && parts[1].count >= 12 && parts[2].count >= 16
+    }
+
+    public func clearActivation() {
+        self.lock.lock()
+        self.cachedActivated = false
+        self.lastServerCheck = 0
+        self.lock.unlock()
+        self.deleteKeychain(self.receiptAccount)
+        self.deleteKeychain(self.peerIdAccount)
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        }
+    }
+
+    public static func extractBetaCode(from url: URL) -> String? {
+        let scheme = url.scheme?.lowercased() ?? ""
+        let host = url.host?.lowercased() ?? ""
+        if scheme == "fullgram" && (host == "beta" || url.path.lowercased().hasPrefix("/beta")) {
+            if let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+               let code = comps.queryItems?.first(where: { $0.name.lowercased() == "code" })?.value?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !code.isEmpty {
+                return code
+            }
+            let parts = url.pathComponents.filter { $0 != "/" }
+            if host == "beta", let first = parts.first, !first.isEmpty {
+                return first.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if parts.count >= 2 && parts[0].lowercased() == "beta" {
+                let code = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                if !code.isEmpty { return code }
+            }
+        }
+        if scheme == "tg" && host == "fullgram" {
+            let path = url.path.lowercased()
+            if path == "/beta" || path == "beta" || path.isEmpty {
+                if let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                   let code = comps.queryItems?.first(where: { $0.name.lowercased() == "code" })?.value?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   code.hasPrefix("fgb1_") || code.hasPrefix("fgb1.") {
+                    return code
+                }
+            }
+        }
+        if (scheme == "https" || scheme == "http") && host.contains("fullgram") {
+            let parts = url.pathComponents.filter { $0 != "/" }
+            if parts.count >= 2 && parts[0].lowercased() == "beta" {
+                let code = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                if !code.isEmpty {
+                    return code
+                }
+            }
+        }
+        return nil
+    }
+
+    public func activate(
+        code: String,
+        peerId: Int64,
+        completion: @escaping @Sendable (Result<Void, Error>) -> Void
+    ) {
+        let cleanCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normId = FullGramCloudCosmetics.normalizedPeerId(peerId)
+        guard !cleanCode.isEmpty, normId > 0,
+              let url = URL(string: FullGramAdmin.workerBaseURL + "/beta/activate") else {
+            DispatchQueue.main.async {
+                completion(.failure(NSError(domain: "FullGramBeta", code: 400, userInfo: [NSLocalizedDescriptionKey: "Некорректный код приглашения или аккаунт."])))
+            }
+            return
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 15.0
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "code": cleanCode,
+            "peerId": String(normId),
+            "deviceSecret": FullGramAdmin.shared.deviceSecretValue()
+        ], options: [])
+
+        URLSession.shared.dataTask(with: req) { [weak self] data, response, error in
+            if let error {
+                DispatchQueue.main.async { completion(.failure(error)) }
+                return
+            }
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let parsed = data.flatMap { try? JSONSerialization.jsonObject(with: $0, options: []) as? [String: Any] } ?? [:]
+            guard (200 ..< 300).contains(status),
+                  (parsed["ok"] as? Bool) == true,
+                  let receipt = parsed["receipt"] as? String,
+                  Self.isStructurallyValidReceipt(receipt) else {
+                let msg = (parsed["error"] as? String) ?? "Активация отклонена (HTTP \(status))"
+                DispatchQueue.main.async {
+                    completion(.failure(NSError(domain: "FullGramBeta", code: status, userInfo: [NSLocalizedDescriptionKey: msg])))
+                }
+                return
+            }
+            self?.writeKeychain(receipt, account: self?.receiptAccount ?? "beta_receipt_v1")
+            self?.writeKeychain(String(normId), account: self?.peerIdAccount ?? "beta_peer_v1")
+            self?.lock.lock()
+            self?.cachedActivated = true
+            self?.lastServerCheck = Date().timeIntervalSince1970
+            self?.lock.unlock()
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+                completion(.success(()))
+            }
+        }.resume()
+    }
+
+    public func verifyWithServerIfNeeded(peerId: Int64) {
+        let normId = FullGramCloudCosmetics.normalizedPeerId(peerId)
+        guard normId > 0, normId != FullGramAdmin.ownerUserId else { return }
+        self.lock.lock()
+        let now = Date().timeIntervalSince1970
+        let shouldCheck = (now - self.lastServerCheck) >= 120.0
+        let receipt = self.readKeychain(self.receiptAccount)
+        let storedPeerId = self.readKeychain(self.peerIdAccount)
+        if shouldCheck {
+            self.lastServerCheck = now
+        }
+        self.lock.unlock()
+        guard shouldCheck, let receipt, Self.isStructurallyValidReceipt(receipt),
+              storedPeerId == String(normId),
+              let url = URL(string: FullGramAdmin.workerBaseURL + "/beta/status") else {
+            return
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 12.0
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "receipt": receipt,
+            "peerId": String(normId),
+            "deviceSecret": FullGramAdmin.shared.deviceSecretValue()
+        ], options: [])
+
+        URLSession.shared.dataTask(with: req) { [weak self] data, response, _ in
+            guard let http = response as? HTTPURLResponse,
+                  (200 ..< 300).contains(http.statusCode),
+                  let data,
+                  let parsed = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
+                  (parsed["ok"] as? Bool) == true,
+                  let active = parsed["active"] as? Bool else {
+                return
+            }
+            if !active {
+                self?.clearActivation()
+            }
         }.resume()
     }
 }

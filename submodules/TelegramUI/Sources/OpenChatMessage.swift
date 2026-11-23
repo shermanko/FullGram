@@ -282,15 +282,15 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                     let openFullGramViewerIfSupported: () -> Bool = {
                         let ext = (file.fileName as NSString?)?.pathExtension.lowercased() ?? ""
                         let mime = file.mimeType.lowercased()
-                        let isDoc = ext == "pdf" || ext == "docx" || ext == "xlsx"
+                        let isDoc = FullGramExtras.shared.builtInDocumentViewer && (ext == "pdf" || ext == "docx" || ext == "xlsx"
                             || mime == "application/pdf"
                             || mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                            || mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        let isArchive = ext == "zip" || ext == "rar"
+                            || mime == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                        let isArchive = FullGramExtras.shared.archivePreviewWithoutDownload && (ext == "zip" || ext == "rar"
                             || mime == "application/zip"
                             || mime == "application/x-zip-compressed"
                             || mime == "application/vnd.rar"
-                            || mime == "application/x-rar-compressed"
+                            || mime == "application/x-rar-compressed")
                         guard isDoc || isArchive else {
                             return false
                         }
@@ -309,11 +309,24 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                         } else {
                             resolvedName = "archive.zip"
                         }
-                        let _ = messageMediaFileInteractiveFetched(context: params.context, message: params.message, file: file, userInitiated: true).startStandalone()
+                        let fetchDisposable = messageMediaFileInteractiveFetched(context: params.context, message: params.message, file: file, userInitiated: true).startStandalone()
+                        let minBytesForPreview: Int64 = isArchive ? 4096 : 0
                         let _ = (params.context.engine.resources.data(id: EngineMediaResource.Id(file.resource.id))
-                        |> filter { $0.isComplete }
+                        |> filter { data in
+                            if isArchive {
+                                return data.isComplete || data.size >= minBytesForPreview
+                            }
+                            return data.isComplete
+                        }
                         |> take(1)
                         |> deliverOnMainQueue).startStandalone(next: { data in
+                            if isArchive && !data.isComplete {
+                                let previewURL = URL(fileURLWithPath: data.path)
+                                let parsed = FullGramArchiveParser.parse(url: previewURL)
+                                if !parsed.entries.isEmpty {
+                                    fetchDisposable.dispose()
+                                }
+                            }
                             let fileURL = URL(fileURLWithPath: data.path)
                             let viewer: ViewController
                             if isArchive {

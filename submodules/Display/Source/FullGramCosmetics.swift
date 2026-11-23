@@ -551,8 +551,21 @@ public enum FullGramNicknameStyle {
 
 public enum FullGramPaperTrashAnimator {
     @MainActor
-    public static func animateDelete(snapshots: [(view: UIView, frameInHost: CGRect)], in hostView: UIView) {
-        guard !snapshots.isEmpty else { return }
+    public static func animateDelete(snapshots: [(view: UIView, frameInHost: CGRect)], in hostView: UIView, styleRaw: Int = 1) {
+        guard !snapshots.isEmpty, styleRaw != 0 else { return }
+
+        if styleRaw == 2 {
+            self.animateParticles(snapshots: snapshots, in: hostView)
+            return
+        }
+        if styleRaw == 3 {
+            self.animateBlackHole(snapshots: snapshots, in: hostView)
+            return
+        }
+        if styleRaw == 4 {
+            self.animateExplosion(snapshots: snapshots, in: hostView)
+            return
+        }
 
         let binSize = CGSize(width: 108.0, height: 122.0)
         let safeBottom = hostView.safeAreaInsets.bottom
@@ -675,6 +688,240 @@ public enum FullGramPaperTrashAnimator {
                 binView.transform = CGAffineTransform(translationX: 0.0, y: 36.0).scaledBy(x: 0.76, y: 0.76)
             } completion: { _ in
                 binView.removeFromSuperview()
+            }
+        }
+    }
+
+    @MainActor
+    private static func makeParticleImage(color: UIColor, size: CGFloat = 10.0) -> CGImage? {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
+        return renderer.image { ctx in
+            let rect = CGRect(origin: .zero, size: CGSize(width: size, height: size))
+            color.setFill()
+            ctx.cgContext.fillEllipse(in: rect)
+        }.cgImage
+    }
+
+    @MainActor
+    private static func animateParticles(snapshots: [(view: UIView, frameInHost: CGRect)], in hostView: UIView) {
+        let haptic = UIImpactFeedbackGenerator(style: .light)
+        haptic.prepare()
+        haptic.impactOccurred(intensity: 0.65)
+        let particleCG = self.makeParticleImage(color: .white, size: 8.0)
+
+        for (idx, item) in snapshots.prefix(6).enumerated() {
+            let delay = Double(idx) * 0.04
+            let snap = item.view
+            snap.frame = item.frameInHost
+            snap.layer.cornerRadius = 14.0
+            snap.clipsToBounds = true
+            hostView.addSubview(snap)
+
+            let emitter = CAEmitterLayer()
+            emitter.frame = item.frameInHost
+            emitter.emitterPosition = CGPoint(x: item.frameInHost.width * 0.5, y: item.frameInHost.height * 0.5)
+            emitter.emitterSize = item.frameInHost.size
+            emitter.emitterShape = .rectangle
+            emitter.emitterMode = .volume
+
+            let cell1 = CAEmitterCell()
+            cell1.contents = particleCG
+            cell1.color = UIColor(rgb: 0x70D7FF).cgColor
+            cell1.birthRate = 220
+            cell1.lifetime = 0.65
+            cell1.lifetimeRange = 0.25
+            cell1.velocity = 75
+            cell1.velocityRange = 45
+            cell1.emissionRange = .pi * 2.0
+            cell1.yAcceleration = -65
+            cell1.scale = 0.55
+            cell1.scaleRange = 0.35
+            cell1.alphaSpeed = -1.5
+
+            let cell2 = CAEmitterCell()
+            cell2.contents = particleCG
+            cell2.color = UIColor(rgb: 0xFFFFFF).cgColor
+            cell2.birthRate = 140
+            cell2.lifetime = 0.55
+            cell2.velocity = 95
+            cell2.velocityRange = 40
+            cell2.emissionRange = .pi * 2.0
+            cell2.yAcceleration = -40
+            cell2.scale = 0.38
+            cell2.alphaSpeed = -1.7
+
+            emitter.emitterCells = [cell1, cell2]
+            hostView.layer.addSublayer(emitter)
+
+            UIView.animate(withDuration: 0.36, delay: delay, options: [.curveEaseIn]) {
+                snap.alpha = 0.0
+                snap.transform = CGAffineTransform(translationX: 0.0, y: -12.0).scaledBy(x: 0.92, y: 0.92)
+            } completion: { _ in
+                snap.removeFromSuperview()
+            }
+
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64((delay + 0.14) * 1_000_000_000))
+                emitter.birthRate = 0.0
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                emitter.removeFromSuperlayer()
+            }
+        }
+    }
+
+    @MainActor
+    private static func animateBlackHole(snapshots: [(view: UIView, frameInHost: CGRect)], in hostView: UIView) {
+        let holeCenter = CGPoint(x: hostView.bounds.midX, y: hostView.bounds.midY)
+        let holeSize: CGFloat = 112.0
+        let holeView = UIView(frame: CGRect(x: holeCenter.x - holeSize * 0.5, y: holeCenter.y - holeSize * 0.5, width: holeSize, height: holeSize))
+        holeView.isUserInteractionEnabled = false
+        holeView.alpha = 0.0
+        holeView.transform = CGAffineTransform(scaleX: 0.25, y: 0.25)
+
+        let halo = CAShapeLayer()
+        halo.path = UIBezierPath(ovalIn: holeView.bounds.insetBy(dx: 8.0, dy: 8.0)).cgPath
+        halo.fillColor = UIColor.black.cgColor
+        halo.strokeColor = UIColor(rgb: 0x9D4EDD).cgColor
+        halo.lineWidth = 4.5
+        halo.shadowColor = UIColor(rgb: 0x7B2CBF).cgColor
+        halo.shadowRadius = 16.0
+        halo.shadowOpacity = 0.95
+        halo.shadowOffset = .zero
+        holeView.layer.addSublayer(halo)
+
+        let innerRing = CAShapeLayer()
+        innerRing.path = UIBezierPath(ovalIn: holeView.bounds.insetBy(dx: 16.0, dy: 16.0)).cgPath
+        innerRing.fillColor = UIColor.clear.cgColor
+        innerRing.strokeColor = UIColor(rgb: 0xE0AAFF).withAlphaComponent(0.75).cgColor
+        innerRing.lineWidth = 2.0
+        innerRing.lineDashPattern = [10, 6]
+        holeView.layer.addSublayer(innerRing)
+        hostView.addSubview(holeView)
+
+        let haptic = UIImpactFeedbackGenerator(style: .heavy)
+        haptic.prepare()
+        haptic.impactOccurred(intensity: 0.8)
+
+        let spin = CABasicAnimation(keyPath: "transform.rotation.z")
+        spin.fromValue = 0.0
+        spin.toValue = Double.pi * 4.0
+        spin.duration = 0.9
+        holeView.layer.add(spin, forKey: "fg.bh.spin")
+
+        UIView.animate(withDuration: 0.22, delay: 0.0, usingSpringWithDamping: 0.72, initialSpringVelocity: 0.5) {
+            holeView.alpha = 1.0
+            holeView.transform = .identity
+        }
+
+        let batch = Array(snapshots.prefix(5))
+        for (idx, item) in batch.enumerated() {
+            let delay = 0.05 + Double(idx) * 0.05
+            let snap = item.view
+            snap.frame = item.frameInHost
+            snap.layer.cornerRadius = 14.0
+            snap.clipsToBounds = true
+            hostView.addSubview(snap)
+
+            UIView.animate(withDuration: 0.44, delay: delay, options: [.curveEaseIn]) {
+                snap.center = holeCenter
+                snap.transform = CGAffineTransform(rotationAngle: idx % 2 == 0 ? 2.6 : -2.6).scaledBy(x: 0.04, y: 0.04)
+                snap.alpha = 0.0
+            } completion: { _ in
+                snap.removeFromSuperview()
+            }
+        }
+
+        let total = 0.55 + Double(batch.count) * 0.05
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(total * 1_000_000_000))
+            UIView.animate(withDuration: 0.2, animations: {
+                holeView.transform = CGAffineTransform(scaleX: 0.05, y: 0.05)
+                holeView.alpha = 0.0
+            }, completion: { _ in
+                holeView.removeFromSuperview()
+            })
+        }
+    }
+
+    @MainActor
+    private static func animateExplosion(snapshots: [(view: UIView, frameInHost: CGRect)], in hostView: UIView) {
+        let haptic = UIImpactFeedbackGenerator(style: .heavy)
+        haptic.prepare()
+        haptic.impactOccurred(intensity: 0.95)
+        let sparkCG = self.makeParticleImage(color: .white, size: 10.0)
+
+        for (idx, item) in snapshots.prefix(5).enumerated() {
+            let delay = Double(idx) * 0.04
+            let snap = item.view
+            snap.frame = item.frameInHost
+            snap.layer.cornerRadius = 14.0
+            snap.clipsToBounds = true
+            hostView.addSubview(snap)
+
+            let center = CGPoint(x: item.frameInHost.midX, y: item.frameInHost.midY)
+            let shockwave = CAShapeLayer()
+            shockwave.bounds = CGRect(x: 0.0, y: 0.0, width: 44.0, height: 44.0)
+            shockwave.position = center
+            shockwave.path = UIBezierPath(ovalIn: shockwave.bounds).cgPath
+            shockwave.fillColor = UIColor(rgb: 0xFF9F0A).withAlphaComponent(0.35).cgColor
+            shockwave.strokeColor = UIColor(rgb: 0xFF453A).cgColor
+            shockwave.lineWidth = 3.5
+            hostView.layer.addSublayer(shockwave)
+
+            let emitter = CAEmitterLayer()
+            emitter.frame = hostView.bounds
+            emitter.emitterPosition = center
+            emitter.emitterSize = CGSize(width: 24.0, height: 24.0)
+            emitter.emitterShape = .circle
+
+            let ember = CAEmitterCell()
+            ember.contents = sparkCG
+            ember.color = UIColor(rgb: 0xFF6B00).cgColor
+            ember.birthRate = 320
+            ember.lifetime = 0.55
+            ember.lifetimeRange = 0.2
+            ember.velocity = 260
+            ember.velocityRange = 120
+            ember.emissionRange = .pi * 2.0
+            ember.yAcceleration = 180
+            ember.scale = 0.65
+            ember.scaleRange = 0.4
+            ember.alphaSpeed = -1.8
+
+            emitter.emitterCells = [ember]
+            hostView.layer.addSublayer(emitter)
+
+            let expand = CABasicAnimation(keyPath: "transform.scale")
+            expand.fromValue = 0.4
+            expand.toValue = 4.2
+            expand.duration = 0.36
+            expand.beginTime = CACurrentMediaTime() + delay
+            expand.fillMode = .forwards
+            expand.isRemovedOnCompletion = false
+            shockwave.add(expand, forKey: "fg.exp.scale")
+
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 1.0
+            fade.toValue = 0.0
+            fade.duration = 0.36
+            fade.beginTime = CACurrentMediaTime() + delay
+            fade.fillMode = .forwards
+            fade.isRemovedOnCompletion = false
+            shockwave.add(fade, forKey: "fg.exp.fade")
+
+            UIView.animate(withDuration: 0.26, delay: delay, options: [.curveEaseOut]) {
+                snap.transform = CGAffineTransform(scaleX: 1.28, y: 1.28).rotated(by: idx % 2 == 0 ? 0.14 : -0.14)
+                snap.alpha = 0.0
+            } completion: { _ in
+                snap.removeFromSuperview()
+            }
+
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64((delay + 0.09) * 1_000_000_000))
+                emitter.birthRate = 0.0
+                try? await Task.sleep(nanoseconds: 650_000_000)
+                emitter.removeFromSuperlayer()
+                shockwave.removeFromSuperlayer()
             }
         }
     }

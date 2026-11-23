@@ -124,6 +124,7 @@ public final class PeerInfoGiftsCoverComponent: Component {
         private var state: EmptyComponentState?
                 
         private var giftsDisposable: Disposable?
+        private var extrasObserver: NSObjectProtocol?
         private var gifts: [ProfileGiftsContext.State.StarGift] = []
         private var appliedGiftIds: [Int64] = []
         
@@ -167,6 +168,9 @@ public final class PeerInfoGiftsCoverComponent: Component {
         
         deinit {
             self.giftsDisposable?.dispose()
+            if let observer = self.extrasObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
         }
         
         @objc private func tapped(_ gestureRecognizer: UITapGestureRecognizer) {
@@ -329,6 +333,15 @@ public final class PeerInfoGiftsCoverComponent: Component {
             }
             self.appliedGiftIds = giftIds
             
+            if self.extrasObserver == nil {
+                self.extrasObserver = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+                    guard let self, !self.isUpdating else { return }
+                    self.giftsDisposable?.dispose()
+                    self.giftsDisposable = nil
+                    self.state?.updated(transition: .spring(duration: 0.3))
+                }
+            }
+
             if self.giftsDisposable == nil {
                 self.giftsDisposable = combineLatest(
                     queue: Queue.mainQueue(),
@@ -343,6 +356,14 @@ public final class PeerInfoGiftsCoverComponent: Component {
                     |> distinctUntilChanged
                 ).start(next: { [weak self] state, giftStatusId in
                     guard let self else {
+                        return
+                    }
+                    
+                    guard FullGramExtras.shared.profileNFTBubbles else {
+                        self.gifts = []
+                        if !self.isUpdating {
+                            self.state?.updated(transition: .spring(duration: 0.3))
+                        }
                         return
                     }
                     
@@ -550,6 +571,7 @@ private class GiftIconLayer: SimpleLayer {
     }
     
     let shadowLayer = SimpleLayer()
+    let bubbleLayer = CAShapeLayer()
     let starsLayer = StarsEffectLayer()
     let animationLayer: InlineStickerItemLayer
     
@@ -600,6 +622,9 @@ private class GiftIconLayer: SimpleLayer {
         self.shadowLayer.contents = shadowImage?.cgImage
         self.shadowLayer.layerTintColor = color.cgColor
         self.shadowLayer.opacity = glowing ? 1.0 : 0.0
+        self.bubbleLayer.fillColor = color.withAlphaComponent(0.22).cgColor
+        self.bubbleLayer.strokeColor = UIColor.white.withAlphaComponent(0.42).cgColor
+        self.bubbleLayer.lineWidth = 1.0
         
         self.context = context
         self.gift = gift
@@ -614,6 +639,7 @@ private class GiftIconLayer: SimpleLayer {
         self.starsLayer.update(color: glowing ? .white : color, size: starsFrame.size)
         
         self.addSublayer(self.shadowLayer)
+        self.addSublayer(self.bubbleLayer)
         self.addSublayer(self.starsLayer)
         self.addSublayer(self.animationLayer)
     }
@@ -666,6 +692,9 @@ private class GiftIconLayer: SimpleLayer {
         self.shadowLayer.contents = shadowImage?.cgImage
         self.shadowLayer.layerTintColor = color.cgColor
         self.shadowLayer.opacity = glowing ? 1.0 : 0.0
+        self.bubbleLayer.fillColor = color.withAlphaComponent(0.22).cgColor
+        self.bubbleLayer.strokeColor = UIColor.white.withAlphaComponent(0.42).cgColor
+        self.bubbleLayer.lineWidth = 1.0
         
         super.init()
         
@@ -675,6 +704,7 @@ private class GiftIconLayer: SimpleLayer {
         self.starsLayer.update(color: glowing ? .white : color, size: starsFrame.size)
         
         self.addSublayer(self.shadowLayer)
+        self.addSublayer(self.bubbleLayer)
         self.addSublayer(self.starsLayer)
         self.addSublayer(self.animationLayer)
     }
@@ -685,6 +715,9 @@ private class GiftIconLayer: SimpleLayer {
     
     override func layoutSublayers() {
         self.shadowLayer.frame = CGRect(origin: .zero, size: self.bounds.size).insetBy(dx: -8.0, dy: -8.0)
+        let bubbleRect = CGRect(origin: .zero, size: self.bounds.size).insetBy(dx: -5.0, dy: -5.0)
+        self.bubbleLayer.frame = bubbleRect
+        self.bubbleLayer.path = UIBezierPath(ovalIn: CGRect(origin: .zero, size: bubbleRect.size)).cgPath
         self.animationLayer.bounds = CGRect(origin: .zero, size: self.bounds.size)
         self.animationLayer.position = CGPoint(x: self.bounds.width / 2.0, y: self.bounds.height / 2.0)
     }

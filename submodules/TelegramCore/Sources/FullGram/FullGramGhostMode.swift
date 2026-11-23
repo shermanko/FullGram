@@ -1598,9 +1598,248 @@ public final class FullGramExtras: @unchecked Sendable {
         return next
     }
 
+    public enum ConfirmSendMediaKind: String, CaseIterable, Sendable {
+        case text
+        case voice
+        case videoNote
+        case video
+        case file
+    }
+
+    public var confirmSendText: Bool {
+        get { bool("confirmSendText", default: true) }
+        set { setBool("confirmSendText", newValue) }
+    }
+
+    public var confirmSendVoice: Bool {
+        get { bool("confirmSendVoice", default: true) }
+        set { setBool("confirmSendVoice", newValue) }
+    }
+
+    public var confirmSendVideoNotes: Bool {
+        get { bool("confirmSendVideoNotes", default: true) }
+        set { setBool("confirmSendVideoNotes", newValue) }
+    }
+
+    public var confirmSendVideo: Bool {
+        get { bool("confirmSendVideo", default: true) }
+        set { setBool("confirmSendVideo", newValue) }
+    }
+
+    public var confirmSendFiles: Bool {
+        get { bool("confirmSendFiles", default: true) }
+        set { setBool("confirmSendFiles", newValue) }
+    }
+
+    public func isConfirmSendKindEnabled(_ kind: ConfirmSendMediaKind) -> Bool {
+        switch kind {
+        case .text: return self.confirmSendText
+        case .voice: return self.confirmSendVoice
+        case .videoNote: return self.confirmSendVideoNotes
+        case .video: return self.confirmSendVideo
+        case .file: return self.confirmSendFiles
+        }
+    }
+
+    public var archivePreviewWithoutDownload: Bool {
+        get { bool("archivePreviewWithoutDownload", default: true) }
+        set { setBool("archivePreviewWithoutDownload", newValue) }
+    }
+
+    public var builtInDocumentViewer: Bool {
+        get { bool("builtInDocumentViewer", default: true) }
+        set { setBool("builtInDocumentViewer", newValue) }
+    }
+
+    public var profileNFTBubbles: Bool {
+        get { bool("profileNFTBubbles", default: true) }
+        set { setBool("profileNFTBubbles", newValue) }
+    }
+
+    public var anonymousStoryViewing: Bool {
+        get { bool("anonymousStoryViewing", default: false) }
+        set { setBool("anonymousStoryViewing", newValue) }
+    }
+
+    public var allowStoryDownload: Bool {
+        get { bool("allowStoryDownload", default: true) }
+        set { setBool("allowStoryDownload", newValue) }
+    }
+
+    // MARK: - 10 Smart FullGram Features
+
+    public var focusModeHideBadges: Bool {
+        get { bool("focusModeHideBadges", default: false) }
+        set { setBool("focusModeHideBadges", newValue) }
+    }
+
+    public var autoCleanCopiedLinks: Bool {
+        get { bool("autoCleanCopiedLinks", default: true) }
+        set { setBool("autoCleanCopiedLinks", newValue) }
+    }
+
+    public var disableEdgeSwipeBackInChat: Bool {
+        get { bool("disableEdgeSwipeBackInChat", default: false) }
+        set { setBool("disableEdgeSwipeBackInChat", newValue) }
+    }
+
+    public var autoLayoutFixCommand: Bool {
+        get { bool("autoLayoutFixCommand", default: true) }
+        set { setBool("autoLayoutFixCommand", newValue) }
+    }
+
+    public var turboVoiceSpeedEnabled: Bool {
+        get { bool("turboVoiceSpeedEnabled", default: true) }
+        set { setBool("turboVoiceSpeedEnabled", newValue) }
+    }
+
+    public var showComposeCharCounter: Bool {
+        get { bool("showComposeCharCounter", default: true) }
+        set { setBool("showComposeCharCounter", newValue) }
+    }
+
+    public var smartTypographyEnabled: Bool {
+        get { bool("smartTypographyEnabled", default: false) }
+        set { setBool("smartTypographyEnabled", newValue) }
+    }
+
+    public var incognitoLinkOpening: Bool {
+        get { bool("incognitoLinkOpening", default: false) }
+        set { setBool("incognitoLinkOpening", newValue) }
+    }
+
+    public var confirmScreenShareAndVideoCalls: Bool {
+        get { bool("confirmScreenShareAndVideoCalls", default: false) }
+        set { setBool("confirmScreenShareAndVideoCalls", newValue) }
+    }
+
+    public var quickBookmarksEnabled: Bool {
+        get { bool("quickBookmarksEnabled", default: true) }
+        set { setBool("quickBookmarksEnabled", newValue) }
+    }
+
+    public struct FullGramBookmark: Codable, Equatable, Sendable {
+        public let id: String
+        public let peerId: Int64
+        public let peerTitle: String
+        public let text: String
+        public let timestamp: Int32
+
+        public init(id: String = UUID().uuidString, peerId: Int64, peerTitle: String, text: String, timestamp: Int32 = Int32(Date().timeIntervalSince1970)) {
+            self.id = id
+            self.peerId = peerId
+            self.peerTitle = peerTitle
+            self.text = text
+            self.timestamp = timestamp
+        }
+    }
+
+    public var bookmarks: [FullGramBookmark] {
+        get {
+            guard let data = defaults.data(forKey: prefix + "bookmarks"),
+                  let decoded = try? JSONDecoder().decode([FullGramBookmark].self, from: data) else {
+                return []
+            }
+            return decoded
+        }
+        set {
+            if let encoded = try? JSONEncoder().encode(Array(newValue.prefix(200))) {
+                defaults.set(encoded, forKey: prefix + "bookmarks")
+                NotificationCenter.default.post(name: Self.didChangeNotification, object: "bookmarks")
+            }
+        }
+    }
+
+    public func addBookmark(peerId: Int64, peerTitle: String, text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var list = self.bookmarks
+        list.removeAll { $0.peerId == peerId && $0.text == trimmed }
+        list.insert(FullGramBookmark(peerId: peerId, peerTitle: peerTitle, text: trimmed), at: 0)
+        self.bookmarks = list
+    }
+
+    public func removeBookmark(id: String) {
+        var list = self.bookmarks
+        list.removeAll { $0.id == id }
+        self.bookmarks = list
+    }
+
+    public func clearBookmarks() {
+        self.bookmarks = []
+    }
+
+    public func applySmartTypography(_ text: String) -> String {
+        guard self.smartTypographyEnabled, !text.isEmpty else { return text }
+        var out = text
+        out = out.replacingOccurrences(of: " -- ", with: " — ")
+        out = out.replacingOccurrences(of: "...", with: "…")
+        if out.contains("<<") && out.contains(">>") {
+            out = out.replacingOccurrences(of: "<<", with: "«").replacingOccurrences(of: ">>", with: "»")
+        }
+        return out
+    }
+
+    public func applyAutoLayoutFixIfNeeded(_ text: String) -> String {
+        guard self.autoLayoutFixCommand else { return text }
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        let prefixStr: String
+        let body: String
+        if trimmed.hasPrefix("!!") {
+            prefixStr = "!!"
+            body = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+        } else if trimmed.lowercased().hasPrefix(".fix ") {
+            prefixStr = ".fix "
+            body = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+        } else {
+            return text
+        }
+        guard !prefixStr.isEmpty, !body.isEmpty else { return text }
+        let ruChars = Array("йцукенгшщзхъфывапролджэячсмитьбюёЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮЁ")
+        let enChars = Array("qwertyuiop[]asdfghjkl;'zxcvbnm,.`QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>~")
+        let ruCount = body.filter { ruChars.contains($0) }.count
+        let enCount = body.filter { enChars.contains($0) }.count
+        let ruToEn = ruCount >= enCount
+        var result = ""
+        result.reserveCapacity(body.count)
+        for ch in body {
+            if ruToEn {
+                if let idx = ruChars.firstIndex(of: ch) {
+                    result.append(enChars[idx])
+                } else {
+                    result.append(ch)
+                }
+            } else {
+                if let idx = enChars.firstIndex(of: ch) {
+                    result.append(ruChars[idx])
+                } else {
+                    result.append(ch)
+                }
+            }
+        }
+        return result
+    }
+
+    public func addConfirmSendChat(_ peerId: Int64) {
+        self.setConfirmSendChat(peerId, enabled: true)
+    }
+
+    public func removeConfirmSendChat(_ peerId: Int64) {
+        self.setConfirmSendChat(peerId, enabled: false)
+    }
+
+    public func clearConfirmSendChats() {
+        self.confirmSendPeerIds = []
+    }
+
     public func shouldConfirmSend(forPeerId peerId: Int64) -> Bool {
         guard self.confirmSendBeforePosting else { return false }
         return self.confirmSendForAllChats || self.confirmSendPeerIds.contains(peerId)
+    }
+
+    public func shouldConfirmSend(forPeerId peerId: Int64, kind: ConfirmSendMediaKind) -> Bool {
+        guard self.shouldConfirmSend(forPeerId: peerId) else { return false }
+        return self.isConfirmSendKindEnabled(kind)
     }
 
     // MARK: - Оформление → Дизайн / Темы / Иконки (2.2, 2.3, 2.4)
@@ -1658,9 +1897,78 @@ public final class FullGramExtras: @unchecked Sendable {
         set { setBool("autoRevealSpoilers", newValue) }
     }
 
+    public enum DeleteAnimationStyle: Int, CaseIterable, Sendable {
+        case none = 0
+        case paperTrash = 1
+        case particles = 2
+        case blackHole = 3
+        case explosion = 4
+
+        public func title(russian: Bool) -> String {
+            switch self {
+            case .none: return russian ? "Выкл." : "Off"
+            case .paperTrash: return russian ? "Бумага в мусорку" : "Paper trash"
+            case .particles: return russian ? "Частицы (пыль)" : "Particles"
+            case .blackHole: return russian ? "Чёрная дыра" : "Black hole"
+            case .explosion: return russian ? "Взрыв" : "Explosion"
+            }
+        }
+    }
+
     public var deletePaperAnimation: Bool {
         get { bool("deletePaperAnimation", default: true) }
         set { setBool("deletePaperAnimation", newValue) }
+    }
+
+    public var skipSilenceInVoiceAndCircles: Bool {
+        get { bool("skipSilenceInVoiceAndCircles", default: false) }
+        set { setBool("skipSilenceInVoiceAndCircles", newValue) }
+    }
+
+    /// 0 means default player speed (use 1.0 / 1.25 / 1.5 / 1.75 / 2.0 / 2.5 when overridden)
+    public var voicePlaybackSpeed: Float {
+        get {
+            let v = self.defaults.float(forKey: self.prefix + "voicePlaybackSpeed")
+            return v > 0.1 ? v : 1.0
+        }
+        set {
+            let clamped = max(0.5, min(2.5, newValue))
+            self.defaults.set(clamped, forKey: self.prefix + "voicePlaybackSpeed")
+            NotificationCenter.default.post(name: FullGramExtras.didChangeNotification, object: nil)
+        }
+    }
+
+    public var autoCleanCacheIntervalDays: Int {
+        get { int("autoCleanCacheIntervalDays", default: 0) }
+        set { setInt("autoCleanCacheIntervalDays", max(0, newValue)) }
+    }
+
+    public var autoCleanCacheMaxMB: Int {
+        get { int("autoCleanCacheMaxMB", default: 0) }
+        set { setInt("autoCleanCacheMaxMB", max(0, newValue)) }
+    }
+
+    public var lastAutoCacheCleanTimestamp: TimeInterval {
+        get { self.defaults.double(forKey: self.prefix + "lastAutoCacheCleanTimestamp") }
+        set { self.defaults.set(newValue, forKey: self.prefix + "lastAutoCacheCleanTimestamp") }
+    }
+
+    public var deleteAnimationStyle: DeleteAnimationStyle {
+        get {
+            if !self.deletePaperAnimation {
+                return .none
+            }
+            let raw = int("deleteAnimationStyle", default: DeleteAnimationStyle.paperTrash.rawValue)
+            return DeleteAnimationStyle(rawValue: raw) ?? .paperTrash
+        }
+        set {
+            if newValue == .none {
+                self.deletePaperAnimation = false
+            } else {
+                setInt("deleteAnimationStyle", newValue.rawValue)
+                self.deletePaperAnimation = true
+            }
+        }
     }
 
     public var privateMode: Bool {
@@ -1791,119 +2099,133 @@ public final class FullGramExtras: @unchecked Sendable {
     /// Strips all EXIF, GPS, TIFF, IPTC, MakerApple, XMP and ICC metadata by re-rendering the bitmap
     /// in standard sRGB (baking pixel orientation) and normalizing container header fields.
     public static func strippedImageData(_ data: Data) -> Data? {
-        let thumbOpts: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true
-        ]
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let type = CGImageSourceGetType(source),
-              CGImageSourceGetCount(source) > 0 else {
+        guard !data.isEmpty, data.count <= 25_000_000 else {
             return nil
         }
-        if let utType = UTType(type as String), !utType.conforms(to: .image) || utType.conforms(to: .gif) {
-            return nil
+        return autoreleasepool {
+            let thumbOpts: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 4096,
+                kCGImageSourceShouldCache: false,
+                kCGImageSourceShouldCacheImmediately: false
+            ]
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let type = CGImageSourceGetType(source),
+                  CGImageSourceGetCount(source) > 0 else {
+                return nil
+            }
+            if let utType = UTType(type as String), !utType.conforms(to: .image) || utType.conforms(to: .gif) {
+                return nil
+            }
+            guard let orientedImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOpts as CFDictionary) ?? CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+                return nil
+            }
+            let width = orientedImage.width
+            let height = orientedImage.height
+            guard width > 0, height > 0 else { return nil }
+            let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+            let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+            let cleanImage: CGImage
+            if let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace, bitmapInfo: bitmapInfo) {
+                ctx.draw(orientedImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+                cleanImage = ctx.makeImage() ?? orientedImage
+            } else {
+                cleanImage = orientedImage
+            }
+            let output = NSMutableData()
+            let destType = UTType.jpeg.identifier as CFString
+            guard let destination = CGImageDestinationCreateWithData(output as CFMutableData, destType, 1, nil) else {
+                return nil
+            }
+            // Explicitly remove metadata dictionaries and normalize technical container fields (orientation=1, 72 DPI)
+            let nullRef: Any = kCFNull as Any
+            let cleanProperties: [CFString: Any] = [
+                kCGImageDestinationLossyCompressionQuality: 0.94,
+                kCGImagePropertyOrientation: 1,
+                kCGImagePropertyDPIWidth: 72,
+                kCGImagePropertyDPIHeight: 72,
+                kCGImagePropertyExifDictionary: nullRef,
+                kCGImagePropertyGPSDictionary: nullRef,
+                kCGImagePropertyTIFFDictionary: nullRef,
+                kCGImagePropertyIPTCDictionary: nullRef,
+                kCGImagePropertyExifAuxDictionary: nullRef,
+                kCGImagePropertyMakerAppleDictionary: nullRef,
+                kCGImageProperty8BIMDictionary: nullRef,
+                kCGImagePropertyCIFFDictionary: nullRef,
+                kCGImagePropertyJFIFDictionary: [
+                    kCGImagePropertyJFIFDensityUnit: 1,
+                    kCGImagePropertyJFIFXDensity: 72,
+                    kCGImagePropertyJFIFYDensity: 72,
+                    kCGImagePropertyJFIFVersion: [1, 1]
+                ] as [CFString: Any]
+            ]
+            CGImageDestinationAddImage(destination, cleanImage, cleanProperties as CFDictionary)
+            guard CGImageDestinationFinalize(destination) else {
+                return nil
+            }
+            return output as Data
         }
-        guard let orientedImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOpts as CFDictionary) ?? CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-            return nil
-        }
-        let width = orientedImage.width
-        let height = orientedImage.height
-        guard width > 0, height > 0 else { return nil }
-        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
-        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
-        let cleanImage: CGImage
-        if let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace, bitmapInfo: bitmapInfo) {
-            ctx.draw(orientedImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-            cleanImage = ctx.makeImage() ?? orientedImage
-        } else {
-            cleanImage = orientedImage
-        }
-        let output = NSMutableData()
-        let destType = UTType.jpeg.identifier as CFString
-        guard let destination = CGImageDestinationCreateWithData(output as CFMutableData, destType, 1, nil) else {
-            return nil
-        }
-        // Explicitly remove metadata dictionaries and normalize technical container fields (orientation=1, 72 DPI)
-        let nullRef: Any = kCFNull as Any
-        let cleanProperties: [CFString: Any] = [
-            kCGImageDestinationLossyCompressionQuality: 0.94,
-            kCGImagePropertyOrientation: 1,
-            kCGImagePropertyDPIWidth: 72,
-            kCGImagePropertyDPIHeight: 72,
-            kCGImagePropertyExifDictionary: nullRef,
-            kCGImagePropertyGPSDictionary: nullRef,
-            kCGImagePropertyTIFFDictionary: nullRef,
-            kCGImagePropertyIPTCDictionary: nullRef,
-            kCGImagePropertyExifAuxDictionary: nullRef,
-            kCGImagePropertyMakerAppleDictionary: nullRef,
-            kCGImageProperty8BIMDictionary: nullRef,
-            kCGImagePropertyCIFFDictionary: nullRef,
-            kCGImagePropertyJFIFDictionary: [
-                kCGImagePropertyJFIFDensityUnit: 1,
-                kCGImagePropertyJFIFXDensity: 72,
-                kCGImagePropertyJFIFYDensity: 72,
-                kCGImagePropertyJFIFVersion: [1, 1]
-            ] as [CFString: Any]
-        ]
-        CGImageDestinationAddImage(destination, cleanImage, cleanProperties as CFDictionary)
-        guard CGImageDestinationFinalize(destination) else {
-            return nil
-        }
-        return output as Data
     }
 
     /// Detects phone screenshots (by screen aspect ratio or filename) and crops off the iOS status bar
     /// (time, signal, battery indicator) at the top and home indicator at the bottom before sending.
     public static func autoCroppedScreenshotData(_ data: Data, fileName: String? = nil) -> (data: Data, dimensions: PixelDimensions)? {
-        let thumbOpts: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true
-        ]
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let type = CGImageSourceGetType(source),
-              CGImageSourceGetCount(source) > 0 else {
+        guard !data.isEmpty, data.count <= 25_000_000 else {
             return nil
         }
-        if let utType = UTType(type as String), !utType.conforms(to: .image) || utType.conforms(to: .gif) {
-            return nil
-        }
-        guard let oriented = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOpts as CFDictionary) ?? CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-            return nil
-        }
-        let width = oriented.width
-        let height = oriented.height
-        guard width >= 500, height > width else { return nil }
+        return autoreleasepool {
+            let thumbOpts: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 4096,
+                kCGImageSourceShouldCache: false,
+                kCGImageSourceShouldCacheImmediately: false
+            ]
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let type = CGImageSourceGetType(source),
+                  CGImageSourceGetCount(source) > 0 else {
+                return nil
+            }
+            if let utType = UTType(type as String), !utType.conforms(to: .image) || utType.conforms(to: .gif) {
+                return nil
+            }
+            guard let oriented = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOpts as CFDictionary) ?? CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+                return nil
+            }
+            let width = oriented.width
+            let height = oriented.height
+            guard width >= 500, height > width else { return nil }
 
-        let aspect = Double(height) / Double(width)
-        let isModernIPhone = abs(aspect - (19.5 / 9.0)) < 0.09
-        let isClassicIPhone = abs(aspect - (16.0 / 9.0)) < 0.05
-        let lowerName = (fileName ?? "").lowercased()
-        let namedScreenshot = lowerName.contains("screenshot") || lowerName.contains("снимок") || lowerName.hasPrefix("img_")
-        guard isModernIPhone || (isClassicIPhone && namedScreenshot) else {
-            return nil
-        }
+            let aspect = Double(height) / Double(width)
+            let isModernIPhone = abs(aspect - (19.5 / 9.0)) < 0.09
+            let isClassicIPhone = abs(aspect - (16.0 / 9.0)) < 0.05
+            let lowerName = (fileName ?? "").lowercased()
+            let namedScreenshot = lowerName.contains("screenshot") || lowerName.contains("снимок") || lowerName.hasPrefix("img_")
+            guard isModernIPhone || (isClassicIPhone && namedScreenshot) else {
+                return nil
+            }
 
-        let topRatio = isModernIPhone ? 0.054 : 0.032
-        let bottomRatio = isModernIPhone ? 0.026 : 0.0
-        let topCrop = Int(round(Double(height) * topRatio))
-        let bottomCrop = Int(round(Double(height) * bottomRatio))
-        let croppedHeight = height - topCrop - bottomCrop
-        guard topCrop > 12, croppedHeight > height / 2,
-              let cropped = oriented.cropping(to: CGRect(x: 0, y: topCrop, width: width, height: croppedHeight)) else {
-            return nil
-        }
+            let topRatio = isModernIPhone ? 0.054 : 0.032
+            let bottomRatio = isModernIPhone ? 0.026 : 0.0
+            let topCrop = Int(round(Double(height) * topRatio))
+            let bottomCrop = Int(round(Double(height) * bottomRatio))
+            let croppedHeight = height - topCrop - bottomCrop
+            guard topCrop > 12, croppedHeight > height / 2,
+                  let cropped = oriented.cropping(to: CGRect(x: 0, y: topCrop, width: width, height: croppedHeight)) else {
+                return nil
+            }
 
-        let output = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(output as CFMutableData, UTType.jpeg.identifier as CFString, 1, nil) else {
-            return nil
+            let output = NSMutableData()
+            guard let destination = CGImageDestinationCreateWithData(output as CFMutableData, UTType.jpeg.identifier as CFString, 1, nil) else {
+                return nil
+            }
+            CGImageDestinationAddImage(destination, cropped, [kCGImageDestinationLossyCompressionQuality: 0.94] as CFDictionary)
+            guard CGImageDestinationFinalize(destination) else {
+                return nil
+            }
+            return (output as Data, PixelDimensions(width: Int32(width), height: Int32(croppedHeight)))
         }
-        CGImageDestinationAddImage(destination, cropped, [kCGImageDestinationLossyCompressionQuality: 0.94] as CFDictionary)
-        guard CGImageDestinationFinalize(destination) else {
-            return nil
-        }
-        return (output as Data, PixelDimensions(width: Int32(width), height: Int32(croppedHeight)))
     }
 }
 
@@ -1979,8 +2301,11 @@ public enum FullGramLinkCleaner {
                         return attr
                     }
                 }
-                if file.mimeType.hasPrefix("image/"), let localRef = updatedResource as? LocalFileReferenceMediaResource {
-                    if var rawData = try? Data(contentsOf: URL(fileURLWithPath: localRef.localFilePath)) {
+                if file.mimeType.hasPrefix("image/"), let localRef = updatedResource as? LocalFileReferenceMediaResource,
+                   FileManager.default.fileExists(atPath: localRef.localFilePath) {
+                    let fSize = ((try? FileManager.default.attributesOfItem(atPath: localRef.localFilePath))?[.size] as? NSNumber)?.int64Value ?? 0
+                    if fSize > 0 && fSize <= 25_000_000,
+                       var rawData = try? Data(contentsOf: URL(fileURLWithPath: localRef.localFilePath), options: .mappedIfSafe) {
                         var workingData: Data?
                         if FullGramExtras.shared.autoCropScreenshots,
                            let cropped = FullGramExtras.autoCroppedScreenshotData(rawData, fileName: file.fileName) {
@@ -2022,7 +2347,8 @@ public enum FullGramLinkCleaner {
                       let image = newMediaReference?.media as? TelegramMediaImage,
                       let largestRep = image.representations.max(by: { $0.dimensions.width * $0.dimensions.height < $1.dimensions.width * $1.dimensions.height }),
                       let localRef = largestRep.resource as? LocalFileReferenceMediaResource,
-                      let rawData = try? Data(contentsOf: URL(fileURLWithPath: localRef.localFilePath)),
+                      FileManager.default.fileExists(atPath: localRef.localFilePath),
+                      let rawData = try? Data(contentsOf: URL(fileURLWithPath: localRef.localFilePath), options: .mappedIfSafe),
                       let cropped = FullGramExtras.autoCroppedScreenshotData(rawData, fileName: nil) {
                 let croppedURL = URL(fileURLWithPath: NSTemporaryDirectory() + "fg-clean-shot-\(Int64.random(in: 1 ... Int64.max)).jpg")
                 if (try? cropped.data.write(to: croppedURL, options: .atomic)) != nil {
@@ -2591,6 +2917,205 @@ public enum FullGramDesignWatchdog {
 
     public static func clearRollbackNotice() {
         UserDefaults.standard.set(false, forKey: self.rolledBackKey)
+    }
+}
+
+public enum FullGramCacheCleaner {
+    @discardableResult
+    public static func runIfNeeded(force: Bool = false) -> Int64 {
+        let extras = FullGramExtras.shared
+        let intervalDays = extras.autoCleanCacheIntervalDays
+        let maxMB = extras.autoCleanCacheMaxMB
+        if !force {
+            if intervalDays <= 0 && maxMB <= 0 {
+                return 0
+            }
+            let now = Date().timeIntervalSince1970
+            let minElapsed: TimeInterval = intervalDays > 0 ? TimeInterval(intervalDays) * 86400.0 : 3600.0
+            if extras.lastAutoCacheCleanTimestamp > 0 && (now - extras.lastAutoCacheCleanTimestamp) < minElapsed && maxMB <= 0 {
+                return 0
+            }
+        }
+        extras.lastAutoCacheCleanTimestamp = Date().timeIntervalSince1970
+
+        var freedBytes: Int64 = 0
+        let fm = FileManager.default
+        let cutoff = intervalDays > 0 ? Date().addingTimeInterval(-TimeInterval(intervalDays) * 86400.0) : Date.distantFuture
+
+        let tmpDir = URL(fileURLWithPath: NSTemporaryDirectory())
+        if let tmpItems = try? fm.contentsOfDirectory(at: tmpDir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey], options: []) {
+            for url in tmpItems {
+                let vals = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+                let ageOk = force || (vals?.contentModificationDate ?? .distantPast) < cutoff || url.lastPathComponent.hasPrefix("fg_")
+                if ageOk {
+                    freedBytes += Int64(vals?.fileSize ?? 0)
+                    try? fm.removeItem(at: url)
+                }
+            }
+        }
+
+        if let cachesDir = fm.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            var candidates: [(url: URL, size: Int64, date: Date)] = []
+            var totalBytes: Int64 = 0
+            if let enumerator = fm.enumerator(at: cachesDir, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey], options: [.skipsHiddenFiles]) {
+                for case let url as URL in enumerator {
+                    let name = url.lastPathComponent
+                    if name.hasPrefix("fullgram_") || name.hasSuffix(".sqlite") || name.hasSuffix(".db") {
+                        continue
+                    }
+                    guard let vals = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]),
+                          vals.isRegularFile == true else { continue }
+                    let sz = Int64(vals.fileSize ?? 0)
+                    let mod = vals.contentModificationDate ?? .distantPast
+                    totalBytes += sz
+                    candidates.append((url, sz, mod))
+                }
+            }
+            if force || (intervalDays > 0) {
+                for item in candidates where force || item.date < cutoff {
+                    freedBytes += item.size
+                    totalBytes = max(0, totalBytes - item.size)
+                    try? fm.removeItem(at: item.url)
+                }
+            }
+            if !force && maxMB > 0 {
+                let limitBytes = Int64(maxMB) * 1024 * 1024
+                if totalBytes > limitBytes {
+                    for item in candidates.sorted(by: { $0.date < $1.date }) {
+                        if totalBytes <= limitBytes { break }
+                        if fm.fileExists(atPath: item.url.path) {
+                            freedBytes += item.size
+                            totalBytes = max(0, totalBytes - item.size)
+                            try? fm.removeItem(at: item.url)
+                        }
+                    }
+                }
+            }
+        }
+        return freedBytes
+    }
+}
+
+public struct FullGramContactNote: Codable, Equatable, Sendable {
+    public var text: String
+    public var tags: [String]
+    public var updatedAt: Int32
+
+    public init(text: String, tags: [String], updatedAt: Int32) {
+        self.text = text
+        self.tags = tags
+        self.updatedAt = updatedAt
+    }
+}
+
+public final class FullGramContactNotesStore: @unchecked Sendable {
+    public static let shared = FullGramContactNotesStore()
+    public static let didChangeNotification = Notification.Name("FullGram.ContactNotesChanged")
+
+    private let lock = NSLock()
+    private var notes: [String: FullGramContactNote] = [:]
+
+    private var fileURL: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let dir = base.appendingPathComponent("FullGram", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir.appendingPathComponent("contact_notes_v1.json")
+    }
+
+    private init() {
+        if let data = try? Data(contentsOf: self.fileURL),
+           let decoded = try? JSONDecoder().decode([String: FullGramContactNote].self, from: data) {
+            self.notes = decoded
+        }
+    }
+
+    public func note(forPeerId peerId: Int64) -> FullGramContactNote? {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.notes[String(peerId)]
+    }
+
+    public func setNote(forPeerId peerId: Int64, text: String, tags: [String]) {
+        let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanTags = tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        self.lock.lock()
+        if cleanText.isEmpty && cleanTags.isEmpty {
+            self.notes.removeValue(forKey: String(peerId))
+        } else {
+            self.notes[String(peerId)] = FullGramContactNote(text: cleanText, tags: cleanTags, updatedAt: Int32(Date().timeIntervalSince1970))
+        }
+        if let encoded = try? JSONEncoder().encode(self.notes) {
+            try? encoded.write(to: self.fileURL, options: .atomic)
+        }
+        self.lock.unlock()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        }
+    }
+}
+
+public final class FullGramLocalBusinessStore: @unchecked Sendable {
+    public static let shared = FullGramLocalBusinessStore()
+
+    private let lock = NSLock()
+    private let defaults = UserDefaults.standard
+
+    private init() {}
+
+    public func saveLocation(accountPeerId: Int64, location: TelegramBusinessLocation?) {
+        let key = "fullgram.localBusiness.location.\(accountPeerId)"
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        if let location {
+            var dict: [String: Any] = ["address": location.address]
+            if let coords = location.coordinates {
+                dict["lat"] = coords.latitude
+                dict["lon"] = coords.longitude
+            }
+            self.defaults.set(dict, forKey: key)
+        } else {
+            self.defaults.removeObject(forKey: key)
+        }
+    }
+
+    public func storedLocation(accountPeerId: Int64) -> TelegramBusinessLocation? {
+        let key = "fullgram.localBusiness.location.\(accountPeerId)"
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        guard let dict = self.defaults.dictionary(forKey: key),
+              let address = dict["address"] as? String else {
+            return nil
+        }
+        var coords: TelegramBusinessLocation.Coordinates?
+        if let lat = dict["lat"] as? Double, let lon = dict["lon"] as? Double {
+            coords = TelegramBusinessLocation.Coordinates(latitude: lat, longitude: lon)
+        }
+        return TelegramBusinessLocation(address: address, coordinates: coords)
+    }
+
+    public func saveHours(accountPeerId: Int64, hours: TelegramBusinessHours?) {
+        let key = "fullgram.localBusiness.hours.\(accountPeerId)"
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        if let hours, let encoded = try? JSONEncoder().encode(hours) {
+            self.defaults.set(encoded, forKey: key)
+        } else {
+            self.defaults.removeObject(forKey: key)
+        }
+    }
+
+    public func storedHours(accountPeerId: Int64) -> TelegramBusinessHours? {
+        let key = "fullgram.localBusiness.hours.\(accountPeerId)"
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        guard let data = self.defaults.data(forKey: key),
+              let decoded = try? JSONDecoder().decode(TelegramBusinessHours.self, from: data) else {
+            return nil
+        }
+        return decoded
     }
 }
 

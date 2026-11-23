@@ -236,9 +236,17 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
         }
     }
     
-    items[.shortcuts]!.append(PeerInfoScreenDisclosureItem(id: 0, text: "FullGram", icon: fullGramSettingsMenuIcon(), action: {
-        interaction.openSettings(.fullgram)
-    }))
+    let betaActive = FullGramBetaAccess.shared.isUnlocked(forPeerId: context.account.peerId.id._internalGetInt64Value())
+    let fgBetaRu = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+    if betaActive {
+        items[.shortcuts]!.append(PeerInfoScreenDisclosureItem(id: 0, label: .text("Beta"), text: "FullGram", icon: fullGramSettingsMenuIcon(), action: {
+            interaction.openSettings(.fullgram)
+        }))
+    } else {
+        items[.shortcuts]!.append(PeerInfoScreenDisclosureItem(id: 0, label: .text(fgBetaRu ? "🔒 Бета" : "🔒 Beta"), text: "FullGram", icon: fullGramSettingsMenuIcon(), action: {
+            interaction.getController()?.push(fullGramBetaActivationController(context: context))
+        }))
+    }
     items[.shortcuts]!.append(PeerInfoScreenDisclosureItem(id: 1, text: presentationData.strings.Settings_SavedMessages, icon: PresentationResourcesSettings.savedMessages, action: {
         interaction.openSettings(.savedMessages)
     }))
@@ -349,6 +357,29 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
                 interaction.openSettings(.premiumGift)
             }))
         }
+    }
+    if betaActive {
+        let fgStars = FullGramEconomy.shared.starsBalance
+        let fgGram = FullGramEconomy.shared.gramBalance
+        let fgRu = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+        items[.payment]!.append(PeerInfoScreenDisclosureItem(
+            id: 106,
+            label: .text("\(fgStars) ★ • \(String(format: "%.2f", fgGram)) TON"),
+            text: fgRu ? "Кошелёк и Звёзды FullGram" : "FullGram Wallet & Stars",
+            icon: PresentationResourcesSettings.stars,
+            action: {
+                interaction.getController()?.push(fullGramEconomyHubController(context: context))
+            }
+        ))
+        items[.payment]!.append(PeerInfoScreenDisclosureItem(
+            id: 107,
+            label: .text("\(fgStars) ★"),
+            text: fgRu ? "Купить подарок FullGram" : "Buy FullGram Gift",
+            icon: PresentationResourcesSettings.premiumGift,
+            action: {
+                interaction.getController()?.push(fullGramGiftMarketController(context: context, targetPeerId: nil, targetPeerName: nil))
+            }
+        ))
     }
     
     if let settings = data.globalSettings {

@@ -152,6 +152,13 @@ public final class AvatarComponent: Component {
         /// Bumped by every draw and by suspending, so that only the latest draw lands.
         private var placeholderGeneration = 0
 
+        private var fullGramFrameView: FullGramAvatarFrameView?
+        private nonisolated(unsafe) var fullGramFrameObserver: NSObjectProtocol?
+        private var fullGramPeerId: Int64?
+        private var fullGramAccountPeerId: Int64?
+        private var fullGramIsSelfPeer: Bool = false
+        private var fullGramSuppressFrame: Bool = false
+
         override init(frame: CGRect) {
             self.contentView = UIView()
             self.imageLayer = AvatarComponentImageLayer()
@@ -163,10 +170,67 @@ public final class AvatarComponent: Component {
             self.contentView.accessibilityIgnoresInvertColors = true
             self.contentView.layer.addSublayer(self.imageLayer)
             self.addSubview(self.contentView)
+
+            self.fullGramFrameObserver = NotificationCenter.default.addObserver(
+                forName: FullGramAvatarFrames.didChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.updateFullGramFrame()
+                }
+            }
+        }
+
+        deinit {
+            if let observer = self.fullGramFrameObserver {
+                NotificationCenter.default.removeObserver(observer)
+            }
         }
 
         required init?(coder: NSCoder) {
             fatalError("init(coder:) has not been implemented")
+        }
+
+        private func updateFullGramFrame() {
+            guard !self.fullGramSuppressFrame,
+                  let peerId = self.fullGramPeerId, peerId != 0 else {
+                if let existing = self.fullGramFrameView {
+                    existing.configure(with: nil)
+                    existing.stop()
+                    existing.isHidden = true
+                }
+                return
+            }
+            let size = self.contentView.bounds.size
+            let isCircularSize = size.width >= 26.0 && size.width <= 140.0
+            let allowedHere = self.fullGramIsSelfPeer || FullGramAvatarFrames.showInChatListAndMessages || size.width >= 72.0
+            guard isCircularSize, allowedHere,
+                  let preset = FullGramAvatarFrames.frame(forPeerId: peerId, selfPeerId: self.fullGramAccountPeerId) else {
+                if let existing = self.fullGramFrameView, !existing.isHidden {
+                    existing.configure(with: nil)
+                    existing.isHidden = true
+                }
+                return
+            }
+            let frameView: FullGramAvatarFrameView
+            if let existing = self.fullGramFrameView {
+                frameView = existing
+            } else {
+                let created = FullGramAvatarFrameView(frame: self.contentView.bounds)
+                self.fullGramFrameView = created
+                self.addSubview(created)
+                frameView = created
+            }
+            self.clipsToBounds = false
+            frameView.isHidden = false
+            if frameView.frame != self.contentView.bounds {
+                frameView.frame = self.contentView.bounds
+            }
+            if self.subviews.last !== frameView {
+                self.bringSubviewToFront(frameView)
+            }
+            frameView.configure(with: preset)
         }
 
         func update(component: AvatarComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
@@ -252,6 +316,15 @@ public final class AvatarComponent: Component {
             }
 
             self.displayPlaceholderIfNeeded(synchronously: displaySynchronously)
+
+            let acctId = component.context.account.peerId.toInt64()
+            FullGramCloudCosmetics.shared.setActiveSelfPeerId(acctId)
+            let suppressFrame = (component.overrideImage != nil)
+            self.fullGramSuppressFrame = suppressFrame
+            self.fullGramIsSelfPeer = !suppressFrame && (component.peer?.id == component.context.account.peerId)
+            self.fullGramPeerId = suppressFrame ? nil : component.peer?.id.toInt64()
+            self.fullGramAccountPeerId = acctId
+            self.updateFullGramFrame()
 
             return size
         }

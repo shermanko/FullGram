@@ -1545,9 +1545,173 @@ public final class FullGramPythonVM {
         ])
         self.modules["random"] = .table(randomMod)
 
+        let formatPyStrftime: (String, Date, TimeZone) -> String = { fmt, date, tz in
+            var cal = Calendar.current
+            cal.timeZone = tz
+            let c = cal.dateComponents([.year, .month, .day, .hour, .minute, .second, .weekday], from: date)
+            let yday = cal.ordinality(of: .day, in: .year, for: date) ?? 1
+            let hour24 = c.hour ?? 0
+            let hour12 = hour24 % 12 == 0 ? 12 : (hour24 % 12)
+            let pad2: (Int) -> String = { String(format: "%02d", $0) }
+            let df = DateFormatter()
+            df.timeZone = tz
+            df.locale = Locale.current
+            df.dateFormat = "EEEE"
+            let fullWeekday = df.string(from: date)
+            df.dateFormat = "EEE"
+            let shortWeekday = df.string(from: date)
+            df.dateFormat = "MMMM"
+            let fullMonth = df.string(from: date)
+            df.dateFormat = "MMM"
+            let shortMonth = df.string(from: date)
+
+            var out = ""
+            let chars = Array(fmt)
+            var i = 0
+            while i < chars.count {
+                if chars[i] == "%", i + 1 < chars.count {
+                    let code = chars[i + 1]
+                    switch code {
+                    case "Y": out += String(format: "%04d", c.year ?? 1970)
+                    case "y": out += pad2((c.year ?? 1970) % 100)
+                    case "m": out += pad2(c.month ?? 1)
+                    case "d": out += pad2(c.day ?? 1)
+                    case "H": out += pad2(hour24)
+                    case "I": out += pad2(hour12)
+                    case "M": out += pad2(c.minute ?? 0)
+                    case "S": out += pad2(c.second ?? 0)
+                    case "p": out += (hour24 < 12 ? "AM" : "PM")
+                    case "w": out += String(((c.weekday ?? 1) + 6) % 7)
+                    case "j": out += String(format: "%03d", yday)
+                    case "A": out += fullWeekday
+                    case "a": out += shortWeekday
+                    case "B": out += fullMonth
+                    case "b": out += shortMonth
+                    case "X": out += "\(pad2(hour24)):\(pad2(c.minute ?? 0)):\(pad2(c.second ?? 0))"
+                    case "x": out += "\(pad2(c.day ?? 1)).\(pad2(c.month ?? 1)).\(String(format: "%04d", c.year ?? 1970))"
+                    case "%": out.append("%")
+                    default:
+                        out.append("%")
+                        out.append(code)
+                    }
+                    i += 2
+                } else {
+                    out.append(chars[i])
+                    i += 1
+                }
+            }
+            return out
+        }
+
+        let makeStructTime: (Date, TimeZone) -> FullGramPluginValue = { date, tz in
+            var cal = Calendar.current
+            cal.timeZone = tz
+            let c = cal.dateComponents([.year, .month, .day, .hour, .minute, .second, .weekday], from: date)
+            let yday = cal.ordinality(of: .day, in: .year, for: date) ?? 1
+            let wday = ((c.weekday ?? 1) + 5) % 7
+            return .table(FullGramPluginTableBox(dict: [
+                "tm_year": .int(Int64(c.year ?? 1970)),
+                "tm_mon": .int(Int64(c.month ?? 1)),
+                "tm_mday": .int(Int64(c.day ?? 1)),
+                "tm_hour": .int(Int64(c.hour ?? 0)),
+                "tm_min": .int(Int64(c.minute ?? 0)),
+                "tm_sec": .int(Int64(c.second ?? 0)),
+                "tm_wday": .int(Int64(wday)),
+                "tm_yday": .int(Int64(yday)),
+                "tm_isdst": .int(tz.isDaylightSavingTime(for: date) ? 1 : 0),
+                "year": .int(Int64(c.year ?? 1970)),
+                "month": .int(Int64(c.month ?? 1)),
+                "day": .int(Int64(c.day ?? 1)),
+                "hour": .int(Int64(c.hour ?? 0)),
+                "minute": .int(Int64(c.minute ?? 0)),
+                "second": .int(Int64(c.second ?? 0))
+            ]))
+        }
+
         let timeMod = FullGramPluginTableBox(dict: [
-            "time": .function { _ in .double(Date().timeIntervalSince1970) }
+            "time": .function { _ in .double(Date().timeIntervalSince1970) },
+            "monotonic": .function { _ in .double(ProcessInfo.processInfo.systemUptime) },
+            "perf_counter": .function { _ in .double(ProcessInfo.processInfo.systemUptime) },
+            "localtime": .function { args in
+                let ts = args.first?.asDouble ?? Date().timeIntervalSince1970
+                return makeStructTime(Date(timeIntervalSince1970: ts), TimeZone.current)
+            },
+            "gmtime": .function { args in
+                let ts = args.first?.asDouble ?? Date().timeIntervalSince1970
+                return makeStructTime(Date(timeIntervalSince1970: ts), TimeZone(secondsFromGMT: 0) ?? TimeZone.current)
+            },
+            "strftime": .function { args in
+                let fmt = args.first?.asString ?? "%Y-%m-%d %H:%M:%S"
+                var date = Date()
+                if args.count > 1 {
+                    if let ts = args[1].asDouble {
+                        date = Date(timeIntervalSince1970: ts)
+                    } else if case let .table(box) = args[1] {
+                        var comps = DateComponents()
+                        comps.year = Int(box.get(key: .string("tm_year")).asInt ?? box.get(key: .string("year")).asInt ?? 1970)
+                        comps.month = Int(box.get(key: .string("tm_mon")).asInt ?? box.get(key: .string("month")).asInt ?? 1)
+                        comps.day = Int(box.get(key: .string("tm_mday")).asInt ?? box.get(key: .string("day")).asInt ?? 1)
+                        comps.hour = Int(box.get(key: .string("tm_hour")).asInt ?? box.get(key: .string("hour")).asInt ?? 0)
+                        comps.minute = Int(box.get(key: .string("tm_min")).asInt ?? box.get(key: .string("minute")).asInt ?? 0)
+                        comps.second = Int(box.get(key: .string("tm_sec")).asInt ?? box.get(key: .string("second")).asInt ?? 0)
+                        if let resolved = Calendar.current.date(from: comps) {
+                            date = resolved
+                        }
+                    }
+                }
+                return .string(formatPyStrftime(fmt, date, TimeZone.current))
+            },
+            "ctime": .function { args in
+                let ts = args.first?.asDouble ?? Date().timeIntervalSince1970
+                return .string(formatPyStrftime("%a %b %d %H:%M:%S %Y", Date(timeIntervalSince1970: ts), TimeZone.current))
+            }
         ])
         self.modules["time"] = .table(timeMod)
+
+        let makeDateTimeObj: (Date) -> FullGramPluginValue = { date in
+            let cal = Calendar.current
+            let c = cal.dateComponents([.year, .month, .day, .hour, .minute, .second, .weekday], from: date)
+            let wday = ((c.weekday ?? 1) + 5) % 7
+            let hm = String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
+            let hms = String(format: "%02d:%02d:%02d", c.hour ?? 0, c.minute ?? 0, c.second ?? 0)
+            let dateStr = String(format: "%02d.%02d.%04d", c.day ?? 1, c.month ?? 1, c.year ?? 1970)
+            let iso = ISO8601DateFormatter().string(from: date)
+            return .table(FullGramPluginTableBox(dict: [
+                "year": .int(Int64(c.year ?? 1970)),
+                "month": .int(Int64(c.month ?? 1)),
+                "day": .int(Int64(c.day ?? 1)),
+                "hour": .int(Int64(c.hour ?? 0)),
+                "minute": .int(Int64(c.minute ?? 0)),
+                "second": .int(Int64(c.second ?? 0)),
+                "hm": .string(hm),
+                "hms": .string(hms),
+                "date": .string(dateStr),
+                "iso": .string(iso),
+                "timestamp": .function { _ in .double(date.timeIntervalSince1970) },
+                "weekday": .function { _ in .int(Int64(wday)) },
+                "isoformat": .function { _ in .string(iso) },
+                "strftime": .function { args in
+                    let fmt = args.first?.asString ?? "%Y-%m-%d %H:%M:%S"
+                    return .string(formatPyStrftime(fmt, date, TimeZone.current))
+                }
+            ]))
+        }
+
+        let dtClass = FullGramPluginTableBox(dict: [
+            "now": .function { _ in makeDateTimeObj(Date()) },
+            "fromtimestamp": .function { args in
+                let ts = args.first?.asDouble ?? Date().timeIntervalSince1970
+                return makeDateTimeObj(Date(timeIntervalSince1970: ts))
+            }
+        ])
+        let datetimeMod = FullGramPluginTableBox(dict: [
+            "datetime": .table(dtClass),
+            "now": .function { _ in makeDateTimeObj(Date()) },
+            "fromtimestamp": .function { args in
+                let ts = args.first?.asDouble ?? Date().timeIntervalSince1970
+                return makeDateTimeObj(Date(timeIntervalSince1970: ts))
+            }
+        ])
+        self.modules["datetime"] = .table(datetimeMod)
     }
 }

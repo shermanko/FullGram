@@ -567,7 +567,40 @@ public enum FullGramArchiveParser {
                 if !result.isEmpty { return result }
             }
         }
-        return []
+        // Fallback for partial archives (preview without downloading full file): scan Local File Headers (0x04034B50)
+        var fallback: [FullGramArchiveEntry] = []
+        var offset = 0
+        while offset + 30 <= data.count && fallback.count < 5_000 {
+            if readUInt32LE(data, at: offset) == 0x04034B50 {
+                let method = readUInt16LE(data, at: offset + 8)
+                let compSize = UInt64(readUInt32LE(data, at: offset + 18))
+                let uncompSize = UInt64(readUInt32LE(data, at: offset + 22))
+                let nameLen = Int(readUInt16LE(data, at: offset + 26))
+                let extraLen = Int(readUInt16LE(data, at: offset + 28))
+                let nameStart = offset + 30
+                if nameLen > 0 && nameLen <= 4096 && nameStart + nameLen <= data.count {
+                    let nameData = data.subdata(in: nameStart ..< (nameStart + nameLen))
+                    let name = String(data: nameData, encoding: .utf8) ?? String(data: nameData, encoding: .isoLatin1) ?? "entry"
+                    let isDir = name.hasSuffix("/")
+                    fallback.append(FullGramArchiveEntry(
+                        name: name,
+                        compressedSize: compSize,
+                        uncompressedSize: uncompSize,
+                        method: method,
+                        localHeaderOffset: UInt64(offset),
+                        isDirectory: isDir,
+                        isExtractable: !isDir && (method == 0 || method == 8) && (nameStart + nameLen + extraLen + Int(compSize) <= data.count)
+                    ))
+                    let step = 30 + nameLen + extraLen + Int(compSize)
+                    if step > 0 {
+                        offset += step
+                        continue
+                    }
+                }
+            }
+            offset += 1
+        }
+        return fallback
     }
 
     public static func extractZipEntry(_ entry: FullGramArchiveEntry, from data: Data) -> Data? {
@@ -950,6 +983,7 @@ public final class FullGramAudioTrimSpliceController: ViewController, UITableVie
 
     private var segments: [AudioSegment] = []
     private var selectedIndex: Int = 0
+    private let isVideoCircle: Bool
     private let onComplete: ((URL, TimeInterval) -> Void)?
     private let onSendOriginal: (() -> Void)?
 
@@ -971,17 +1005,19 @@ public final class FullGramAudioTrimSpliceController: ViewController, UITableVie
     public init(
         initialURL: URL?,
         title: String = "Аудио",
+        isVideoCircle: Bool = false,
         onComplete: ((URL, TimeInterval) -> Void)? = nil,
         onSendOriginal: (() -> Void)? = nil
     ) {
+        self.isVideoCircle = isVideoCircle
         self.onComplete = onComplete
         self.onSendOriginal = onSendOriginal
         super.init(navigationBarPresentationData: fullGramDefaultNavigationBarPresentationData())
         self.isOpaqueWhenInOverlay = true
         self.blocksBackgroundWhenInOverlay = true
-        self.title = "Нарезка и склейка аудио"
+        self.title = isVideoCircle ? "Нарезка и склейка кружка" : "Нарезка и склейка аудио"
         if let initialURL {
-            let safeURL = fullGramEnsureExtensionURL(for: initialURL, preferredFileName: title, fallbackExtension: "m4a")
+            let safeURL = fullGramEnsureExtensionURL(for: initialURL, preferredFileName: title, fallbackExtension: isVideoCircle ? "mp4" : "m4a")
             let asset = AVURLAsset(url: safeURL)
             let dur = max(0.5, CMTimeGetSeconds(asset.duration))
             self.segments = [AudioSegment(url: safeURL, title: title, duration: dur, trimStart: 0.0, trimEnd: dur)]
@@ -1200,7 +1236,8 @@ public final class FullGramAudioTrimSpliceController: ViewController, UITableVie
     }
 
     @objc private func addClipTapped() {
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.audio], asCopy: true)
+        let types: [UTType] = self.isVideoCircle ? [.movie, .video, .mpeg4Movie] : [.audio]
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
         picker.allowsMultipleSelection = true
         picker.delegate = self
         self.present(picker, animated: true)
@@ -1234,36 +1271,61 @@ public final class FullGramAudioTrimSpliceController: ViewController, UITableVie
         self.exportButton.configuration = cfg
 
         let composition = AVMutableComposition()
-        guard let compAudio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+        let compAudio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+        let compVideo = self.isVideoCircle ? composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) : nil
+        if !self.isVideoCircle && compAudio == nil {
             self.isExporting = false
             self.refreshSelectionUI()
             return
         }
         var cursor = CMTime.zero
         var totalDuration: TimeInterval = 0.0
+        var appliedTransform = false
         for seg in self.segments {
             let asset = AVURLAsset(url: seg.url)
-            guard let track = asset.tracks(withMediaType: .audio).first else { continue }
             let start = CMTime(seconds: seg.trimStart, preferredTimescale: 600)
             let dur = CMTime(seconds: seg.clippedDuration, preferredTimescale: 600)
-            do {
-                try compAudio.insertTimeRange(CMTimeRange(start: start, duration: dur), of: track, at: cursor)
-                cursor = CMTimeAdd(cursor, dur)
-                totalDuration += seg.clippedDuration
-            } catch {
-                continue
+            let range = CMTimeRange(start: start, duration: dur)
+            if self.isVideoCircle {
+                guard let vTrack = asset.tracks(withMediaType: .video).first, let compVideo else { continue }
+                do {
+                    try compVideo.insertTimeRange(range, of: vTrack, at: cursor)
+                    if !appliedTransform {
+                        compVideo.preferredTransform = vTrack.preferredTransform
+                        appliedTransform = true
+                    }
+                    if let aTrack = asset.tracks(withMediaType: .audio).first, let compAudio {
+                        try? compAudio.insertTimeRange(range, of: aTrack, at: cursor)
+                    }
+                    cursor = CMTimeAdd(cursor, dur)
+                    totalDuration += seg.clippedDuration
+                } catch {
+                    continue
+                }
+            } else {
+                guard let track = asset.tracks(withMediaType: .audio).first, let compAudio else { continue }
+                do {
+                    try compAudio.insertTimeRange(range, of: track, at: cursor)
+                    cursor = CMTimeAdd(cursor, dur)
+                    totalDuration += seg.clippedDuration
+                } catch {
+                    continue
+                }
             }
         }
         let finalDuration = totalDuration
-        let outURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("fg_audio_\(UUID().uuidString).m4a")
+        let outURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(
+            self.isVideoCircle ? "fg_circle_\(UUID().uuidString).mp4" : "fg_audio_\(UUID().uuidString).m4a"
+        )
         try? FileManager.default.removeItem(at: outURL)
-        guard let exporter = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetAppleM4A) else {
+        let preset = self.isVideoCircle ? AVAssetExportPresetMediumQuality : AVAssetExportPresetAppleM4A
+        guard let exporter = AVAssetExportSession(asset: composition, presetName: preset) else {
             self.isExporting = false
             self.refreshSelectionUI()
             return
         }
         exporter.outputURL = outURL
-        exporter.outputFileType = .m4a
+        exporter.outputFileType = self.isVideoCircle ? .mp4 : .m4a
         let exporterBox = FullGramUncheckedSendableBox(value: exporter)
         exporter.exportAsynchronously { [weak self] in
             let success = exporterBox.value.status == .completed

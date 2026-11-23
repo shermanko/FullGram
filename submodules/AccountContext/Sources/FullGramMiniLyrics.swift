@@ -60,6 +60,7 @@ public final class FullGramMiniLyrics: @unchecked Sendable {
 
     private var key: String?
     private var lines: [Line] = []
+    private var lastAttemptByKey: [String: TimeInterval] = [:]
     private let disposable = MetaDisposable()
 
     private init() {}
@@ -70,27 +71,45 @@ public final class FullGramMiniLyrics: @unchecked Sendable {
             + (artist ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
+    public func resetCache() {
+        self.lock.lock()
+        self.key = nil
+        self.lines = []
+        self.lastAttemptByKey.removeAll()
+        self.lock.unlock()
+        self.disposable.set(nil)
+        NotificationCenter.default.post(name: FullGramMiniLyrics.didUpdateNotification, object: nil)
+    }
+
     public func request(title: String, artist: String?, duration: Double) {
         let key = Self.makeKey(title: title, artist: artist)
-        guard Self.isEnabled, duration > 0.0 else {
+        guard Self.isEnabled else {
             return
         }
+        let effectiveDuration = duration > 1.0 ? duration : 180.0
+        let now = Date().timeIntervalSince1970
         self.lock.lock()
-        guard self.key != key, let fetch = self._fetch else {
+        let alreadyHave = (self.key == key && !self.lines.isEmpty)
+        let recentlyTried = (now - (self.lastAttemptByKey[key] ?? 0.0)) < 15.0
+        guard !alreadyHave, !recentlyTried, let fetch = self._fetch else {
             self.lock.unlock()
             return
         }
         self.key = key
         self.lines = []
+        self.lastAttemptByKey[key] = now
         self.lock.unlock()
 
-        self.disposable.set((fetch(title, artist, duration)
+        self.disposable.set((fetch(title, artist, effectiveDuration)
         |> deliverOnMainQueue).startStrict(next: { [weak self] lines in
             guard let self else { return }
             self.lock.lock()
             let matches = (self.key == key)
             if matches {
                 self.lines = lines ?? []
+                if !(lines ?? []).isEmpty {
+                    self.lastAttemptByKey.removeValue(forKey: key)
+                }
             }
             self.lock.unlock()
             if matches {

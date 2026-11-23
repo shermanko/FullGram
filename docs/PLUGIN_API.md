@@ -1,244 +1,351 @@
-# FullGram Developer API (v1.5.2)
+# FullGram Plugin System & Developer API (v2.0)
 
-Документация по разработке плагинов на **Lua**, **Python** и **Rust**, созданию графического интерфейса (`fullgram.open_ui`), ограничениям безопасности и протоколу ИИ-ассистента FullGram.
+Полностью переработанная система плагинов FullGram с поддержкой **управления ником и профилем Telegram**, **доступа к локальному времени и состоянию телефона**, **фонового режима выполнения** (`on_background_tick`), шины событий и единого модульного **Plugin API v2.0** для **Lua**, **Python** и **Rust**.
 
 ---
 
 ## Содержание
 
-1. [Быстрый старт](#1-быстрый-старт)
-2. [Заголовок и метаданные плагина](#2-заголовок-и-метаданные-плагина)
-3. [Хуки жизненного цикла](#3-хуки-жизненного-цикла)
-4. [Встроенный модуль `fullgram`](#4-встроенный-модуль-fullgram)
+1. [Что нового в Plugin System v2.0](#1-что-нового-в-plugin-system-v20)
+2. [Быстрый старт и метаданные](#2-быстрый-старт-и-метаданные)
+3. [Хуки жизненного цикла и фоновый режим](#3-хуки-жизненного-цикла-и-фоновый-режим)
+4. [Plugin API v2.0 — Полный справочник](#4-plugin-api-v20--полный-справочник)
+   - [4.1. Профиль и ник Telegram (`fullgram.profile`)](#41-профиль-и-ник-telegram-fullgramprofile)
+   - [4.2. Время на телефоне (`fullgram.time`)](#42-время-на-телефоне-fullgramtime)
+   - [4.3. Устройство и батарея (`fullgram.device`)](#43-устройство-и-батарея-fullgramdevice)
+   - [4.4. Фоновый движок и шина событий (`fullgram.background`)](#44-фоновый-движок-и-шина-событий-fullgrambackground)
+   - [4.5. Чаты и сообщения (`fullgram.chat`)](#45-чаты-и-сообщения-fullgramchat)
+   - [4.6. Изолированное и общее хранилище (`fullgram.storage`)](#46-изолированное-и-общее-хранилище-fullgramstorage)
+   - [4.7. Сеть (`fullgram.net`)](#47-сеть-fullgramnet)
+   - [4.8. Криптография и кодирование (`fullgram.crypto`)](#48-криптография-и-кодирование-fullgramcrypto)
+   - [4.9. Интерфейс, буфер обмена и логи (`fullgram.ui`)](#49-интерфейс-буфер-обмена-и-логи-fullgramui)
 5. [Графический UI плагинов (`open_ui` и `on_ui_event`)](#5-графический-ui-плагинов-open_ui-и-on_ui_event)
-6. [Ограничения песочницы и безопасность](#6-ограничения-песочницы-и-безопасность)
-7. [Поддерживаемый синтаксис Lua, Python и Rust](#7-поддерживаемый-синтаксис-lua-python-и-rust)
-8. [Готовые примеры плагинов](#8-готовые-примеры-плагинов)
+6. [Стандартные библиотеки Lua, Python и Rust](#6-стандартные-библиотеки-lua-python-и-rust)
+7. [Готовые примеры плагинов v2.0](#7-готовые-примеры-плагинов-v20)
+8. [Безопасность и ограничения песочницы](#8-безопасность-и-ограничения-песочницы)
 9. [Протокол ИИ-ассистента](#9-протокол-ии-ассистента)
 
 ---
 
-## 1. Быстрый старт
+## 1. Что нового в Plugin System v2.0
+
+- **Управление ником и профилем Telegram (`fullgram.profile.*`)**:
+  - Смена отображаемого имени/ника (`set_name` / `set_nickname`), `@username` (`set_username`) и описания профиля (`set_bio`).
+  - Автоматическое сохранение исходного ника пользователя и быстрый возврат (`restore_name()` / `restore_nickname()`).
+  - Встроенный шаблонизатор (`format_nick`, `apply_template`) с поддержкой плейсхолдеров времени и батареи (`{time}`, `{time_bold}`, `{time_mono}`, `{time_fancy}`, `{clock}`, `{date}`, `{weekday}`, `{battery}`, `{name}`).
+  - Защита от флуд-лимитов Telegram: дедупликация неизменённых значений и встроенный троттлинг MTProto-запросов с отложенной доставкой.
+- **Локальное время и параметры телефона (`fullgram.time.*`, `fullgram.device.*`)**:
+  - Подробное локальное время телефона (`hm`, `hms`, `date`, `iso`, `year`, `month`, `day`, `hour`, `minute`, `second`, `weekday_name`, `timezone`, `utc_offset_str`, `clock_emoji`, стилизованные цифры `bold_hm`, `mono_hm`, `double_hm`, `fancy_hm`).
+  - Информация об устройстве: модель, версия iOS, заряд батареи в %, состояние зарядки, Low Power Mode, активное/фоновое состояние приложения.
+  - Стандартные модули времени в языках: `os` (`os.time`, `os.date`, `os.clock`, `os.difftime`) в Lua; расширенный `time` и новый `datetime` в Python.
+- **Фоновый режим (`on_background_tick`, `on_app_state`, `on_incoming_message`)**:
+  - Выделенный фоновый планировщик (`DispatchSourceTimer` на очереди `.utility`) с индивидуальными интервалами (`5...3600` сек) для каждого плагина.
+  - Запрос `UIBackgroundTaskIdentifier` при сворачивании приложения в фон + автоматическая синхронизация при возврате на передний план.
+  - Отдельный тумблер в **Настройки → FullGram → Плагины → Фоновый режим плагинов** и в редакторе каждого плагина, плюс кнопка **«⏱ Фон»** для отладки фонового тика в песочнице.
+- **Встроенный плагин «Живой Ник и Часы» (`fg_nick_clock`)**:
+  - Команды `.nick`, `.nick clock on`, `.nick clock off`, `.nick set <Имя> | <Фамилия>`, `.nick style <bold|mono|double|circled>`, `.nick bio <текст>`, `.nick reset`, `.time`.
+  - Нативный графический интерфейс управления живым ником (`kind = "nick_clock"`).
+
+---
+
+## 2. Быстрый старт и метаданные
 
 Плагины выполняются во встроенных изолированных VM под управлением [`FullGramPluginManager`](../submodules/Display/Source/FullGramPluginManager.swift):
 - **Lua 5.x** — [`FullGramLuaEngine.swift`](../submodules/Display/Source/FullGramLuaEngine.swift)
 - **Python 3** — [`FullGramPythonEngine.swift`](../submodules/Display/Source/FullGramPythonEngine.swift)
 - **Rust (скриптовое подмножество)** — [`FullGramRustEngine.swift`](../submodules/Display/Source/FullGramRustEngine.swift)
 
-Установить или создать плагин можно через **Настройки → FullGram → Плагины**:
-1. Установка из официального **Маркета плагинов FullGram** (`https://fullgram.korsakovx.workers.dev/plugins.json`).
-2. Создание и редактирование скрипта во встроенном редакторе кода с консолью логов.
+Первые 45 строк скрипта могут содержать теги в комментариях (`--` для Lua, `#` для Python, `//` для Rust):
 
----
-
-## 2. Заголовок и метаданные плагина
-
-Первые 40 строк скрипта могут содержать теги в комментариях (`--` для Lua, `#` для Python, `//` для Rust):
-
-| Тег | Описание | Обязательный |
+| Тег | Описание | Пример |
 | --- | --- | --- |
-| `@name` | Отображаемое имя плагина | Нет (берётся имя файла) |
-| `@id` | Уникальный ID (`[a-z0-9_]`), используется для хранения и обновлений | Нет (генерируется из `@name`) |
-| `@version` | Версия, например `1.5` (при изменении версии встроенный плагин обновляется автоматически) | Нет |
-| `@author` | Имя или `@username` автора | Нет |
-| `@description` | Краткое описание в списке плагинов и в подсказке команд | Нет |
-
-### Пример заголовка (Lua / Python / Rust)
-
-```lua
--- @name Быстрый счётчик
--- @id quick_counter
--- @version 1.0
--- @author shermanko
--- @description Команда .cnt с графическим окном
-```
-
-```python
-# @name Текст-мастер
-# @id text_master
-# @version 1.0
-# @author shermanko
-# @description Команды .upper и .mock
-```
-
-```rust
-// @name Rust Helper
-// @id rust_helper
-// @version 1.0
-// @author shermanko
-// @description Пример плагина на Rust
-```
+| `@name` | Отображаемое имя плагина | `-- @name Живые часы` |
+| `@id` | Уникальный ID (`[a-z0-9_-]`) | `-- @id live_clock` |
+| `@version` | Версия скрипта | `-- @version 2.0` |
+| `@author` | Автор плагина | `-- @author FullGram` |
+| `@description` | Описание в списке плагинов и подсказках | `-- @description Часы в нике` |
+| `@background` | Включить фоновый режим (`true` / `false`) | `-- @background true` |
+| `@interval` | Интервал фонового тика в секундах (`5...3600`, или `1m`) | `-- @interval 30` |
+| `@permission` | Запрашиваемые права (например `net`) | `-- @permission net` |
 
 ---
 
-## 3. Хуки жизненного цикла
+## 3. Хуки жизненного цикла и фоновый режим
 
-### 3.1. `on_command(ctx)`
-Вызывается при отправке сообщения вида `.команда [аргументы]` или `.plug <подкоманда> [аргументы]`.
+### 3.1. `on_load()` и `on_unload()`
+Вызываются при инициализации/включении и при выключении/выгрузке плагина. Удобны для начальной настройки `fullgram.background.set_interval(...)` или подписки на события через `fullgram.background.on(...)`.
+
+### 3.2. `on_background_tick(ctx)` (алиасы: `on_tick(ctx)`, `on_timer(ctx)`)
+Вызывается автоматически по таймеру (в фоне и при активном приложении), если у плагина включён фоновый режим (`@background true` или тумблер в редакторе, или вызван `fullgram.set_interval(sec)`).
 
 **Поля `ctx`:**
-- `ctx.command` (`string`) — имя команды без точки в нижнем регистре (`"casino"`, `"plug"`).
-- `ctx.subcommand` (`string`) — первое слово аргументов в нижнем регистре (`"info-chat"`).
-- `ctx.args` (`string`) — вся строка аргументов.
-- `ctx.text` (`string`) — исходный текст сообщения целиком.
-- `ctx.peer_id` (`int`) — числовой ID чата.
-- `ctx.is_group` (`bool`), `ctx.is_channel` (`bool`).
-- `ctx.chat_stats` (`table | nil`) — локальная статистика чата (для `.plug` / `.info-chat`).
+- `ctx.tick` (`int`) — порядковый номер фонового тика для данного плагина.
+- `ctx.interval` (`int`) — текущий интервал в секундах.
+- `ctx.in_background` (`bool`) — находится ли приложение сейчас в фоне.
+- `ctx.app_state` (`string`) — `"foreground"`, `"background"` или `"inactive"`.
+- `ctx.time` (`table`) — снимок времени телефона (как в `fullgram.time.now()`).
+- `ctx.profile` (`table`) — профиль текущего аккаунта Telegram (как в `fullgram.profile.get()`).
+- `ctx.device` (`table`) — состояние устройства и батареи (как в `fullgram.device.info()`).
 
-**Возвращаемое значение:**
-- `nil` / `None` — пропустить обработку;
-- `string` — заменить текст сообщения и отправить его в чат;
-- `{ text = "..." }` — заменить текст;
-- `{ cancel = true, toast = "..." }` — **отменить отправку сообщения в чат** (и опционально показать уведомление).
+### 3.3. `on_app_state(ctx)`
+Вызывается при переходе приложения между передним планом и фоном.
+- `ctx.state` (`string`) — `"foreground"` или `"background"`.
+- `ctx.in_background` (`bool`)
+- `ctx.time` (`table`)
 
-### 3.2. `on_outgoing_message(ctx)`
-Вызывается перед отправкой любого текстового сообщения (на фоновой очереди).  
-**Поля `ctx`:** `text`, `peer_id`, `is_group`, `is_channel`.
+### 3.4. `on_incoming_message(ctx)`
+Вызывается в фоне при получении нового входящего сообщения.
+- `ctx.text` (`string`), `ctx.peer_id` (`int`), `ctx.sender_name` (`string`), `ctx.timestamp` (`int`), `ctx.is_group` (`bool`), `ctx.is_channel` (`bool`), `ctx.time` (`table`).
 
-### 3.3. `on_render_message(ctx)`
-Вызывается при отображении текста сообщения в пузыре (`ChatMessageTextBubbleContentNode`).  
-**Поля `ctx`:** `text`, `peer_id`, `is_incoming`, `message_id`.  
-**Возврат:** строка для отображения на экране или `nil`/`None`.
+### 3.5. `on_command(ctx)`
+Вызывается при отправке `.команда [аргументы]` или `.plug <подкоманда> [аргументы]`.
+- **Поля `ctx`:** `command`, `subcommand`, `args`, `text`, `peer_id`, `is_group`, `is_channel`, `chat_stats`.
+- **Возврат:** `nil`/`None` (пропустить), строка (отправить заменённый текст), `{ text = "..." }`, или `{ cancel = true, toast = "..." }`.
 
+### 3.6. `on_outgoing_message(ctx)`
+Перехват любого исходящего текста перед отправкой (`text`, `peer_id`, `is_group`, `is_channel`).
+
+### 3.7. `on_render_message(ctx)`
+Модификация отображаемого текста сообщения (`text`, `peer_id`, `is_incoming`, `message_id`).
 > [!WARNING]
-> Вызов `fullgram.http_get` внутри `on_render_message` **запрещён** для защиты переписки и плавности скролла.
+> Сетевые вызовы (`http_get`, `http_post`, `http_request`) и `chat.send` внутри `on_render_message` **заблокированы**.
 
-### 3.4. `on_message_action(ctx)`
-Действие в контекстном меню сообщения (`text`, `peer_id`).
-
-### 3.5. `on_ui_event(ctx)`
-Вызывается при нажатии кнопки в графическом окне, открытом через `fullgram.open_ui(...)`.  
-**Поля `ctx`:**
-- `ctx.action` (`string`) — `id` нажатой кнопки;
-- `ctx.input` (`string`) — текущий текст из поля ввода окна.
-
-**Возврат:** строка (обновляет карточку результата в окне) или таблица `{ text = "..." }`.
+### 3.8. `on_message_action(ctx)` и `on_ui_event(ctx)`
+- `on_message_action(ctx)` — действие из контекстного меню сообщения (`text`, `peer_id`).
+- `on_ui_event(ctx)` — обработка нажатий в `open_ui` (`action`, `input`).
 
 ---
 
-## 4. Встроенный модуль `fullgram`
+## 4. Plugin API v2.0 — Полный справочник
 
-В Lua `fullgram` доступен глобально; в Python — глобально или через `import fullgram`; в Rust — `fullgram::...`.
+В API v2.0 все методы доступны **в двух равноправных формах** (для Lua, Python `import fullgram` и Rust `fullgram::...`):
+1. **Модульная форма (рекомендуется):** `fullgram.profile.set_name(...)`, `fullgram.time.now()`, `fullgram.device.info()`, `fullgram.background.set_interval(...)`, `fullgram.chat.send(...)`, `fullgram.storage.get(...)`, `fullgram.net.get(...)`, `fullgram.crypto.sha256(...)`, `fullgram.ui.toast(...)`.
+2. **Плоская форма (совместимость и краткость):** `fullgram.set_nickname(...)`, `fullgram.get_time()`, `fullgram.get_device_info()`, `fullgram.set_interval(...)`, `fullgram.send_message(...)`, `fullgram.storage_get(...)`, `fullgram.http_get(...)`, `fullgram.toast(...)`.
 
-| Функция | Сигнатура | Описание |
+Версия API доступна через `fullgram.api_version` (`"2.0"`) и `fullgram.version` (`"2.0.0"`).
+
+### 4.1. Профиль и ник Telegram (`fullgram.profile`)
+
+| Модульный вызов | Плоский вызов | Сигнатура и описание |
 | --- | --- | --- |
-| `fullgram.log` | `(...args) -> nil` | Записать строку в консоль плагина |
-| `fullgram.toast` | `(text: string) -> nil` | Показать всплывающее уведомление |
-| `fullgram.open_ui` | `(spec: string \| table) -> bool` | Открыть нативный графический UI плагина |
-| `fullgram.clipboard_get` | `() -> string` | Прочитать текст из буфера обмена |
-| `fullgram.clipboard_set` | `(text: string) -> bool` | Скопировать текст в буфер обмена |
-| `fullgram.storage_get` | `(key: string, default?: any) -> any` | Прочитать значение из изолированного хранилища плагина |
-| `fullgram.storage_set` | `(key: string, value: any) -> bool` | Сохранить значение (`nil`/`None` удаляет ключ) |
-| `fullgram.register_command` | `(cmd: string, fn: function) -> nil` | Зарегистрировать обработчик команды без `on_command` |
-| `fullgram.get_chat_stats` | `() -> table \| nil` | Получить статистику открытого чата |
-| `fullgram.http_get` | `(url: string) -> string \| nil` | Синхронный `HTTP / HTTPS GET`-запрос (таймаут `8.0 с`) |
+| `fullgram.profile.get()` | `fullgram.get_profile()` | Возвращает таблицу: `id`, `peer_id`, `first_name`, `last_name`, `full_name`, `name`, `username`, `bio`, `phone`, `original_first_name`, `original_last_name`, `updated_at`. |
+| `fullgram.profile.set_name(first, last?)` | `fullgram.set_nickname(first, last?)` / `set_name` | Изменяет отображаемое имя/ник в Telegram. При первой смене автоматически сохраняет исходный ник. Дедуплицирует повторы и защищает от флуда. |
+| `fullgram.profile.restore_name()` | `fullgram.restore_nickname()` | Восстанавливает исходные имя и фамилию пользователя. |
+| `fullgram.profile.set_username(username)` | `fullgram.set_username(username)` | Изменяет `@username` аккаунта (пустая строка снимает username). |
+| `fullgram.profile.set_bio(bio)` | `fullgram.set_bio(bio)` | Изменяет текст «О себе» (до 140 символов). |
+| `fullgram.profile.format_nick(tpl, style?, base_first?)` | `fullgram.format_nick(...)` | Подставляет плейсхолдеры времени и профиля в шаблон, возвращает строку. |
+| `fullgram.profile.apply_template(tpl?, style?, base_first?)` | `fullgram.apply_nick_template(...)` | Форматирует шаблон и сразу устанавливает ник в Telegram. |
+
+**Плейсхолдеры шаблонов ника/био:**
+- `{time}` — текущее время `HH:mm` (с выбранным стилем цифр)
+- `{time_sec}` — время с секундами `HH:mm:ss`
+- `{time_raw}` — обычное `HH:mm` без стилизации
+- `{time_bold}` — `𝟏𝟑:𝟒𝟓`, `{time_mono}` — `𝟷𝟹:𝟺𝟻`, `{time_fancy}` — `①③:④⑤`
+- `{clock}` — эмодзи часов, соответствующий времени (`🕐`..`🕧`)
+- `{date}` — `dd.MM.yyyy`, `{weekday}` — день недели, `{weekday_short}` — краткий день недели
+- `{battery}` — заряд батареи в `%`
+- `{name}`, `{first_name}`, `{last_name}` — исходное имя пользователя
+- `||` — разделитель имени и фамилии в шаблоне (например: `"{name} || ⌚ {time}"`)
+
+### 4.2. Время на телефоне (`fullgram.time`)
+
+| Модульный вызов | Плоский вызов | Описание |
+| --- | --- | --- |
+| `fullgram.time.now()` | `fullgram.get_time(ts?)` | Возвращает таблицу локального времени телефона (см. поля ниже). |
+| `fullgram.time.format(fmt?, ts?, style?)` | `fullgram.format_time(...)` | Форматирует время по маске `DateFormatter` (напр. `"HH:mm:ss"`, `"dd MMM, EEEE"`) и стилю цифр. |
+| `fullgram.time.stylize(text, style?)` | `fullgram.stylize_time(text, style?)` | Преобразует цифры в строке в стиль: `"normal"`, `"bold"`, `"mono"`, `"double"`, `"sans"`, `"circled"`. |
+| `fullgram.time.timestamp()` | — | Текущее время в секундах (`double`). |
+| `fullgram.time.unix_ms()` | — | Текущее время в миллисекундах (`int`). |
+
+**Поля таблицы `fullgram.time.now()`:**
+`timestamp`, `unix`, `unix_ms`, `hm` (`"14:35"`), `hms` (`"14:35:08"`), `formatted` (`"23.11.2026 14:35:08"`), `date` (`"23.11.2026"`), `iso`, `year`, `month`, `day`, `hour`, `minute`, `second`, `weekday` (`1..7`), `weekday_name`, `weekday_short`, `month_name`, `timezone`, `timezone_abbr`, `utc_offset`, `utc_offset_str`, `is_24h`, `bold_hm`, `mono_hm`, `double_hm`, `fancy_hm`, `clock_emoji`.
+
+### 4.3. Устройство и батарея (`fullgram.device`)
+
+| Модульный вызов | Плоский вызов | Описание |
+| --- | --- | --- |
+| `fullgram.device.info()` | `fullgram.get_device_info()` | Таблица: `model`, `system_name`, `system_version`, `battery_level`, `battery_percent`, `battery_state` (`"charging"`, `"full"`, `"unplugged"`), `is_charging`, `is_low_power`, `locale`, `timezone`, `app_state`, `is_background`, `uptime`. |
+| `fullgram.device.battery()` | `fullgram.get_battery()` | Таблица: `level`, `percent`, `state`, `is_charging`, `is_low_power`. |
+| `fullgram.device.haptic(style?)` | `fullgram.haptic(style?)` | Тактильный отклик: `"light"`, `"medium"`, `"heavy"`, `"success"`, `"warning"`, `"error"`, `"selection"`. |
+| `fullgram.device.app_state()` | — | `"foreground"`, `"background"` или `"inactive"`. |
+
+### 4.4. Фоновый движок и шина событий (`fullgram.background`)
+
+| Модульный вызов | Плоский вызов | Описание |
+| --- | --- | --- |
+| `fullgram.background.set_interval(sec)` | `fullgram.set_interval(sec)` | Включает фоновый тик для плагина с интервалом `5...3600` сек. |
+| `fullgram.background.stop_interval()` | `fullgram.stop_interval()` | Останавливает фоновый тик плагина. |
+| `fullgram.background.status()` | `fullgram.get_background_status()` | Таблица: `system_enabled`, `plugin_enabled`, `interval`, `tick_count`, `app_state`, `in_background`. |
+| `fullgram.background.on(event, fn)` | `fullgram.on_event(event, fn)` | Подписка на пользовательское событие. |
+| `fullgram.background.emit(event, data?)` | `fullgram.emit_event(event, data?)` | Отправка события всем активным плагинам (возвращает число вызванных обработчиков). |
+
+### 4.5. Чаты и сообщения (`fullgram.chat`)
+
+| Модульный вызов | Плоский вызов | Описание |
+| --- | --- | --- |
+| `fullgram.chat.send(text, peer_id?)` | `fullgram.send_message(text, peer_id?)` | Отправить сообщение в указанный или текущий открытый чат. |
+| `fullgram.chat.set_draft(text, peer_id?)` | `fullgram.set_draft(text, peer_id?)` | Вставить текст в поле ввода активного чата. |
+| `fullgram.chat.active()` | `fullgram.get_active_chat()` | Информация об активном чате (`peer_id`, `is_group`, `is_channel`) или `nil`. |
+| `fullgram.chat.stats()` | `fullgram.get_chat_stats()` | Статистика открытого чата (для команд `.plug` / `.info-chat`). |
+
+### 4.6. Изолированное и общее хранилище (`fullgram.storage`)
+
+| Модульный вызов | Плоский вызов | Описание |
+| --- | --- | --- |
+| `fullgram.storage.get(key, default?)` | `fullgram.storage_get(key, default?)` | Чтение из личного хранилища плагина. |
+| `fullgram.storage.set(key, val)` | `fullgram.storage_set(key, val)` | Запись (`nil`/`None` удаляет ключ). |
+| `fullgram.storage.delete(key)` | `fullgram.storage_delete(key)` | Удалить ключ. |
+| `fullgram.storage.keys()` | `fullgram.storage_keys()` | Список всех ключей данного плагина. |
+| `fullgram.storage.clear()` | `fullgram.storage_clear()` | Очистить все ключи данного плагина. |
+| `fullgram.storage.shared_get(key, default?)` | `fullgram.shared_get(...)` | Общее хранилище между плагинами FullGram. |
+| `fullgram.storage.shared_set(key, val)` | `fullgram.shared_set(...)` | Запись в общее хранилище плагинов. |
+
+### 4.7. Сеть (`fullgram.net`)
+
+| Модульный вызов | Плоский вызов | Описание |
+| --- | --- | --- |
+| `fullgram.net.get(url, headers?)` | `fullgram.http_get(url, headers?)` | Синхронный `GET`-запрос (до 1 МБ, таймаут 8 с). |
+| `fullgram.net.post(url, body?, headers?)` | `fullgram.http_post(url, body?, headers?)` | Синхронный `POST`-запрос. |
+| `fullgram.net.request(spec)` | `fullgram.http_request(spec)` | Запрос по таблице `{ url, method, headers, body, timeout }`, возвращает `{ ok, status, body, error }`. |
+
+### 4.8. Криптография и кодирование (`fullgram.crypto`)
+
+- `fullgram.crypto.sha256(str)` / `fullgram.sha256(str)`
+- `fullgram.crypto.base64_encode(str)` / `fullgram.base64_encode(str)`
+- `fullgram.crypto.base64_decode(str)` / `fullgram.base64_decode(str)`
+- `fullgram.crypto.url_encode(str)` / `fullgram.url_encode(str)`
+- `fullgram.crypto.url_decode(str)` / `fullgram.url_decode(str)`
+- `fullgram.crypto.uuid()` / `fullgram.uuid()`
+
+### 4.9. Интерфейс, буфер обмена и логи (`fullgram.ui`)
+
+- `fullgram.ui.toast(text)` / `fullgram.toast(text)`
+- `fullgram.ui.alert(title, message?)` / `fullgram.alert(title, message?)`
+- `fullgram.ui.open(spec)` / `fullgram.open_ui(spec)`
+- `fullgram.ui.log(...args)` / `fullgram.log(...args)`
+- `fullgram.ui.clipboard_get()` / `fullgram.clipboard_get()`
+- `fullgram.ui.clipboard_set(text)` / `fullgram.clipboard_set(text)`
+- `fullgram.register_command(cmd, fn)`
 
 ---
 
 ## 5. Графический UI плагинов (`open_ui` и `on_ui_event`)
 
-Чтобы плагин не спамил текстом в чат, вызывайте `fullgram.open_ui(...)` и возвращайте `{ cancel = true }`.
-
-### Встроенные специализированные экраны
-- `kind = "betking_casino"` — анимированное казино BetKing / Betona (`game`: `"zeus"`, `"dogs"`, `"slots777"`, `"crash"`, `"roulette"`, `"coin"`).
-- `kind = "deadlines"` — интерактивный менеджер дедлайнов с чекбоксами и свайпом удаления.
-
-### Декларативный кастомный экран (`kind = "custom"`)
-```lua
-fullgram.open_ui({
-    kind = "custom",
-    title = "Мой плагин",
-    subtitle = "Начальный текст на карточке результата",
-    placeholder = "Введите число или текст…",
-    default_input = "100",
-    buttons = {
-        { items = {
-            { title = "⚡ Действие 1", id = "act_1", color = "orange" },
-            { title = "✅ Действие 2", id = "act_2", color = "green" }
-        } },
-        { title = "🔄 Сброс", id = "reset", color = "red" }
-    }
-})
-```
-Доступные цвета кнопок: `blue`, `green`, `orange`, `red`, `purple`, `indigo`, `teal`, `gray`.
-
-При нажатии на кнопку FullGram вызывает `on_ui_event(ctx)` с `ctx.action = "<id>"` и `ctx.input = "<текст поля>"`, а возвращённый текст отображается на карточке (пользователь может отправить его в чат кнопкой «В чат» в правом верхнем углу).
+Встроенные специализированные экраны:
+- `kind = "nick_clock"` — панель управления живым ником, шрифтами часов и фоновым интервалом.
+- `kind = "deadlines"` — менеджер дедлайнов с чекбоксами.
+- `kind = "webview"` — защищённый WebView (`url` на доверенном домене).
+- `kind = "custom"` — декларативный экран с карточкой результата, полем ввода и цветными кнопками (`blue`, `green`, `orange`, `red`, `purple`, `indigo`, `teal`, `gray`), вызывающий `on_ui_event(ctx)`.
 
 ---
 
-## 6. Ограничения песочницы и безопасность
+## 6. Стандартные библиотеки Lua, Python и Rust
+
+- **Lua**: `local`, замыкания, `if/elseif/else`, `for`, `pairs/ipairs`, `while`, `repeat/until`, `pcall`, таблицы, `string`, `table`, `math`, `json`, `os` (`os.time()`, `os.date(fmt?, ts?)`, `os.clock()`, `os.difftime()`).
+- **Python**: `def`, `lambda`, `if/elif/else`, `for/while`, `try/except`, f-строки, list comprehensions, `dict`/`list`/`tuple`/срезы, `re`, `json`, `math`, `random`, `time` (`time`, `monotonic`, `localtime`, `gmtime`, `strftime`, `ctime`), `datetime` (`datetime.now()`, `datetime.fromtimestamp()`), `fullgram`.
+- **Rust**: `fn`, `let`/`let mut`, `if/else`, `match`, `for`/`while`/`loop`, замыкания `|x| ...`, `format!`, `vec!`, строки, `HashMap`, `fullgram::*` (включая `fullgram::profile::set_name`, `fullgram::time::now`, `fullgram::device::info`, `fullgram::background::set_interval`).
+
+---
+
+## 7. Готовые примеры плагинов v2.0
+
+### 7.1. Lua: Живые часы с зарядом батареи в нике (фоновый режим)
+
+```lua
+-- @name Часы + Батарея в нике
+-- @id nick_battery_clock
+-- @version 2.0
+-- @author Dev
+-- @background true
+-- @interval 30
+-- @description Обновляет ник в фоне: Имя | ⌚ 14:35 🔋87%
+
+function on_background_tick(ctx)
+    local t = ctx.time
+    local dev = ctx.device
+    local base = ctx.profile.original_first_name
+    if base == "" then base = "User" end
+    local nick = base .. " | " .. t.clock_emoji .. " " .. t.bold_hm .. " 🔋" .. tostring(dev.battery_level) .. "%"
+    fullgram.profile.set_name(nick)
+end
+
+function on_command(ctx)
+    if ctx.command == "mytime" then
+        local t = fullgram.time.now()
+        return "Сейчас на телефоне: " .. t.hms .. " (" .. t.date .. ")"
+    end
+    return nil
+end
+```
+
+### 7.2. Python: Фоновый логгер входа/фона + время
+
+```python
+# @name Монитор активности (Python)
+# @id activity_monitor_py
+# @version 2.0
+# @author Dev
+# @background true
+# @interval 60
+# @description Фиксирует переходы в фон и показывает текущее время
+
+import fullgram
+import datetime
+
+def on_app_state(ctx):
+    now = datetime.now()
+    fullgram.log(f"App state -> {ctx['state']} at {now['hms']}")
+
+def on_background_tick(ctx):
+    t = ctx["time"]
+    fullgram.log(f"Background tick #{ctx['tick']} | {t['hm']} | battery={ctx['device']['battery_level']}%")
+
+def on_command(ctx):
+    if ctx["command"] == "clock":
+        now = datetime.now()
+        return {"cancel": True, "toast": f"🕒 {now['hms']} • {now['date']}"}
+    return None
+```
+
+### 7.3. Rust: Быстрая смена ника со временем
+
+```rust
+// @name Rust Nick Time
+// @id rust_nick_time
+// @version 2.0
+// @author Dev
+// @background true
+// @interval 60
+// @description Обновляет ник с локальным временем на Rust
+
+use fullgram::*;
+
+fn on_background_tick(ctx: Context) {
+    let t = fullgram::time::now();
+    let prof = fullgram::profile::get();
+    let base = if prof.original_first_name != "" { prof.original_first_name } else { "FullGram" };
+    let next_nick = format!("{} [{}]", base, t.hm);
+    fullgram::profile::set_name(next_nick);
+}
+
+fn on_command(ctx: Context) -> Option<String> {
+    if ctx.command == "rtime" {
+        let t = fullgram::time::now();
+        return Some(format!("🕒 Время телефона: {} ({})", t.hms, t.timezone));
+    }
+    None
+}
+```
+
+---
+
+## 8. Безопасность и ограничения песочницы
 
 - **Лимит инструкций (`maxSteps`)**: `120 000` шагов на один вызов хука.
 - **Лимит рекурсии (`maxCallDepth`)**: `64` вложенных вызова.
 - **Потокобезопасность (`vmLock`)**: все вызовы VM защищены `NSRecursiveLock`.
-- **Сеть `http_get`**: `http://` и `https://` с таймаутом `8.0 с` (запрещено внутри `on_render_message`).
-- **Защита источников**: сторонние непроверенные источники плагинов ограничены; официальный каталог обслуживается сервером FullGram.
-
----
-
-## 7. Поддерживаемый синтаксис Lua, Python и Rust
-
-- **Lua**: `local`, `function`, замыкания, `if/elseif/else`, `for`, `pairs/ipairs`, `while`, `repeat/until`, `pcall`, таблицы, `string`, `table`, `math`, `json`.
-- **Python**: `def`, `lambda`, `if/elif/else`, `for/while`, `try/except`, f-строки, list comprehensions, `dict`/`list`/`tuple`/срезы, `re`, `json`, `math`, `random`, `time`, `fullgram`.
-- **Rust**: `fn`, `let`/`let mut`, `if/else`, `for`/`while`, строки, массивы, `fullgram::*`.
-
----
-
-## 8. Готовые примеры плагинов
-
-### Lua: плагин с графическим окном (без спама в чат)
-
-```lua
--- @name Кости GUI
--- @id dice_gui
--- @version 1.0
--- @author Dev
--- @description Команда .dice открывает окно броска кубиков
-
-function on_command(ctx)
-    if ctx.command ~= "dice" then return nil end
-    fullgram.open_ui({
-        kind = "custom",
-        title = "🎲 Кубики",
-        subtitle = "Нажмите кнопку ниже, чтобы бросить кубики",
-        default_input = "6",
-        buttons = {
-            { items = {
-                { title = "🎲 1 кубик", id = "roll1", color = "blue" },
-                { title = "🎲🎲 2 кубика", id = "roll2", color = "purple" }
-            } }
-        }
-    })
-    return { cancel = true }
-end
-
-function on_ui_event(ctx)
-    local sides = tonumber(ctx.input) or 6
-    if sides < 2 then sides = 6 end
-    if ctx.action == "roll2" then
-        local a = math.random(1, sides)
-        local b = math.random(1, sides)
-        return "🎲 Выпало: " .. tostring(a) .. " + " .. tostring(b) .. " = " .. tostring(a + b)
-    end
-    return "🎲 Выпало: " .. tostring(math.random(1, sides)) .. " (d" .. tostring(sides) .. ")"
-end
-```
-
-### Lua: регистрация команды через `register_command`
-
-```lua
--- @name Быстрый пинг
--- @id quick_ping
--- @version 1.0
--- @author Dev
--- @description Команда .ping
-
-fullgram.register_command("ping", function(ctx)
-    local n = tonumber(fullgram.storage_get("pings", 0)) + 1
-    fullgram.storage_set("pings", n)
-    return { cancel = true, toast = "Pong! Вызовов: " .. tostring(n) }
-end)
-```
+- **Защита ника Telegram**: минимальный интервал между реальными MTProto-обновлениями ника — `15` секунд; одинаковые значения отфильтровываются без отправки запроса; исходное имя пользователя сохраняется до первой смены.
+- **Сеть**: `http://` и `https://` с таймаутом `8.0 с` по умолчанию; запрещено внутри `on_render_message` и на главном потоке.
 
 ---
 

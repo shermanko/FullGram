@@ -19,6 +19,11 @@ private final class FullGramMediaAudioCategoryArguments {
     let openLyricsSources: () -> Void
     let openNightLook: () -> Void
     let toggleMiniLyrics: (Bool) -> Void
+    let toggleSkipSilence: (Bool) -> Void
+    let pickVoiceSpeed: () -> Void
+    let pickAutoCleanInterval: () -> Void
+    let pickAutoCleanMaxMB: () -> Void
+    let cleanCacheNow: () -> Void
 
     init(
         openVoice: @escaping () -> Void,
@@ -26,7 +31,12 @@ private final class FullGramMediaAudioCategoryArguments {
         openMixer: @escaping () -> Void,
         openLyricsSources: @escaping () -> Void,
         openNightLook: @escaping () -> Void,
-        toggleMiniLyrics: @escaping (Bool) -> Void
+        toggleMiniLyrics: @escaping (Bool) -> Void,
+        toggleSkipSilence: @escaping (Bool) -> Void,
+        pickVoiceSpeed: @escaping () -> Void,
+        pickAutoCleanInterval: @escaping () -> Void,
+        pickAutoCleanMaxMB: @escaping () -> Void,
+        cleanCacheNow: @escaping () -> Void
     ) {
         self.openVoice = openVoice
         self.openRoundVideo = openRoundVideo
@@ -34,12 +44,18 @@ private final class FullGramMediaAudioCategoryArguments {
         self.openLyricsSources = openLyricsSources
         self.openNightLook = openNightLook
         self.toggleMiniLyrics = toggleMiniLyrics
+        self.toggleSkipSilence = toggleSkipSilence
+        self.pickVoiceSpeed = pickVoiceSpeed
+        self.pickAutoCleanInterval = pickAutoCleanInterval
+        self.pickAutoCleanMaxMB = pickAutoCleanMaxMB
+        self.cleanCacheNow = cleanCacheNow
     }
 }
 
 private enum FullGramMediaAudioCategorySection: Int32 {
     case main
     case player
+    case cache
 }
 
 private enum FullGramMediaAudioCategoryEntry: ItemListNodeEntry {
@@ -50,13 +66,22 @@ private enum FullGramMediaAudioCategoryEntry: ItemListNodeEntry {
     case playerHeader(String)
     case nightLook(String, String)
     case miniLyrics(Bool)
+    case skipSilence(Bool)
+    case voiceSpeed(String, String)
+    case cacheHeader(String)
+    case cacheInterval(String, String)
+    case cacheMaxSize(String, String)
+    case cleanNow(String)
+    case cacheFooter(String)
 
     var section: ItemListSectionId {
         switch self {
         case .voice, .roundVideo, .mixer, .lyricsSources:
             return FullGramMediaAudioCategorySection.main.rawValue
-        case .playerHeader, .nightLook, .miniLyrics:
+        case .playerHeader, .nightLook, .miniLyrics, .skipSilence, .voiceSpeed:
             return FullGramMediaAudioCategorySection.player.rawValue
+        case .cacheHeader, .cacheInterval, .cacheMaxSize, .cleanNow, .cacheFooter:
+            return FullGramMediaAudioCategorySection.cache.rawValue
         }
     }
 
@@ -69,6 +94,13 @@ private enum FullGramMediaAudioCategoryEntry: ItemListNodeEntry {
         case .playerHeader: return 10
         case .nightLook: return 11
         case .miniLyrics: return 12
+        case .skipSilence: return 13
+        case .voiceSpeed: return 14
+        case .cacheHeader: return 20
+        case .cacheInterval: return 21
+        case .cacheMaxSize: return 22
+        case .cleanNow: return 23
+        case .cacheFooter: return 24
         }
     }
 
@@ -87,23 +119,35 @@ private enum FullGramMediaAudioCategoryEntry: ItemListNodeEntry {
             return ItemListDisclosureItem(presentationData: presentationData, title: title, label: value, sectionId: self.section, style: .blocks, action: args.openMixer)
         case let .lyricsSources(title, value):
             return ItemListDisclosureItem(presentationData: presentationData, title: title, label: value, sectionId: self.section, style: .blocks, action: args.openLyricsSources)
-        case let .playerHeader(text):
+        case let .playerHeader(text), let .cacheHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .nightLook(title, value):
             return ItemListDisclosureItem(presentationData: presentationData, title: title, label: value, sectionId: self.section, style: .blocks, action: args.openNightLook)
         case let .miniLyrics(value):
             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Строка песни в мини-плеере", value: value, sectionId: self.section, style: .blocks, updated: args.toggleMiniLyrics)
+        case let .skipSilence(value):
+            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Пропуск тишины в ГС и кружках", value: value, sectionId: self.section, style: .blocks, updated: args.toggleSkipSilence)
+        case let .voiceSpeed(title, value):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.pickVoiceSpeed)
+        case let .cacheInterval(title, value):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.pickAutoCleanInterval)
+        case let .cacheMaxSize(title, value):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.pickAutoCleanMaxMB)
+        case let .cleanNow(title):
+            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .destructive, alignment: .natural, sectionId: self.section, style: .blocks, action: args.cleanCacheNow)
+        case let .cacheFooter(text):
+            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         }
     }
 }
 
 func fullGramMediaAudioCategoryController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
+    var presentNativeImpl: ((UIViewController) -> Void)?
     let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
-    var tick = 0
-    let bump: () -> Void = {
-        tick += 1
-        refresh.set(tick)
+    let tickCounter = Atomic<Int>(value: 0)
+    let bump: @Sendable () -> Void = {
+        refresh.set(tickCounter.modify { $0 + 1 })
     }
 
     let args = FullGramMediaAudioCategoryArguments(
@@ -115,6 +159,62 @@ func fullGramMediaAudioCategoryController(context: AccountContext) -> ViewContro
         toggleMiniLyrics: { value in
             FullGramMiniLyrics.isEnabled = value
             bump()
+        },
+        toggleSkipSilence: { value in
+            FullGramExtras.shared.skipSilenceInVoiceAndCircles = value
+            bump()
+        },
+        pickVoiceSpeed: {
+            let sheet = UIAlertController(title: "Скорость ГС и кружков", message: "Скорость по умолчанию при запуске воспроизведения:", preferredStyle: .actionSheet)
+            let rates: [Float] = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5]
+            for r in rates {
+                sheet.addAction(UIAlertAction(title: String(format: "%.2g×", r), style: .default) { _ in
+                    FullGramExtras.shared.voicePlaybackSpeed = r
+                    bump()
+                })
+            }
+            sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            presentNativeImpl?(sheet)
+        },
+        pickAutoCleanInterval: {
+            let sheet = UIAlertController(title: "Интервал автоочистки кэша", message: "Удалять временные файлы и старый кэш:", preferredStyle: .actionSheet)
+            let options: [(String, Int)] = [("Выкл.", 0), ("Раз в день", 1), ("Раз в 3 дня", 3), ("Раз в неделю", 7), ("Раз в 2 недели", 14), ("Раз в месяц", 30)]
+            for (title, days) in options {
+                sheet.addAction(UIAlertAction(title: title, style: .default) { _ in
+                    FullGramExtras.shared.autoCleanCacheIntervalDays = days
+                    bump()
+                })
+            }
+            sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            presentNativeImpl?(sheet)
+        },
+        pickAutoCleanMaxMB: {
+            let sheet = UIAlertController(title: "Максимальный размер кэша", message: "При превышении старые кэшированные файлы удаляются автоматически:", preferredStyle: .actionSheet)
+            let options: [(String, Int)] = [("Без лимита", 0), ("250 МБ", 250), ("500 МБ", 500), ("1 ГБ", 1024), ("2 ГБ", 2048)]
+            for (title, mb) in options {
+                sheet.addAction(UIAlertAction(title: title, style: .default) { _ in
+                    FullGramExtras.shared.autoCleanCacheMaxMB = mb
+                    bump()
+                })
+            }
+            sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            presentNativeImpl?(sheet)
+        },
+        cleanCacheNow: {
+            DispatchQueue.global(qos: .userInitiated).async {
+                let freed = FullGramCacheCleaner.runIfNeeded(force: true)
+                let mb = Double(freed) / (1024.0 * 1024.0)
+                DispatchQueue.main.async {
+                    let alert = UIAlertController(
+                        title: "Кэш очищен",
+                        message: String(format: "Освобождено %.1f МБ временного кэша.", mb),
+                        preferredStyle: .alert
+                    )
+                    alert.addAction(UIAlertAction(title: "OK", style: .default))
+                    presentNativeImpl?(alert)
+                    bump()
+                }
+            }
         }
     )
 
@@ -132,15 +232,27 @@ func fullGramMediaAudioCategoryController(context: AccountContext) -> ViewContro
             FullGramLyricsProviderSettings.useNetEase
         ].filter { $0 }.count
         let nightValue = FullGramPlayerNightLook.isEnabled ? FullGramPlayerNightLook.mode.title : "Выкл"
+        let speedValue = String(format: "%.2g×", FullGramExtras.shared.voicePlaybackSpeed)
+        let days = FullGramExtras.shared.autoCleanCacheIntervalDays
+        let daysValue = days <= 0 ? "Выкл." : "\(days) дн."
+        let maxMB = FullGramExtras.shared.autoCleanCacheMaxMB
+        let maxValue = maxMB <= 0 ? "Без лимита" : (maxMB >= 1024 ? "\(maxMB / 1024) ГБ" : "\(maxMB) МБ")
 
         let entries: [FullGramMediaAudioCategoryEntry] = [
             .voice("Голос", voiceValue),
             .roundVideo("Кружки и камера", roundValue),
             .mixer("Микшер", mixerValue),
             .lyricsSources("Источники текстов песен", "\(sourcesCount)/3"),
-            .playerHeader("ПЛЕЕР"),
+            .playerHeader("ПЛЕЕР И ГОЛОСОВЫЕ"),
             .nightLook("Ночной режим плеера", nightValue),
-            .miniLyrics(FullGramMiniLyrics.isEnabled)
+            .miniLyrics(FullGramMiniLyrics.isEnabled),
+            .skipSilence(FullGramExtras.shared.skipSilenceInVoiceAndCircles),
+            .voiceSpeed("Скорость ГС и кружков", speedValue),
+            .cacheHeader("АВТООЧИСТКА КЭША"),
+            .cacheInterval("Интервал автоочистки", daysValue),
+            .cacheMaxSize("Лимит кэша", maxValue),
+            .cleanNow("Очистить временный кэш сейчас"),
+            .cacheFooter("Удаляет временные файлы и старый кэш медиа, сохраняя все чаты, шрифты, плагины и данные аккаунта.")
         ]
         let data = ItemListPresentationData(presentationData)
         let state = ItemListControllerState(
@@ -156,6 +268,7 @@ func fullGramMediaAudioCategoryController(context: AccountContext) -> ViewContro
 
     let controller = ItemListController(context: context, state: signal)
     pushImpl = { [weak controller] c in controller?.push(c) }
+    presentNativeImpl = { [weak controller] vc in controller?.present(vc, animated: true) }
     return controller
 }
 
@@ -979,7 +1092,7 @@ private final class FullGramMixerUIViewController: UIViewController {
     private let enabledSwitch = UISwitch()
     private var presetButtons: [String: UIButton] = [:]
     private var faders: [FullGramBandFaderView] = []
-    private var observer: NSObjectProtocol?
+    private nonisolated(unsafe) var observer: NSObjectProtocol?
 
     init(theme: PresentationTheme, onChanged: @escaping () -> Void) {
         self.theme = theme
@@ -1034,7 +1147,9 @@ private final class FullGramMixerUIViewController: UIViewController {
         content.addArrangedSubview(footer)
 
         self.observer = NotificationCenter.default.addObserver(forName: FullGramMixer.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.refresh()
+            Task { @MainActor in
+                self?.refresh()
+            }
         }
         self.refresh()
     }

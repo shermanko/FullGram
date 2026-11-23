@@ -204,22 +204,40 @@ private enum FullGramAntiScamToggle: Int32 {
     case warnShorteners = 5
     case protectFiles = 6
     case markScamMessages = 7
+    case ruleBanByTemplates = 8
+    case ruleBanByLinks = 9
+    case ruleBanNewAccounts = 10
+    case ruleNewAccountRequireNoAvatar = 11
+    case ruleBanMassJoins = 12
+    case ruleAutoBanInAdminGroups = 13
 }
 
 private final class FullGramAntiScamArguments {
     let openGuide: () -> Void
     let toggle: (FullGramAntiScamToggle, Bool) -> Void
+    let editTemplates: () -> Void
+    let pickNewAccountThreshold: () -> Void
+    let pickMassJoinLimit: () -> Void
+    let openRuleEvents: () -> Void
     let manualCheck: () -> Void
     let clearWhitelist: () -> Void
 
     init(
         openGuide: @escaping () -> Void,
         toggle: @escaping (FullGramAntiScamToggle, Bool) -> Void,
+        editTemplates: @escaping () -> Void,
+        pickNewAccountThreshold: @escaping () -> Void,
+        pickMassJoinLimit: @escaping () -> Void,
+        openRuleEvents: @escaping () -> Void,
         manualCheck: @escaping () -> Void,
         clearWhitelist: @escaping () -> Void
     ) {
         self.openGuide = openGuide
         self.toggle = toggle
+        self.editTemplates = editTemplates
+        self.pickNewAccountThreshold = pickNewAccountThreshold
+        self.pickMassJoinLimit = pickMassJoinLimit
+        self.openRuleEvents = openRuleEvents
         self.manualCheck = manualCheck
         self.clearWhitelist = clearWhitelist
     }
@@ -236,6 +254,13 @@ private enum FullGramAntiScamEntry: ItemListNodeEntry {
     case antiOtcInfo(String)
     case extraHeader(String)
     case extraToggle(FullGramAntiScamToggle, String, Bool)
+    case rulesHeader(String)
+    case ruleToggle(FullGramAntiScamToggle, String, Bool)
+    case ruleTemplatesLink(String, String)
+    case ruleNewAccountIdLink(String, String)
+    case ruleMassJoinLink(String, String)
+    case ruleEventsLink(String, String)
+    case rulesInfo(String)
     case toolsHeader(String)
     case manualCheck(String)
     case clearWhitelist(String)
@@ -246,7 +271,8 @@ private enum FullGramAntiScamEntry: ItemListNodeEntry {
         case .guideHeader, .guideLink, .guideInfo: return 0
         case .coreHeader, .antiOfferToggle, .antiOfferInfo, .antiOtcToggle, .antiOtcInfo: return 1
         case .extraHeader, .extraToggle: return 2
-        case .toolsHeader, .manualCheck, .clearWhitelist, .stats: return 3
+        case .rulesHeader, .ruleToggle, .ruleTemplatesLink, .ruleNewAccountIdLink, .ruleMassJoinLink, .ruleEventsLink, .rulesInfo: return 3
+        case .toolsHeader, .manualCheck, .clearWhitelist, .stats: return 4
         }
     }
 
@@ -262,10 +288,17 @@ private enum FullGramAntiScamEntry: ItemListNodeEntry {
         case .antiOtcInfo: return 14
         case .extraHeader: return 20
         case let .extraToggle(opt, _, _): return 20 + opt.rawValue
-        case .toolsHeader: return 40
-        case .manualCheck: return 41
-        case .clearWhitelist: return 42
-        case .stats: return 43
+        case .rulesHeader: return 50
+        case let .ruleToggle(opt, _, _): return 50 + opt.rawValue
+        case .ruleTemplatesLink: return 80
+        case .ruleNewAccountIdLink: return 81
+        case .ruleMassJoinLink: return 82
+        case .ruleEventsLink: return 83
+        case .rulesInfo: return 84
+        case .toolsHeader: return 100
+        case .manualCheck: return 101
+        case .clearWhitelist: return 102
+        case .stats: return 103
         }
     }
 
@@ -276,19 +309,27 @@ private enum FullGramAntiScamEntry: ItemListNodeEntry {
     func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
         let args = arguments as! FullGramAntiScamArguments
         switch self {
-        case let .guideHeader(text), let .coreHeader(text), let .extraHeader(text), let .toolsHeader(text):
+        case let .guideHeader(text), let .coreHeader(text), let .extraHeader(text), let .rulesHeader(text), let .toolsHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .guideLink(title, label):
             let icon = UIImage(systemName: "book.closed.fill")?.withTintColor(UIColor(rgb: 0x007AFF), renderingMode: .alwaysOriginal)
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openGuide)
-        case let .guideInfo(text), let .antiOfferInfo(text), let .antiOtcInfo(text), let .stats(text):
+        case let .guideInfo(text), let .antiOfferInfo(text), let .antiOtcInfo(text), let .rulesInfo(text), let .stats(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         case let .antiOfferToggle(value):
             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Анти-офер", value: value, sectionId: self.section, style: .blocks, updated: { args.toggle(.antiOffer, $0) })
         case let .antiOtcToggle(value):
             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Анти-OTC", value: value, sectionId: self.section, style: .blocks, updated: { args.toggle(.antiOtc, $0) })
-        case let .extraToggle(opt, title, value):
+        case let .extraToggle(opt, title, value), let .ruleToggle(opt, title, value):
             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, sectionId: self.section, style: .blocks, updated: { args.toggle(opt, $0) })
+        case let .ruleTemplatesLink(title, label):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.editTemplates)
+        case let .ruleNewAccountIdLink(title, label):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.pickNewAccountThreshold)
+        case let .ruleMassJoinLink(title, label):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.pickMassJoinLimit)
+        case let .ruleEventsLink(title, label):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openRuleEvents)
         case let .manualCheck(title):
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.manualCheck)
         case let .clearWhitelist(title):
@@ -302,10 +343,9 @@ func fullGramAntiScamController(context: AccountContext) -> ViewController {
     var presentNativeImpl: ((UIViewController) -> Void)?
 
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
-    var version = 0
+    let version = Atomic<Int>(value: 0)
     let observer = NotificationCenter.default.addObserver(forName: FullGramAntiScam.didChangeNotification, object: nil, queue: .main) { _ in
-        version += 1
-        changed.set(version)
+        changed.set(version.modify { $0 + 1 })
     }
 
     let args = FullGramAntiScamArguments(
@@ -321,7 +361,89 @@ func fullGramAntiScamController(context: AccountContext) -> ViewController {
             case .warnShorteners: FullGramAntiScam.shared.warnShorteners = value
             case .protectFiles: FullGramAntiScam.shared.protectDangerFiles = value
             case .markScamMessages: FullGramAntiScam.shared.markScamMessages = value
+            case .ruleBanByTemplates: FullGramAntiScam.shared.ruleBanByTemplates = value
+            case .ruleBanByLinks: FullGramAntiScam.shared.ruleBanByLinks = value
+            case .ruleBanNewAccounts: FullGramAntiScam.shared.ruleBanNewAccounts = value
+            case .ruleNewAccountRequireNoAvatar: FullGramAntiScam.shared.ruleNewAccountRequireNoAvatar = value
+            case .ruleBanMassJoins: FullGramAntiScam.shared.ruleBanMassJoins = value
+            case .ruleAutoBanInAdminGroups: FullGramAntiScam.shared.ruleAutoBanInAdminGroups = value
             }
+        },
+        editTemplates: {
+            let current = FullGramAntiScam.shared.ruleCustomTemplates
+            let sheet = UIAlertController(title: "Шаблоны и стоп-слова", message: "Текущие (\(current.count)):\n" + current.joined(separator: ", "), preferredStyle: .actionSheet)
+            sheet.addAction(UIAlertAction(title: "Добавить шаблон или /regex/…", style: .default) { _ in
+                let alert = UIAlertController(title: "Новый шаблон", message: "Введите фразу или регулярное выражение в формате /pattern/:", preferredStyle: .alert)
+                alert.addTextField { tf in tf.placeholder = "Например: криптосигнал или /earn.*\\$/" }
+                alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+                alert.addAction(UIAlertAction(title: "Добавить", style: .default) { _ in
+                    if let txt = alert.textFields?.first?.text {
+                        FullGramAntiScam.shared.addCustomTemplate(txt)
+                    }
+                })
+                presentNativeImpl?(alert)
+            })
+            if !current.isEmpty {
+                sheet.addAction(UIAlertAction(title: "Удалить шаблон…", style: .destructive) { _ in
+                    let delSheet = UIAlertController(title: "Удалить шаблон", message: nil, preferredStyle: .actionSheet)
+                    for tpl in current {
+                        delSheet.addAction(UIAlertAction(title: tpl, style: .destructive) { _ in
+                            FullGramAntiScam.shared.removeCustomTemplate(tpl)
+                        })
+                    }
+                    delSheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+                    presentNativeImpl?(delSheet)
+                })
+            }
+            sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            presentNativeImpl?(sheet)
+        },
+        pickNewAccountThreshold: {
+            let sheet = UIAlertController(title: "Порог нового аккаунта по Telegram ID", message: "Чем выше ID, тем свежее регистрация аккаунта:", preferredStyle: .actionSheet)
+            let options: [(String, Int64)] = [
+                ("ID ≥ 6 000 000 000", 6_000_000_000),
+                ("ID ≥ 7 000 000 000 (реком.)", 7_000_000_000),
+                ("ID ≥ 7 500 000 000", 7_500_000_000),
+                ("ID ≥ 8 000 000 000 (совсем новые)", 8_000_000_000)
+            ]
+            for (title, val) in options {
+                sheet.addAction(UIAlertAction(title: title, style: .default) { _ in
+                    FullGramAntiScam.shared.ruleNewAccountMinId = val
+                })
+            }
+            sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            presentNativeImpl?(sheet)
+        },
+        pickMassJoinLimit: {
+            let sheet = UIAlertController(title: "Порог анти-рейда (массовые вступления)", message: "Сколько входов подряд считать атакой:", preferredStyle: .actionSheet)
+            let presets: [(String, Int, Int)] = [
+                ("3 входа за 15 сек.", 3, 15),
+                ("5 входов за 30 сек.", 5, 30),
+                ("8 входов за 45 сек.", 8, 45),
+                ("12 входов за 60 сек.", 12, 60)
+            ]
+            for (title, limit, win) in presets {
+                sheet.addAction(UIAlertAction(title: title, style: .default) { _ in
+                    FullGramAntiScam.shared.ruleMassJoinLimit = limit
+                    FullGramAntiScam.shared.ruleMassJoinWindowSeconds = win
+                })
+            }
+            sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            presentNativeImpl?(sheet)
+        },
+        openRuleEvents: {
+            let events = FullGramAntiScam.shared.ruleEvents
+            let msg = events.isEmpty
+                ? "Нарушений правил пока не зафиксировано."
+                : events.prefix(15).map { "• [\($0.ruleName)] ID \($0.authorId): \($0.detail)" }.joined(separator: "\n")
+            let alert = UIAlertController(title: "Журнал срабатываний (\(events.count))", message: msg, preferredStyle: .alert)
+            if !events.isEmpty {
+                alert.addAction(UIAlertAction(title: "Очистить", style: .destructive) { _ in
+                    FullGramAntiScam.shared.clearRuleEvents()
+                })
+            }
+            alert.addAction(UIAlertAction(title: "OK", style: .cancel))
+            presentNativeImpl?(alert)
         },
         manualCheck: {
             let alert = UIAlertController(title: "Проверка на скам", message: "Вставьте ссылку, имя файла или текст оффера/сделки", preferredStyle: .alert)
@@ -373,6 +495,7 @@ func fullGramAntiScamController(context: AccountContext) -> ViewController {
     |> deliverOnMainQueue
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let antiScam = FullGramAntiScam.shared
+        let minIdB = String(format: "%.1f млрд", Double(antiScam.ruleNewAccountMinId) / 1_000_000_000.0)
         var entries: [FullGramAntiScamEntry] = [
             .guideHeader("МАНУАЛ И ГАЙД"),
             .guideLink("Не попадись: антискам-мануал", "Открыть"),
@@ -390,6 +513,19 @@ func fullGramAntiScamController(context: AccountContext) -> ViewController {
             .extraToggle(.warnShorteners, "Предупреждать о сокращателях URL", antiScam.warnShorteners),
             .extraToggle(.protectFiles, "Защита от опасных файлов", antiScam.protectDangerFiles),
             .extraToggle(.markScamMessages, "Помечать скам-сообщения в чатах", antiScam.markScamMessages),
+
+            .rulesHeader("ПРАВИЛА АНТИ-СКАМ МОДЕРАЦИИ"),
+            .ruleToggle(.ruleBanByTemplates, "Бан по шаблонам (фразы / regex)", antiScam.ruleBanByTemplates),
+            .ruleTemplatesLink("Список шаблонов и стоп-слов", "\(antiScam.ruleCustomTemplates.count)"),
+            .ruleToggle(.ruleBanByLinks, "Бан по ссылкам (кроме белых)", antiScam.ruleBanByLinks),
+            .ruleToggle(.ruleBanNewAccounts, "Защита от новых аккаунтов", antiScam.ruleBanNewAccounts),
+            .ruleNewAccountIdLink("Порог нового аккаунта", minIdB),
+            .ruleToggle(.ruleNewAccountRequireNoAvatar, "Новые: только без фото/@ника", antiScam.ruleNewAccountRequireNoAvatar),
+            .ruleToggle(.ruleBanMassJoins, "Защита от массовых вступлений", antiScam.ruleBanMassJoins),
+            .ruleMassJoinLink("Порог массовых вступлений", "\(antiScam.ruleMassJoinLimit) / \(antiScam.ruleMassJoinWindowSeconds)с"),
+            .ruleToggle(.ruleAutoBanInAdminGroups, "Авто-бан нарушителей в моих группах", antiScam.ruleAutoBanInAdminGroups),
+            .ruleEventsLink("Журнал срабатываний правил", "\(antiScam.ruleEvents.count)"),
+            .rulesInfo("Правила мгновенно помечают подозрительные сообщения и при включённом авто-бане блокируют нарушителей в группах, где вы администратор."),
 
             .toolsHeader("ПРОВЕРКА И СТАТИСТИКА"),
             .manualCheck("Проверить ссылку, файл или текст")
@@ -418,6 +554,12 @@ func fullGramAntiScamController(context: AccountContext) -> ViewController {
 
     let controller = ItemListController(context: context, state: signal)
     pushImpl = { [weak controller] c in controller?.push(c) }
-    presentNativeImpl = { [weak controller] vc in controller?.present(vc, animated: true) }
+    presentNativeImpl = { [weak controller] vc in
+        if let pop = vc.popoverPresentationController, let view = controller?.view {
+            pop.sourceView = view
+            pop.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1.0, height: 1.0)
+        }
+        controller?.present(vc, animated: true)
+    }
     return controller
 }

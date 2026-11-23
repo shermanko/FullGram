@@ -140,6 +140,9 @@ public class ChatMessageInteractiveInstantVideoNode: ASDisplayNode {
     private var fullGramSubtitleMessageId: EngineMessage.Id?
     private var fullGramSubtitleCues: [FullGramSubtitleCue] = []
     private var fullGramSubtitleLabel: UILabel?
+    private var fullGramSubtitleTimer: SwiftSignalKit.Timer?
+    private static let fullGramSubtitleCacheLock = NSLock()
+    private static var fullGramSubtitleCache: [String: [FullGramSubtitleCue]] = [:]
     
     private var viewOnceIconImage: UIImage?
     
@@ -241,6 +244,7 @@ public class ChatMessageInteractiveInstantVideoNode: ASDisplayNode {
         self.fetchedThumbnailDisposable.dispose()
         self.transcribeDisposable?.dispose()
         self.fullGramSubtitleDisposable.dispose()
+        self.fullGramSubtitleTimer?.invalidate()
     }
     
     override public func didLoad() {
@@ -1239,6 +1243,8 @@ public class ChatMessageInteractiveInstantVideoNode: ASDisplayNode {
 
     private func updateFullGramSubtitles(item: ChatMessageBubbleContentItem, file: TelegramMediaFile, videoFrame: CGRect, animator: ControlledTransitionAnimator?) {
         guard FullGramExtras.shared.videoSubtitlesEnabled else {
+            self.fullGramSubtitleTimer?.invalidate()
+            self.fullGramSubtitleTimer = nil
             self.fullGramSubtitleLabel?.isHidden = true
             return
         }
@@ -1256,31 +1262,55 @@ public class ChatMessageInteractiveInstantVideoNode: ASDisplayNode {
         }
 
         guard isPlayingNow else {
+            self.fullGramSubtitleTimer?.invalidate()
+            self.fullGramSubtitleTimer = nil
             self.fullGramSubtitleLabel?.isHidden = true
             return
         }
 
-        let currentMessageId = item.message.id
-        if self.fullGramSubtitleMessageId != currentMessageId {
-            self.fullGramSubtitleMessageId = currentMessageId
-            self.fullGramSubtitleCues = []
-            let appLocale = item.presentationData.strings.baseLanguageCode
-            let _ = messageMediaFileInteractiveFetched(context: item.context, message: item.message, file: file, userInitiated: false).startStrict()
-            self.fullGramSubtitleDisposable.set((item.context.engine.resources.data(id: EngineMediaResource.Id(file.resource.id))
-            |> filter { $0.isComplete }
-            |> take(1)
-            |> deliverOnMainQueue).startStrict(next: { [weak self] data in
-                FullGramSpeechBleep.recognizeSubtitleCues(at: data.path, preferredLanguage: appLocale, defaultExtension: "mp4") { [weak self] cues in
-                    guard let self, self.item?.message.id == currentMessageId else {
-                        return
-                    }
-                    self.fullGramSubtitleCues = cues
-                    self.updateStatus(animator: nil)
-                }
-            }))
+        if self.fullGramSubtitleTimer == nil {
+            let timer = SwiftSignalKit.Timer(timeout: 0.2, repeat: true, completion: { [weak self] in
+                self?.updateStatus(animator: nil)
+            }, queue: Queue.mainQueue())
+            self.fullGramSubtitleTimer = timer
+            timer.start()
         }
 
-        let timestamp = self.playerStatus?.timestamp ?? 0.0
+        let currentMessageId = item.message.id
+        let cacheKey = "\(file.fileId.namespace)_\(file.fileId.id)"
+        if self.fullGramSubtitleMessageId != currentMessageId {
+            self.fullGramSubtitleMessageId = currentMessageId
+            Self.fullGramSubtitleCacheLock.lock()
+            let cachedCues = Self.fullGramSubtitleCache[cacheKey]
+            Self.fullGramSubtitleCacheLock.unlock()
+            if let cachedCues {
+                self.fullGramSubtitleCues = cachedCues
+            } else {
+                self.fullGramSubtitleCues = []
+                let appLocale = item.presentationData.strings.baseLanguageCode
+                let _ = messageMediaFileInteractiveFetched(context: item.context, message: item.message, file: file, userInitiated: false).startStrict()
+                self.fullGramSubtitleDisposable.set((item.context.engine.resources.data(id: EngineMediaResource.Id(file.resource.id))
+                |> filter { $0.isComplete }
+                |> take(1)
+                |> deliverOnMainQueue).startStrict(next: { [weak self] data in
+                    FullGramSpeechBleep.recognizeSubtitleCues(at: data.path, preferredLanguage: appLocale, defaultExtension: "mp4") { [weak self] cues in
+                        Self.fullGramSubtitleCacheLock.lock()
+                        Self.fullGramSubtitleCache[cacheKey] = cues
+                        Self.fullGramSubtitleCacheLock.unlock()
+                        guard let self, self.item?.message.id == currentMessageId else {
+                            return
+                        }
+                        self.fullGramSubtitleCues = cues
+                        self.updateStatus(animator: nil)
+                    }
+                }))
+            }
+        }
+
+        let rawTs = self.playerStatus?.timestamp ?? 0.0
+        let genTs = self.playerStatus?.generationTimestamp ?? 0.0
+        let rate = self.playerStatus?.baseRate ?? 1.0
+        let timestamp = genTs > 0.0 ? (rawTs + max(0.0, CACurrentMediaTime() - genTs) * rate) : rawTs
         guard let activeText = FullGramSpeechBleep.activeSubtitleText(in: self.fullGramSubtitleCues, at: timestamp), !activeText.isEmpty else {
             self.fullGramSubtitleLabel?.isHidden = true
             return

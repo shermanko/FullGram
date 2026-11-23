@@ -13,30 +13,33 @@ import AccountContext
 
 private final class FullGramPluginsArguments {
     let toggleSystem: (Bool) -> Void
+    let toggleBackground: (Bool) -> Void
     let chooseLayoutFixerMode: () -> Void
+    let openNickClockGUI: () -> Void
     let openDeadlinesGUI: () -> Void
     let createPlugin: (FullGramPluginLanguage) -> Void
     let importFromFile: () -> Void
-    let openRemoteCatalog: () -> Void
     let openPlugin: (FullGramPluginDescriptor) -> Void
     let openApiDocs: () -> Void
 
     init(
         toggleSystem: @escaping (Bool) -> Void,
+        toggleBackground: @escaping (Bool) -> Void,
         chooseLayoutFixerMode: @escaping () -> Void,
+        openNickClockGUI: @escaping () -> Void,
         openDeadlinesGUI: @escaping () -> Void,
         createPlugin: @escaping (FullGramPluginLanguage) -> Void,
         importFromFile: @escaping () -> Void,
-        openRemoteCatalog: @escaping () -> Void,
         openPlugin: @escaping (FullGramPluginDescriptor) -> Void,
         openApiDocs: @escaping () -> Void
     ) {
         self.toggleSystem = toggleSystem
+        self.toggleBackground = toggleBackground
         self.chooseLayoutFixerMode = chooseLayoutFixerMode
+        self.openNickClockGUI = openNickClockGUI
         self.openDeadlinesGUI = openDeadlinesGUI
         self.createPlugin = createPlugin
         self.importFromFile = importFromFile
-        self.openRemoteCatalog = openRemoteCatalog
         self.openPlugin = openPlugin
         self.openApiDocs = openApiDocs
     }
@@ -50,10 +53,11 @@ private enum FullGramPluginsSection: Int32 {
 
 private enum FullGramPluginsEntry: ItemListNodeEntry {
     case systemSwitch(Bool)
+    case backgroundSwitch(Bool)
+    case openNickClock(String)
     case layoutFixerMode(String)
     case openDeadlines
     case systemInfo(String)
-    case remoteCatalog(String)
     case createLua
     case createPython
     case createRust
@@ -64,8 +68,8 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
 
     var section: ItemListSectionId {
         switch self {
-        case .systemSwitch, .layoutFixerMode, .openDeadlines, .systemInfo: return FullGramPluginsSection.system.rawValue
-        case .remoteCatalog, .createLua, .createPython, .createRust, .importFile, .apiDocs: return FullGramPluginsSection.actions.rawValue
+        case .systemSwitch, .backgroundSwitch, .openNickClock, .layoutFixerMode, .openDeadlines, .systemInfo: return FullGramPluginsSection.system.rawValue
+        case .createLua, .createPython, .createRust, .importFile, .apiDocs: return FullGramPluginsSection.actions.rawValue
         case .listHeader, .pluginItem: return FullGramPluginsSection.list.rawValue
         }
     }
@@ -73,10 +77,11 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
     var stableId: Int32 {
         switch self {
         case .systemSwitch: return 0
-        case .layoutFixerMode: return 1
-        case .openDeadlines: return 3
-        case .systemInfo: return 4
-        case .remoteCatalog: return 9
+        case .backgroundSwitch: return 1
+        case .openNickClock: return 2
+        case .layoutFixerMode: return 3
+        case .openDeadlines: return 4
+        case .systemInfo: return 5
         case .createLua: return 10
         case .createPython: return 11
         case .createRust: return 12
@@ -96,14 +101,16 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
         switch self {
         case let .systemSwitch(value):
             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Включить систему плагинов", value: value, sectionId: self.section, style: .blocks, updated: args.toggleSystem)
+        case let .backgroundSwitch(value):
+            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Фоновый режим плагинов", value: value, sectionId: self.section, style: .blocks, updated: args.toggleBackground)
+        case let .openNickClock(label):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: "⌚ Живой Ник и Часы (.nick)", label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openNickClockGUI)
         case let .layoutFixerMode(label):
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: "⌨️ Исправление раскладки (.fix)", label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.chooseLayoutFixerMode)
         case .openDeadlines:
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: "⏰ Дедлайны и Задачи (.dl)", label: "Открыть", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openDeadlinesGUI)
         case let .systemInfo(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
-        case let .remoteCatalog(label):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: "🛒 Маркет плагинов FullGram", label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openRemoteCatalog)
         case .createLua:
             return ItemListActionItem(presentationData: presentationData, title: "+ Новый плагин на Lua (.lua)", kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: {
                 args.createPlugin(.lua)
@@ -119,12 +126,13 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
         case .importFile:
             return ItemListActionItem(presentationData: presentationData, title: "📥 Импорт из Файлов (.lua / .py / .rs)", kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.importFromFile)
         case .apiDocs:
-            return ItemListDisclosureItem(presentationData: presentationData, title: "Справка по API (Lua, Python, Rust)", label: "", sectionId: self.section, style: .blocks, action: args.openApiDocs)
+            return ItemListDisclosureItem(presentationData: presentationData, title: "Справка по Plugin API v2.0 (Lua, Python, Rust)", label: "", sectionId: self.section, style: .blocks, action: args.openApiDocs)
         case let .listHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .pluginItem(_, descriptor, error):
             let status = error != nil ? "Ошибка" : (descriptor.isEnabled ? "Вкл" : "Выкл")
-            let label = "[\(descriptor.language.displayName)] \(status)"
+            let bgTag = (descriptor.isEnabled && descriptor.backgroundEnabled) ? " • Фон" : ""
+            let label = "[\(descriptor.language.displayName)] \(status)\(bgTag)"
             let title = descriptor.description.isEmpty ? descriptor.name : "\(descriptor.name)\n\(descriptor.description)"
             return ItemListDisclosureItem(presentationData: presentationData, title: title, label: label, sectionId: self.section, style: .blocks, action: {
                 args.openPlugin(descriptor)
@@ -163,6 +171,10 @@ func fullGramPluginsController(context: AccountContext) -> ViewController {
             FullGramPluginManager.shared.isSystemEnabled = enabled
             bump()
         },
+        toggleBackground: { enabled in
+            FullGramPluginManager.shared.isBackgroundExecutionEnabled = enabled
+            bump()
+        },
         chooseLayoutFixerMode: {
             let sheet = UIAlertController(
                 title: "Направление раскладки (.fix)",
@@ -183,6 +195,13 @@ func fullGramPluginsController(context: AccountContext) -> ViewController {
             })
             sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
             presentNativeImpl?(sheet)
+        },
+        openNickClockGUI: {
+            NotificationCenter.default.post(
+                name: FullGramPluginNotifications.openUIRequested,
+                object: nil,
+                userInfo: ["kind": "nick_clock", "pluginId": "fg_nick_clock"]
+            )
         },
         openDeadlinesGUI: {
             NotificationCenter.default.post(
@@ -290,9 +309,6 @@ fn on_outgoing_message(ctx: Context) -> Option<String> {
             picker.delegate = delegate
             presentNativeImpl?(picker)
         },
-        openRemoteCatalog: {
-            pushImpl?(fullGramRemoteCatalogController(context: context))
-        },
         openPlugin: { descriptor in
             pushImpl?(FullGramPluginEditorContainerController(context: context, descriptor: descriptor, isNew: false, onChanged: bump))
         },
@@ -306,13 +322,16 @@ fn on_outgoing_message(ctx: Context) -> Option<String> {
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let manager = FullGramPluginManager.shared
         let plugins = manager.allPlugins()
+        let bgSummary = manager.backgroundStatusSummary()
+        let nickClockLabel = manager.nickClockEnabled ? "Вкл" : "Выкл"
 
         var entries: [FullGramPluginsEntry] = [
             .systemSwitch(manager.isSystemEnabled),
+            .backgroundSwitch(manager.isBackgroundExecutionEnabled),
+            .openNickClock(nickClockLabel),
             .layoutFixerMode(manager.layoutFixerModeTitle),
             .openDeadlines,
-            .systemInfo("Как использовать плагины:\n• В чате введите точку «.» (появятся подсказки) или нажмите «⚡ Плагины» над полем ввода.\n• Команды плагинов (например .dl, .fix) работают прямо в чате; некоторые плагины открывают графический интерфейс.\n• Плагин «Анти-опечатки» работает автоматически при отправке каждого сообщения."),
-            .remoteCatalog("Каталог"),
+            .systemInfo("FullGram Plugin System v2.0 (Lua, Python, Rust):\n• В чате введите «.» или нажмите «⚡ Плагины» над полем ввода.\n• Команды .nick и .time управляют живым ником Telegram и показывают время телефона.\n• Фоновый движок (\(bgSummary.running ? "активен" : "на паузе"), активных: \(bgSummary.activeCount), тиков: \(bgSummary.totalTicks)) выполняет on_background_tick в фоне и при сворачивании приложения."),
             .createLua,
             .createPython,
             .createRust,
@@ -356,6 +375,7 @@ private final class FullGramPluginEditorViewController: UIViewController {
     var onClose: (() -> Void)?
 
     private let enableSwitch = UISwitch()
+    private let backgroundSwitch = UISwitch()
     private let metaLabel = UILabel()
     private let codeTextView = UITextView()
     private let testInputField = UITextField()
@@ -413,6 +433,16 @@ private final class FullGramPluginEditorViewController: UIViewController {
         self.enableSwitch.addTarget(self, action: #selector(self.toggleChanged), for: .valueChanged)
         self.enableSwitch.translatesAutoresizingMaskIntoConstraints = false
 
+        let bgTitle = UILabel()
+        bgTitle.text = "Работа в фоне (интервал \(self.descriptor.backgroundInterval)с)"
+        bgTitle.font = .systemFont(ofSize: 15.0, weight: .regular)
+        bgTitle.textColor = self.theme.list.itemPrimaryTextColor
+        bgTitle.translatesAutoresizingMaskIntoConstraints = false
+        self.backgroundSwitch.isOn = self.descriptor.backgroundEnabled
+        self.backgroundSwitch.onTintColor = self.theme.list.itemAccentColor
+        self.backgroundSwitch.addTarget(self, action: #selector(self.backgroundToggleChanged), for: .valueChanged)
+        self.backgroundSwitch.translatesAutoresizingMaskIntoConstraints = false
+
         self.metaLabel.font = .systemFont(ofSize: 12.5)
         self.metaLabel.textColor = self.theme.list.itemSecondaryTextColor
         self.metaLabel.numberOfLines = 0
@@ -421,13 +451,19 @@ private final class FullGramPluginEditorViewController: UIViewController {
 
         headerCard.addSubview(switchTitle)
         headerCard.addSubview(self.enableSwitch)
+        headerCard.addSubview(bgTitle)
+        headerCard.addSubview(self.backgroundSwitch)
         headerCard.addSubview(self.metaLabel)
         NSLayoutConstraint.activate([
             switchTitle.topAnchor.constraint(equalTo: headerCard.topAnchor, constant: 12.0),
             switchTitle.leadingAnchor.constraint(equalTo: headerCard.leadingAnchor, constant: 14.0),
             self.enableSwitch.centerYAnchor.constraint(equalTo: switchTitle.centerYAnchor),
             self.enableSwitch.trailingAnchor.constraint(equalTo: headerCard.trailingAnchor, constant: -14.0),
-            self.metaLabel.topAnchor.constraint(equalTo: switchTitle.bottomAnchor, constant: 8.0),
+            bgTitle.topAnchor.constraint(equalTo: switchTitle.bottomAnchor, constant: 12.0),
+            bgTitle.leadingAnchor.constraint(equalTo: headerCard.leadingAnchor, constant: 14.0),
+            self.backgroundSwitch.centerYAnchor.constraint(equalTo: bgTitle.centerYAnchor),
+            self.backgroundSwitch.trailingAnchor.constraint(equalTo: headerCard.trailingAnchor, constant: -14.0),
+            self.metaLabel.topAnchor.constraint(equalTo: bgTitle.bottomAnchor, constant: 10.0),
             self.metaLabel.leadingAnchor.constraint(equalTo: headerCard.leadingAnchor, constant: 14.0),
             self.metaLabel.trailingAnchor.constraint(equalTo: headerCard.trailingAnchor, constant: -14.0),
             self.metaLabel.bottomAnchor.constraint(equalTo: headerCard.bottomAnchor, constant: -12.0)
@@ -496,6 +532,8 @@ private final class FullGramPluginEditorViewController: UIViewController {
             self.testInputField.text = ".tpl list"
         case "fg_notes":
             self.testInputField.text = ".note list"
+        case "fg_nick_clock":
+            self.testInputField.text = ".time"
         default:
             self.testInputField.text = ".shrug тест"
         }
@@ -510,10 +548,14 @@ private final class FullGramPluginEditorViewController: UIViewController {
         self.testInputField.heightAnchor.constraint(equalToConstant: 40.0).isActive = true
 
         let runBtn = self.makeButton(title: "▶ Тест", bg: self.theme.list.itemAccentColor, fg: .white, action: #selector(self.runTestTapped))
-        runBtn.widthAnchor.constraint(equalToConstant: 96.0).isActive = true
+        runBtn.widthAnchor.constraint(equalToConstant: 86.0).isActive = true
+
+        let bgRunBtn = self.makeButton(title: "⏱ Фон", bg: self.theme.list.itemBlocksBackgroundColor, fg: self.theme.list.itemAccentColor, action: #selector(self.runBackgroundTestTapped))
+        bgRunBtn.widthAnchor.constraint(equalToConstant: 78.0).isActive = true
 
         testBar.addArrangedSubview(self.testInputField)
         testBar.addArrangedSubview(runBtn)
+        testBar.addArrangedSubview(bgRunBtn)
         stack.addArrangedSubview(testBar)
 
         self.outputTextView.isEditable = false
@@ -566,6 +608,15 @@ private final class FullGramPluginEditorViewController: UIViewController {
         }
     }
 
+    @objc private func backgroundToggleChanged() {
+        self.descriptor.backgroundEnabled = self.backgroundSwitch.isOn
+        if !self.isNew {
+            FullGramPluginManager.shared.setPluginBackground(id: self.descriptor.id, enabled: self.backgroundSwitch.isOn)
+            self.refreshMetaLabel()
+            self.onChanged()
+        }
+    }
+
     @objc private func saveTapped() {
         let code = self.codeTextView.text ?? ""
         let saved = FullGramPluginManager.shared.savePlugin(
@@ -573,9 +624,11 @@ private final class FullGramPluginEditorViewController: UIViewController {
             name: self.descriptor.name,
             language: self.descriptor.language,
             code: code,
-            enabled: self.enableSwitch.isOn
+            enabled: self.enableSwitch.isOn,
+            backgroundEnabled: self.backgroundSwitch.isOn
         )
         self.descriptor = saved
+        self.backgroundSwitch.isOn = saved.backgroundEnabled
         self.isNew = false
         self.refreshMetaLabel()
         self.refreshLogsView()
@@ -603,6 +656,23 @@ private final class FullGramPluginEditorViewController: UIViewController {
         self.outputTextView.text = lines.joined(separator: "\n")
     }
 
+    @objc private func runBackgroundTestTapped() {
+        let code = self.codeTextView.text ?? ""
+        let res = FullGramPluginManager.shared.testBackgroundTick(code: code, language: self.descriptor.language)
+        var lines: [String] = []
+        if let err = res.error {
+            lines.append("❌ ОШИБКА ФОНА: \(err)")
+        } else {
+            lines.append("⏱ Фоновый тик выполнен успешно")
+            lines.append("→ Возврат: \(res.output.isEmpty ? "(nil)" : res.output)")
+        }
+        if !res.logs.isEmpty {
+            lines.append("--- Консоль ---")
+            lines.append(contentsOf: res.logs)
+        }
+        self.outputTextView.text = lines.joined(separator: "\n")
+    }
+
     @objc private func exportTapped() {
         self.saveTappedQuietly()
         guard let url = FullGramPluginManager.shared.exportFileURL(forPluginId: self.descriptor.id) else { return }
@@ -621,7 +691,8 @@ private final class FullGramPluginEditorViewController: UIViewController {
             name: self.descriptor.name,
             language: self.descriptor.language,
             code: code,
-            enabled: self.enableSwitch.isOn
+            enabled: self.enableSwitch.isOn,
+            backgroundEnabled: self.backgroundSwitch.isOn
         )
         self.isNew = false
         self.onChanged()
@@ -678,36 +749,58 @@ private func fullGramPluginApiDocsController(context: AccountContext) -> ViewCon
     |> deliverOnMainQueue
     |> map { presentationData -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let entries: [FullGramPluginDocsEntry] = [
-            .header(0, "ХУКИ ПЛАГИНОВ (LUA И PYTHON)"),
+            .header(0, "ХУКИ ЖИЗНЕННОГО ЦИКЛА (API v2.0)"),
             .text(1, """
-• on_command(ctx) — вызывается при отправке сообщения вида .команда аргументы или .plug подкоманда.
+• on_command(ctx) — команды .команда и .plug подкоманда.
   Поля ctx: command, subcommand, args, text, peer_id, is_group, is_channel, chat_stats.
-  Возврат: строка (заменит текст), nil/None (пропустить), или словарь/таблица { "cancel": true, "toast": "текст" }.
+  Возврат: строка (замена текста), nil/None, { text = "..." } или { cancel = true, toast = "..." }.
 
-• on_outgoing_message(ctx) — перехват любого исходящего текста перед отправкой.
-  Поля ctx: text, peer_id, is_group, is_channel.
-
-• on_render_message(ctx) — модификация текста сообщения при отображении в чате.
-  Поля ctx: text, peer_id, is_incoming, message_id.
+• on_outgoing_message(ctx) — перехват исходящих сообщений (text, peer_id, is_group, is_channel).
+• on_incoming_message(ctx) — фоновая обработка новых входящих сообщений (text, peer_id, sender_name, timestamp, is_group, is_channel, time).
+• on_render_message(ctx) — модификация текста при рендере (text, peer_id, is_incoming, message_id).
+• on_message_action(ctx) — действие в контекстном меню сообщения (text, peer_id).
+• on_ui_event(ctx) — нажатие кнопки в open_ui (action, input).
+• on_background_tick(ctx) / on_tick(ctx) — фоновый таймер плагина (требует @background true и @interval 30).
+  Поля ctx: tick, interval, in_background, app_state, time, profile, device.
+• on_app_state(ctx) — смена состояния приложения (state: "foreground" | "background", in_background, time).
+• on_load() / on_unload() — запуск и выгрузка плагина.
 """),
-            .header(100, "ВСТРОЕННЫЙ МОДУЛЬ fullgram"),
+            .header(100, "ПРОФИЛЬ И НИК TELEGRAM (fullgram.profile)"),
             .text(101, """
-• fullgram.toast(text) — показать уведомление в чате
-• fullgram.log(text) — записать строку в консоль плагина
-• fullgram.storage_get(key, default) / fullgram.storage_set(key, val) — постоянное хранилище
-• fullgram.clipboard_set(text) / fullgram.clipboard_get() — буфер обмена
-• fullgram.get_chat_stats() — статистика текущего чата для команд .plug (first_date, last_date, top_words, rare_words, profanity_count, voice_count, round_count)
-• fullgram.http_get(url) — HTTP / HTTPS GET-запрос без ограничений
-• fullgram.register_command("cmd", fn) — регистрация команды
+• fullgram.profile.get() / fullgram.get_profile() — таблица профиля: id, first_name, last_name, full_name, username, bio, phone, original_first_name, original_last_name.
+• fullgram.profile.set_name(first, last?) / fullgram.set_nickname(first, last?) — смена отображаемого имени в Telegram (с авто-сохранением исходного ника и анти-флудом).
+• fullgram.profile.restore_name() / fullgram.restore_nickname() — вернуть исходный ник.
+• fullgram.profile.set_username(username) — сменить @username аккаунта.
+• fullgram.profile.set_bio(bio) — сменить «О себе».
+• fullgram.profile.format_nick(template, style?, base_first?) — подставить {time}, {time_sec}, {time_bold}, {time_mono}, {time_fancy}, {clock}, {date}, {weekday}, {battery}, {name}.
+• fullgram.profile.apply_template(template?, style?) — отформатировать и сразу применить ник.
+"""),
+            .header(200, "ВРЕМЯ ТЕЛЕФОНА И УСТРОЙСТВО (fullgram.time, fullgram.device)"),
+            .text(201, """
+• fullgram.time.now() / fullgram.get_time() — timestamp, unix, unix_ms, hm, hms, formatted, date, iso, year, month, day, hour, minute, second, weekday, weekday_name, weekday_short, timezone, utc_offset, utc_offset_str, is_24h, bold_hm, mono_hm, double_hm, fancy_hm, clock_emoji.
+• fullgram.time.format(fmt?, ts?, style?) — формат по DateFormatter + стиль цифр ("normal", "bold", "mono", "double", "sans", "circled").
+• fullgram.time.stylize(text, style?) — стилизация цифр строки.
+• fullgram.device.info() / fullgram.get_device_info() — model, system_name, system_version, battery_level, battery_state, is_charging, is_low_power, locale, timezone, app_state, is_background, uptime.
+• fullgram.device.battery() / fullgram.device.haptic(style?).
+"""),
+            .header(300, "ФОНОВЫЙ РЕЖИМ, ЧАТЫ, ХРАНИЛИЩЕ И СЕТЬ"),
+            .text(301, """
+• fullgram.background.set_interval(sec) / stop_interval() / status() — управление фоновым циклом (5..3600 сек).
+• fullgram.background.on(event, fn) / emit(event, data) — шина событий между плагинами.
+• fullgram.chat.send(text, peer_id?) / set_draft(text) / active() / stats().
+• fullgram.storage.get(k, def) / set(k, v) / delete(k) / keys() / clear() / shared_get(k, def) / shared_set(k, v).
+• fullgram.net.get(url, headers?) / post(url, body?, headers?) / request(spec).
+• fullgram.crypto.sha256(s) / base64_encode(s) / base64_decode(s) / url_encode(s) / uuid().
+• fullgram.ui.toast(t) / alert(title, msg) / open(spec) / log(...) / clipboard_get() / clipboard_set(t).
 
-Python модули: import re, json, math, random, time, fullgram. Поддерживаются f-строки, def, lambda, list comprehensions, try/except.
-Lua библиотеки: string, table, math, json, pairs, ipairs, pcall, print.
+Теги шапки: @name, @id, @version, @author, @description, @background true, @interval 30, @permission net.
+Stdlib: Lua (os.time, os.date, os.clock, string, table, math, json), Python (time, datetime, re, json, math, random, fullgram), Rust (fullgram::*).
 """)
         ]
         let data = ItemListPresentationData(presentationData)
         let state = ItemListControllerState(
             presentationData: data,
-            title: .text("API плагинов"),
+            title: .text("Plugin API v2.0"),
             leftNavigationButton: nil,
             rightNavigationButton: nil,
             backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back)
@@ -716,224 +809,4 @@ Lua библиотеки: string, table, math, json, pairs, ipairs, pcall, print
         return (state, (listState, ()))
     }
     return ItemListController(context: context, state: signal)
-}
-
-// MARK: - Официальный маркет плагинов FullGram
-
-private final class FullGramRemoteCatalogArguments {
-    let editURL: () -> Void
-    let reloadCatalog: () -> Void
-    let openAdmin: () -> Void
-    let installItem: (FullGramRemotePluginItem) -> Void
-    init(editURL: @escaping () -> Void, reloadCatalog: @escaping () -> Void, openAdmin: @escaping () -> Void, installItem: @escaping (FullGramRemotePluginItem) -> Void) {
-        self.editURL = editURL
-        self.reloadCatalog = reloadCatalog
-        self.openAdmin = openAdmin
-        self.installItem = installItem
-    }
-}
-
-private enum FullGramRemoteCatalogSection: Int32 {
-    case server
-    case items
-}
-
-private enum FullGramRemoteCatalogEntry: ItemListNodeEntry {
-    case serverHeader(String)
-    case serverURL(String)
-    case reload(String, ItemListActionKind)
-    case adminManage(String)
-    case serverInfo(String)
-    case itemsHeader(String)
-    case pluginItem(Int32, FullGramRemotePluginItem, Bool)
-    case emptyStatus(String)
-
-    var section: ItemListSectionId {
-        switch self {
-        case .serverHeader, .serverURL, .reload, .adminManage, .serverInfo: return FullGramRemoteCatalogSection.server.rawValue
-        case .itemsHeader, .pluginItem, .emptyStatus: return FullGramRemoteCatalogSection.items.rawValue
-        }
-    }
-
-    var stableId: Int32 {
-        switch self {
-        case .serverHeader: return 0
-        case .serverURL: return 1
-        case .reload: return 2
-        case .adminManage: return 3
-        case .serverInfo: return 4
-        case .itemsHeader: return 100
-        case let .pluginItem(idx, _, _): return 101 + idx
-        case .emptyStatus: return 500
-        }
-    }
-
-    static func < (lhs: FullGramRemoteCatalogEntry, rhs: FullGramRemoteCatalogEntry) -> Bool {
-        return lhs.stableId < rhs.stableId
-    }
-
-    func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
-        let args = arguments as! FullGramRemoteCatalogArguments
-        switch self {
-        case let .serverHeader(text):
-            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
-        case let .serverURL(urlString):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: "Адрес каталога", label: urlString, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.editURL)
-        case let .reload(title, kind):
-            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: kind, alignment: .center, sectionId: self.section, style: .blocks, action: args.reloadCatalog)
-        case let .adminManage(title):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openAdmin)
-        case let .serverInfo(text):
-            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
-        case let .itemsHeader(text):
-            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
-        case let .pluginItem(_, item, installed):
-            let status = installed ? "Установлен" : "Скачать"
-            let title = item.description.isEmpty ? item.name : "\(item.name)\n\(item.description)"
-            return ItemListDisclosureItem(presentationData: presentationData, title: title, label: "[\(item.language.displayName)] \(status)", sectionId: self.section, style: .blocks, action: {
-                args.installItem(item)
-            })
-        case let .emptyStatus(text):
-            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
-        }
-    }
-}
-
-private func fullGramRemoteCatalogController(context: AccountContext) -> ViewController {
-    var presentNativeImpl: ((UIViewController) -> Void)?
-    var pushImpl: ((ViewController) -> Void)?
-    let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
-    var tick = 0
-    var isLoading = false
-    var statusMessage = "Нажмите «Обновить маркет» для загрузки проверенных плагинов."
-    var remoteItems: [FullGramRemotePluginItem] = []
-
-    let bump: () -> Void = {
-        tick += 1
-        refresh.set(tick)
-    }
-
-    let performFetch: () -> Void = {
-        guard !isLoading else { return }
-        isLoading = true
-        statusMessage = "Загрузка маркета…"
-        bump()
-        FullGramPluginManager.shared.fetchRemoteCatalog { result in
-            isLoading = false
-            switch result {
-            case let .success(catalog):
-                remoteItems = catalog.plugins
-                statusMessage = catalog.plugins.isEmpty ? "В маркете пока нет плагинов." : "Загружено плагинов: \(catalog.plugins.count)"
-            case let .failure(error):
-                statusMessage = "Ошибка: \(error.localizedDescription)"
-            }
-            bump()
-        }
-    }
-
-    let args = FullGramRemoteCatalogArguments(
-        editURL: {
-            let alert = UIAlertController(
-                title: "Сервер маркета плагинов",
-                message: "Укажите ссылку на plugins.json или верните адрес по умолчанию.",
-                preferredStyle: .alert
-            )
-            alert.addTextField { tf in
-                tf.text = FullGramPluginManager.shared.catalogURL
-                tf.placeholder = FullGramPluginManager.officialCatalogURL
-                tf.keyboardType = .URL
-                tf.autocorrectionType = .no
-                tf.autocapitalizationType = .none
-            }
-            alert.addAction(UIAlertAction(title: "По умолчанию", style: .default, handler: { _ in
-                FullGramPluginManager.shared.catalogURL = FullGramPluginManager.officialCatalogURL
-                bump()
-                performFetch()
-            }))
-            alert.addAction(UIAlertAction(title: "Сохранить", style: .default, handler: { _ in
-                let value = alert.textFields?.first?.text ?? ""
-                FullGramPluginManager.shared.catalogURL = value
-                bump()
-                performFetch()
-            }))
-            alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            presentNativeImpl?(alert)
-        },
-        reloadCatalog: {
-            performFetch()
-        },
-        openAdmin: {
-            pushImpl?(fullGramAdminController(context: context))
-        },
-        installItem: { item in
-            let alert = UIAlertController(
-                title: item.name,
-                message: "Автор: \(item.author) • v\(item.version) [\(item.language.displayName)]\n\(item.description)\n\nУстановить этот плагин?",
-                preferredStyle: .alert
-            )
-            let doInstall: (Bool) -> Void = { enable in
-                FullGramPluginManager.shared.installRemotePlugin(item, enableImmediately: enable) { res in
-                    let doneAlert: UIAlertController
-                    switch res {
-                    case let .success(saved):
-                        doneAlert = UIAlertController(title: "Готово", message: "Плагин «\(saved.name)» установлен\(enable ? " и включён" : " (отключён)").", preferredStyle: .alert)
-                    case let .failure(err):
-                        doneAlert = UIAlertController(title: "Ошибка установки", message: err.localizedDescription, preferredStyle: .alert)
-                    }
-                    doneAlert.addAction(UIAlertAction(title: "OK", style: .default))
-                    presentNativeImpl?(doneAlert)
-                    bump()
-                }
-            }
-            alert.addAction(UIAlertAction(title: "Установить и включить", style: .default, handler: { _ in doInstall(true) }))
-            alert.addAction(UIAlertAction(title: "Только скачать (выкл.)", style: .default, handler: { _ in doInstall(false) }))
-            alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            presentNativeImpl?(alert)
-        }
-    )
-
-    DispatchQueue.main.async {
-        performFetch()
-    }
-
-    let signal = combineLatest(context.sharedContext.presentationData, refresh.get())
-    |> deliverOnMainQueue
-    |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
-        let installedIds = Set(FullGramPluginManager.shared.allPlugins().map { $0.id })
-
-        var entries: [FullGramRemoteCatalogEntry] = [
-            .serverHeader("МАРКЕТ ПЛАГИНОВ FULLGRAM"),
-            .serverURL(FullGramPluginManager.shared.catalogURL),
-            .reload(isLoading ? "⏳ Обновление…" : "🔄 Обновить маркет", isLoading ? .neutral : .generic)
-        ]
-        if fullGramCanOpenAdmin(context: context) {
-            entries.append(.adminManage("🔐 Управление маркетом (Админ)"))
-        }
-        entries.append(.serverInfo("Вы можете использовать основной маркет FullGram или указать любой свой URL каталога plugins.json."))
-
-        entries.append(.itemsHeader("ДОСТУПНЫЕ ПЛАГИНЫ (\(remoteItems.count))"))
-        if remoteItems.isEmpty {
-            entries.append(.emptyStatus(statusMessage))
-        } else {
-            for (idx, item) in remoteItems.enumerated() {
-                entries.append(.pluginItem(Int32(idx), item, installedIds.contains(item.id)))
-            }
-        }
-
-        let data = ItemListPresentationData(presentationData)
-        let state = ItemListControllerState(
-            presentationData: data,
-            title: .text("Маркет плагинов"),
-            leftNavigationButton: nil,
-            rightNavigationButton: nil,
-            backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back)
-        )
-        let listState = ItemListNodeState(presentationData: data, entries: entries, style: .blocks, animateChanges: false)
-        return (state, (listState, args))
-    }
-
-    let controller = ItemListController(context: context, state: signal)
-    presentNativeImpl = { [weak controller] vc in controller?.present(vc, animated: true) }
-    pushImpl = { [weak controller] c in controller?.push(c) }
-    return controller
 }

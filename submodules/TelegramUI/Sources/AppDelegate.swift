@@ -266,6 +266,8 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
     private var fullGramRestartGenerationValue: Int = 0
     private var fullGramFontRestartObserver: NSObjectProtocol?
     private var fullGramRestartOverlayView: UIView?
+    private var fullGramBetaObserver: NSObjectProtocol?
+    private var fullGramPendingBetaCode: String?
     
     private var authContextValue: UnauthorizedApplicationContext?
     private let authContext = Promise<UnauthorizedApplicationContext?>()
@@ -1028,6 +1030,11 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
                     PresentationAppIcon(name: "FullGramHolo", imageName: "FullGramHolo"),
                     PresentationAppIcon(name: "FullGramMascotNeon", imageName: "FullGramMascotNeon"),
                     PresentationAppIcon(name: "FullGramMascotGold", imageName: "FullGramMascotGold"),
+                    PresentationAppIcon(name: "FullGramObsidian", imageName: "FullGramObsidian"),
+                    PresentationAppIcon(name: "FullGramAurora", imageName: "FullGramAurora"),
+                    PresentationAppIcon(name: "FullGramCrimson", imageName: "FullGramCrimson"),
+                    PresentationAppIcon(name: "FullGramMint", imageName: "FullGramMint"),
+                    PresentationAppIcon(name: "FullGramPlasma", imageName: "FullGramPlasma"),
                     PresentationAppIcon(name: "BlueIcon", imageName: "BlueIcon"),
                     PresentationAppIcon(name: "New2", imageName: "New2"),
                     PresentationAppIcon(name: "New1", imageName: "New1"),
@@ -1306,32 +1313,40 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         })
             
         self.fullGramFontRestartObserver = NotificationCenter.default.addObserver(forName: FullGramFonts.didRequestAppRestartNotification, object: nil, queue: .main) { [weak self] _ in
-            guard let self else {
-                return
+            MainActor.assumeIsolated {
+                guard let self else {
+                    return
+                }
+                if let existing = self.fullGramRestartOverlayView {
+                    existing.removeFromSuperview()
+                    self.fullGramRestartOverlayView = nil
+                }
+                let hostView = self.mainWindow.hostView.containerView
+                let overlay = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
+                overlay.frame = hostView.bounds
+                overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                overlay.alpha = 0.0
+                let indicator = UIActivityIndicatorView(style: .large)
+                indicator.center = CGPoint(x: overlay.bounds.midX, y: overlay.bounds.midY)
+                indicator.autoresizingMask = [.flexibleLeftMargin, .flexibleRightMargin, .flexibleTopMargin, .flexibleBottomMargin]
+                indicator.startAnimating()
+                overlay.contentView.addSubview(indicator)
+                hostView.addSubview(overlay)
+                self.fullGramRestartOverlayView = overlay
+                UIView.animate(withDuration: 0.14, animations: {
+                    overlay.alpha = 1.0
+                }, completion: { [weak self] _ in
+                    guard let self else { return }
+                    self.fullGramRestartGenerationValue += 1
+                    self.fullGramRestartGeneration.set(self.fullGramRestartGenerationValue)
+                })
             }
-            if let existing = self.fullGramRestartOverlayView {
-                existing.removeFromSuperview()
-                self.fullGramRestartOverlayView = nil
+        }
+
+        self.fullGramBetaObserver = NotificationCenter.default.addObserver(forName: FullGramBetaAccess.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.updateFullGramBetaGate()
             }
-            let hostView = self.mainWindow.hostView.containerView
-            let overlay = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
-            overlay.frame = hostView.bounds
-            overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            overlay.alpha = 0.0
-            let indicator = UIActivityIndicatorView(style: .large)
-            indicator.center = CGPoint(x: overlay.bounds.midX, y: overlay.bounds.midY)
-            indicator.autoresizingMask = [.flexibleLeftMargin, .flexibleRightMargin, .flexibleTopMargin, .flexibleBottomMargin]
-            indicator.startAnimating()
-            overlay.contentView.addSubview(indicator)
-            hostView.addSubview(overlay)
-            self.fullGramRestartOverlayView = overlay
-            UIView.animate(withDuration: 0.14, animations: {
-                overlay.alpha = 1.0
-            }, completion: { [weak self] _ in
-                guard let self else { return }
-                self.fullGramRestartGenerationValue += 1
-                self.fullGramRestartGeneration.set(self.fullGramRestartGenerationValue)
-            })
         }
 
         self.context.set(combineLatest(queue: .mainQueue(), self.sharedContextPromise.get(), self.fullGramRestartGeneration.get())
@@ -1481,12 +1496,19 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
                     }
                     if let overlay = self.fullGramRestartOverlayView {
                         self.fullGramRestartOverlayView = nil
-                        UIView.animate(withDuration: 0.22, animations: {
+                        UIView.animate(withDuration: 0.16, animations: {
                             overlay.alpha = 0.0
                         }, completion: { _ in
                             overlay.removeFromSuperview()
                         })
                     }
+                    let peerRawId = context.context.account.peerId.id._internalGetInt64Value()
+                    FullGramBetaAccess.shared.verifyWithServerIfNeeded(peerId: peerRawId)
+                    if let pendingCode = self.fullGramPendingBetaCode {
+                        self.fullGramPendingBetaCode = nil
+                        self.activateFullGramBeta(code: pendingCode, peerId: peerRawId)
+                    }
+                    self.updateFullGramBetaGate()
                     
                     #if DEBUG
                     if firstTime {
@@ -1495,6 +1517,9 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
                     #endif
                     
                     if firstTime {
+                        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 8.0) {
+                            _ = FullGramCacheCleaner.runIfNeeded()
+                        }
                         let layer = context.rootController.view.layer
                         layer.allowsGroupOpacity = true
                         layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2, completion: { [weak layer] _ in
@@ -2814,7 +2839,50 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
     }
     #endif
     
+    private func handleFullGramBetaURLIfNeeded(_ url: URL) -> Bool {
+        guard let code = FullGramBetaAccess.extractBetaCode(from: url) else {
+            return false
+        }
+        if let peerId = self.contextValue?.context.account.peerId.id._internalGetInt64Value(), peerId != 0 {
+            self.activateFullGramBeta(code: code, peerId: peerId)
+        } else {
+            self.fullGramPendingBetaCode = code
+        }
+        return true
+    }
+
+    private func activateFullGramBeta(code: String, peerId: Int64) {
+        FullGramBetaAccess.shared.activate(code: code, peerId: peerId) { [weak self] result in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.updateFullGramBetaGate()
+                let title: String
+                let message: String
+                switch result {
+                case .success:
+                    title = "Доступ активирован"
+                    message = "Закрытый бета-тест FullGram успешно активирован. Добро пожаловать!"
+                case let .failure(err):
+                    title = "Ошибка активации"
+                    message = err.localizedDescription
+                }
+                let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "OK", style: .default))
+                self.mainWindow?.presentNative(alert)
+            }
+        }
+    }
+
+    @MainActor
+    private func updateFullGramBetaGate() {
+        // FullGram features are gated inside FullGram settings & Economy rows;
+        // Telegram core UI stays usable so testers can tap invite links directly in chats.
+    }
+
     private func openUrl(url: URL) {
+        if self.handleFullGramBetaURLIfNeeded(url) {
+            return
+        }
         let _ = (self.sharedContextPromise.get()
         |> take(1)
         |> mapToSignal { sharedApplicationContext -> Signal<(SharedAccountContextImpl, AuthorizedApplicationContext?, UnauthorizedApplicationContext?), NoError> in
@@ -3182,6 +3250,9 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
 
     private var openUrlInProgress: URL?
     private func openUrlWhenReady(accountId: AccountRecordId? = nil, url: URL, external: Bool = false) {
+        if self.handleFullGramBetaURLIfNeeded(url) {
+            return
+        }
         self.openUrlInProgress = url
         
         let signal = self.sharedContextPromise.get()

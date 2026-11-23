@@ -40,8 +40,17 @@ enum FullGramLyricsFetcher {
     private static var lyricsCacheOrder: [String] = []
 
     private static func normalizeMetadata(rawTitle: String, rawArtist: String?) -> (title: String, artist: String?) {
-        var title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        var artist = rawArtist?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let featRegex = try? NSRegularExpression(pattern: "\\s*[\\(\\[]?(?:feat\\.?|ft\\.?)\\s+[^\\)\\]]+[\\)\\]]?", options: .caseInsensitive)
+        var title = rawTitle.replacingOccurrences(of: "_", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        var artist = rawArtist?.replacingOccurrences(of: "_", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        if let featRegex {
+            let tns = title as NSString
+            title = featRegex.stringByReplacingMatches(title, range: NSRange(location: 0, length: tns.length), withTemplate: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if let a = artist {
+                let ans = a as NSString
+                artist = featRegex.stringByReplacingMatches(a, range: NSRange(location: 0, length: ans.length), withTemplate: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
 
         if let extRegex = self.extRegex {
             let ns = title as NSString
@@ -260,11 +269,29 @@ enum FullGramLyricsFetcher {
             return
         }
         session.dataTask(with: makeLRCLIBRequest(url: url)) { data, _, _ in
-            guard let data, let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]], let first = array.first else {
-                completion(nil)
-                return
+            if let data, let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]], !array.isEmpty {
+                let best = array.first(where: { ($0["syncedLyrics"] as? String)?.isEmpty == false }) ?? array.first!
+                if let parsed = parseLRCLIBEntry(best, duration: duration) {
+                    completion(parsed)
+                    return
+                }
             }
-            completion(parseLRCLIBEntry(first, duration: duration))
+            if artist?.isEmpty == false && !title.isEmpty {
+                var fallbackComp = URLComponents(string: "https://lrclib.net/api/search")!
+                fallbackComp.queryItems = [URLQueryItem(name: "q", value: title)]
+                if let fallbackUrl = fallbackComp.url {
+                    session.dataTask(with: makeLRCLIBRequest(url: fallbackUrl)) { fData, _, _ in
+                        guard let fData, let arr = try? JSONSerialization.jsonObject(with: fData) as? [[String: Any]], !arr.isEmpty else {
+                            completion(nil)
+                            return
+                        }
+                        let best = arr.first(where: { ($0["syncedLyrics"] as? String)?.isEmpty == false }) ?? arr.first!
+                        completion(parseLRCLIBEntry(best, duration: duration))
+                    }.resume()
+                    return
+                }
+            }
+            completion(nil)
         }.resume()
     }
 
@@ -396,13 +423,20 @@ final class FullGramKaraokeLineView: UIView {
         didSet {
             self.dimLabel.text = self.text
             self.brightLabel.text = self.text
+            self.invalidateIntrinsicContentSize()
             self.setNeedsLayout()
+        }
+    }
+
+    var isPlain: Bool = false {
+        didSet {
+            self.dimLabel.alpha = self.isPlain ? 0.92 : (self.isCurrent ? 0.42 : 0.34)
         }
     }
 
     var isCurrent: Bool = false {
         didSet {
-            self.dimLabel.alpha = self.isCurrent ? 0.35 : 0.28
+            self.dimLabel.alpha = self.isPlain ? 0.92 : (self.isCurrent ? 0.42 : 0.34)
             self.brightLabel.isHidden = !self.isCurrent
             self.transform = self.isCurrent ? CGAffineTransform(scaleX: 1.03, y: 1.03) : .identity
         }
@@ -427,12 +461,17 @@ final class FullGramKaraokeLineView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        self.dimLabel.font = .systemFont(ofSize: 24.0, weight: .bold)
+        self.translatesAutoresizingMaskIntoConstraints = false
+        self.dimLabel.translatesAutoresizingMaskIntoConstraints = false
+        self.dimLabel.font = .systemFont(ofSize: 23.0, weight: .bold)
         self.dimLabel.textColor = .white
-        self.dimLabel.alpha = 0.28
+        self.dimLabel.alpha = 0.34
         self.dimLabel.numberOfLines = 0
+        self.dimLabel.setContentCompressionResistancePriority(.required, for: .vertical)
+        self.dimLabel.setContentHuggingPriority(.required, for: .vertical)
 
-        self.brightLabel.font = .systemFont(ofSize: 24.0, weight: .bold)
+        self.brightLabel.translatesAutoresizingMaskIntoConstraints = false
+        self.brightLabel.font = .systemFont(ofSize: 23.0, weight: .bold)
         self.brightLabel.textColor = .white
         self.brightLabel.numberOfLines = 0
         self.brightLabel.isHidden = true
@@ -450,6 +489,18 @@ final class FullGramKaraokeLineView: UIView {
 
         self.addSubview(self.dimLabel)
         self.addSubview(self.brightLabel)
+
+        NSLayoutConstraint.activate([
+            self.dimLabel.topAnchor.constraint(equalTo: self.topAnchor),
+            self.dimLabel.bottomAnchor.constraint(equalTo: self.bottomAnchor),
+            self.dimLabel.leadingAnchor.constraint(equalTo: self.leadingAnchor),
+            self.dimLabel.trailingAnchor.constraint(equalTo: self.trailingAnchor),
+
+            self.brightLabel.topAnchor.constraint(equalTo: self.topAnchor),
+            self.brightLabel.bottomAnchor.constraint(equalTo: self.bottomAnchor),
+            self.brightLabel.leadingAnchor.constraint(equalTo: self.leadingAnchor),
+            self.brightLabel.trailingAnchor.constraint(equalTo: self.trailingAnchor)
+        ])
     }
 
     required init?(coder: NSCoder) { return nil }
@@ -461,11 +512,9 @@ final class FullGramKaraokeLineView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        self.dimLabel.frame = self.bounds
-        self.brightLabel.frame = self.bounds
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        self.maskLayer.frame = self.bounds
+        self.maskLayer.frame = self.brightLabel.bounds
         CATransaction.commit()
     }
 }
@@ -672,6 +721,7 @@ final class FullGramLyricsOverlayView: UIView {
                 guard !trimmed.isEmpty else { continue }
                 let view = FullGramKaraokeLineView()
                 view.text = trimmed
+                view.isPlain = true
                 view.isCurrent = false
                 self.stackView.addArrangedSubview(view)
                 self.lineViews.append(view)

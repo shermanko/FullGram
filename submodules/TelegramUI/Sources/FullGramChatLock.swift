@@ -48,7 +48,7 @@ final class FullGramChatLockView: UIView {
 @MainActor private var fullGramLockObserverKey: UInt8 = 0
 
 private final class FullGramChatLockObserverToken {
-    private var tokens: [NSObjectProtocol] = []
+    private nonisolated(unsafe) var tokens: [NSObjectProtocol] = []
 
     init(controller: ChatControllerImpl) {
         let handler: (Notification) -> Void = { [weak controller] _ in

@@ -13,7 +13,17 @@ public struct FullGramGrantedNFT: Codable, Equatable, Sendable {
     public var number: Int32
     public var note: String
     public var pinned: Bool
+    public var hidden: Bool
     public var grantedAt: Int32
+
+    public static func decoratedTitle(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = trimmed.isEmpty ? "NFT" : trimmed
+        if base.lowercased().hasSuffix("(fullgram)") {
+            return base
+        }
+        return "\(base) (FullGram)"
+    }
 
     public var numericGiftId: Int64? {
         return Int64(self.giftId)
@@ -30,6 +40,7 @@ public struct FullGramGrantedNFT: Codable, Equatable, Sendable {
         number: Int32,
         note: String = "",
         pinned: Bool = true,
+        hidden: Bool = false,
         grantedAt: Int32 = Int32(Date().timeIntervalSince1970)
     ) {
         self.id = id
@@ -42,6 +53,7 @@ public struct FullGramGrantedNFT: Codable, Equatable, Sendable {
         self.number = number
         self.note = note
         self.pinned = pinned
+        self.hidden = hidden
         self.grantedAt = grantedAt
     }
 
@@ -56,6 +68,7 @@ public struct FullGramGrantedNFT: Codable, Equatable, Sendable {
         case number
         case note
         case pinned
+        case hidden
         case grantedAt
     }
 
@@ -77,6 +90,7 @@ public struct FullGramGrantedNFT: Codable, Equatable, Sendable {
         self.number = try c.decodeIfPresent(Int32.self, forKey: .number) ?? 1
         self.note = try c.decodeIfPresent(String.self, forKey: .note) ?? ""
         self.pinned = try c.decodeIfPresent(Bool.self, forKey: .pinned) ?? true
+        self.hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
         self.grantedAt = try c.decodeIfPresent(Int32.self, forKey: .grantedAt) ?? Int32(Date().timeIntervalSince1970)
     }
 }
@@ -98,6 +112,19 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
     private var isRefreshing = false
     private var needsFollowUpRefresh = false
     private var pendingCompletions: [(Bool) -> Void] = []
+    public var onServerNFTAction: (@Sendable (
+        _ actorPeerId: Int64,
+        _ targetPeerId: Int64,
+        _ toPeerId: Int64?,
+        _ entryId: String,
+        _ slug: String,
+        _ action: String,
+        _ modelName: String?,
+        _ backdropName: String?,
+        _ backdropId: Int32?,
+        _ patternName: String?,
+        _ number: Int32?
+    ) -> Void)?
 
     public static func candidatePeerIds(for raw: Int64) -> [Int64] {
         var ids: [Int64] = [raw]
@@ -231,6 +258,137 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
         }
     }
 
+    public func setHiddenLocal(peerId: Int64, slug: String, hidden: Bool) -> FullGramGrantedNFT? {
+        var matched: FullGramGrantedNFT?
+        self.lock.lock()
+        for key in Self.candidatePeerIds(for: peerId) {
+            if var list = self.usersById[key] {
+                for idx in list.indices {
+                    guard let gid = list[idx].numericGiftId else { continue }
+                    let expected = "FullGram-\(gid)-\(list[idx].number)"
+                    if expected.caseInsensitiveCompare(slug) == .orderedSame {
+                        list[idx].hidden = hidden
+                        if hidden { list[idx].pinned = false }
+                        matched = list[idx]
+                    }
+                }
+                self.usersById[key] = list
+            }
+        }
+        self.lock.unlock()
+        if matched != nil {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+            }
+        }
+        return matched
+    }
+
+    public func setPinnedLocal(peerId: Int64, slug: String, pinned: Bool) -> FullGramGrantedNFT? {
+        var matched: FullGramGrantedNFT?
+        self.lock.lock()
+        for key in Self.candidatePeerIds(for: peerId) {
+            if var list = self.usersById[key] {
+                for idx in list.indices {
+                    guard let gid = list[idx].numericGiftId else { continue }
+                    let expected = "FullGram-\(gid)-\(list[idx].number)"
+                    if expected.caseInsensitiveCompare(slug) == .orderedSame {
+                        list[idx].pinned = pinned
+                        if pinned { list[idx].hidden = false }
+                        matched = list[idx]
+                    }
+                }
+                self.usersById[key] = list
+            }
+        }
+        self.lock.unlock()
+        if matched != nil {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+            }
+        }
+        return matched
+    }
+
+    public func removeBySlugLocal(peerId: Int64, slug: String) -> FullGramGrantedNFT? {
+        var removed: FullGramGrantedNFT?
+        self.lock.lock()
+        for key in Self.candidatePeerIds(for: peerId) {
+            if var list = self.usersById[key] {
+                for item in list {
+                    if let gid = item.numericGiftId, "FullGram-\(gid)-\(item.number)".caseInsensitiveCompare(slug) == .orderedSame {
+                        removed = item
+                        break
+                    }
+                }
+                list.removeAll { item in
+                    guard let gid = item.numericGiftId else { return false }
+                    return "FullGram-\(gid)-\(item.number)".caseInsensitiveCompare(slug) == .orderedSame
+                }
+                if list.isEmpty {
+                    self.usersById.removeValue(forKey: key)
+                } else {
+                    self.usersById[key] = list
+                }
+            }
+        }
+        self.lock.unlock()
+        if removed != nil {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+            }
+        }
+        return removed
+    }
+
+    public func transferBySlugLocal(fromPeerId: Int64, toPeerId: Int64, slug: String) -> FullGramGrantedNFT? {
+        guard let item = self.removeBySlugLocal(peerId: fromPeerId, slug: slug) else { return nil }
+        var transferred = item
+        transferred.pinned = true
+        transferred.hidden = false
+        self.appendLocal(peerId: toPeerId, nft: transferred)
+        return transferred
+    }
+
+    public func updateBySlugLocal(
+        peerId: Int64,
+        slug: String,
+        modelName: String,
+        backdropName: String,
+        backdropId: Int32?,
+        patternName: String,
+        number: Int32? = nil
+    ) -> FullGramGrantedNFT? {
+        var updated: FullGramGrantedNFT?
+        self.lock.lock()
+        for key in Self.candidatePeerIds(for: peerId) {
+            if var list = self.usersById[key] {
+                for idx in list.indices {
+                    guard let gid = list[idx].numericGiftId else { continue }
+                    let expected = "FullGram-\(gid)-\(list[idx].number)"
+                    if expected.caseInsensitiveCompare(slug) == .orderedSame {
+                        list[idx].modelName = modelName
+                        list[idx].backdropName = backdropName
+                        list[idx].backdropId = backdropId
+                        list[idx].patternName = patternName
+                        if let number, number >= 1 {
+                            list[idx].number = number
+                        }
+                        updated = list[idx]
+                    }
+                }
+                self.usersById[key] = list
+            }
+        }
+        self.lock.unlock()
+        if updated != nil {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+            }
+        }
+        return updated
+    }
+
     public func hasGifts(forPeerId peerId: Int64) -> Bool {
         return !self.gifts(forPeerId: peerId).isEmpty
     }
@@ -316,7 +474,7 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
     }
 }
 
-private func fullGramBuildUniqueGift(
+func fullGramBuildUniqueGift(
     item: FullGramGrantedNFT,
     ownerPeerId: EnginePeer.Id,
     attributes: [StarGift.UniqueGift.Attribute]
@@ -360,7 +518,7 @@ private func fullGramBuildUniqueGift(
     return StarGift.UniqueGift(
         id: uniqueId,
         giftId: giftId,
-        title: item.title.isEmpty ? "NFT" : item.title,
+        title: FullGramGrantedNFT.decoratedTitle(item.title),
         number: max(1, item.number),
         slug: slug,
         owner: .peerId(ownerPeerId),
@@ -409,7 +567,8 @@ func fullGramGrantedGiftsSignal(
 
     return changeTrigger
     |> mapToSignal { _ -> Signal<[ProfileGiftsContext.State.StarGift], NoError> in
-        let items = FullGramGrantedNFTStore.shared.gifts(forPeerId: rawId)
+        let isOwnProfile = (peerId == account.peerId)
+        let items = FullGramGrantedNFTStore.shared.gifts(forPeerId: rawId).filter { isOwnProfile || !$0.hidden }
         guard !items.isEmpty else {
             return .single([])
         }
@@ -446,14 +605,14 @@ func fullGramGrantedGiftsSignal(
                     text: item.note.isEmpty ? nil : item.note,
                     entities: nil,
                     nameHidden: false,
-                    savedToProfile: true,
+                    savedToProfile: !item.hidden,
                     pinnedToTop: item.pinned,
                     convertStars: nil,
-                    canUpgrade: false,
+                    canUpgrade: isOwnProfile,
                     canExportDate: nil,
-                    upgradeStars: nil,
-                    transferStars: nil,
-                    canTransferDate: nil,
+                    upgradeStars: isOwnProfile ? 0 : nil,
+                    transferStars: isOwnProfile ? 0 : nil,
+                    canTransferDate: isOwnProfile ? 0 : nil,
                     canResaleDate: nil,
                     collectionIds: nil,
                     prepaidUpgradeHash: nil,

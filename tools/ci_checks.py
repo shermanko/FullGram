@@ -46,6 +46,7 @@ REQUIRED_FILES = [
     "submodules/Display/Source/FullGramSpeechBleep.swift",
     "submodules/Display/Source/FullGramStudioTools.swift",
     "submodules/Display/Source/FullGramVoiceDSP.swift",
+    "submodules/TelegramCore/Sources/FullGram/FullGramEconomy.swift",
     "submodules/TelegramCore/Sources/FullGram/FullGramGhostMode.swift",
     "submodules/TelegramCore/Sources/FullGram/FullGramGrantedNFTs.swift",
     "submodules/TelegramCore/Sources/FullGram/FullGramMessageHistory.swift",
@@ -55,11 +56,13 @@ REQUIRED_FILES = [
     "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramAppearanceScreens.swift",
     "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramBadgeDeskController.swift",
     "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramCosmeticScreens.swift",
+    "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramEconomyScreens.swift",
     "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramMediaAudioScreens.swift",
     "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramNFTDeskController.swift",
     "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramPluginsScreen.swift",
     "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramSettingsController.swift",
     "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramSettingsSearchScreen.swift",
+    "submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/FullGramWorkScreen.swift",
     "tools/cloudflare-worker/src/index.js",
     "submodules/TelegramUI/Sources/FullGramAIOverlay.swift",
     "submodules/TelegramUI/Sources/FullGramChatLock.swift",
@@ -333,6 +336,9 @@ def check_swift_sources() -> int:
 
     extra_paths = {
         ROOT / "submodules" / "AvatarNode" / "Sources" / "AvatarNode.swift",
+        ROOT / "submodules" / "TelegramUI" / "Sources" / "AppDelegate.swift",
+        ROOT / "submodules" / "TelegramUI" / "Sources" / "SharedAccountContext.swift",
+        ROOT / "submodules" / "TelegramUI" / "Sources" / "TelegramRootController.swift",
         ROOT / "submodules" / "TelegramUI" / "Sources" / "ManagedAudioRecorder.swift",
         ROOT / "submodules" / "TelegramUI" / "Sources" / "OverlayAudioPlayerControllerNode.swift",
         ROOT / "submodules" / "TelegramUI" / "Sources" / "Chat" / "ChatControllerLoadDisplayNode.swift",
@@ -371,13 +377,99 @@ def check_swift_sources() -> int:
             raise AssertionError(f"{rel} treats TelegramRootController (NavigationController) as ViewController")
         if "Postbox" not in imports and re.search(r"(?<![.\w])(?:MessageId|PeerId|MediaId)\b", text):
             raise AssertionError(f"{rel} uses raw Postbox ID type (MessageId/PeerId/MediaId) without 'import Postbox' (use EngineMessage.Id / EnginePeer.Id / EngineMedia.Id)")
+        if re.search(
+            r"\blet\s+(\w+)\s*:\s*\[ViewController\][^\n]*(?:\n[^\n]*){0,4}?\bnavigationController\.viewControllers\b[^\n]*(?:\n[^\n]*){0,4}?\b\1\s*=",
+            text,
+        ):
+            raise AssertionError(f"{rel} assigns navigationController.viewControllers ([UIViewController]) to [ViewController]")
+        for disc_match in re.finditer(r"\bItemListDisclosureItem\s*\(", text):
+            depth = 1
+            pos = disc_match.end()
+            in_str = False
+            escaped = False
+            while pos < len(text) and depth > 0:
+                ch = text[pos]
+                if in_str:
+                    if escaped:
+                        escaped = False
+                    elif ch == "\\":
+                        escaped = True
+                    elif ch == '"':
+                        in_str = False
+                else:
+                    if ch == '"':
+                        in_str = True
+                    elif ch == "(":
+                        depth += 1
+                    elif ch == ")":
+                        depth -= 1
+                pos += 1
+            call_text = text[disc_match.start() : pos]
+            enabled_pos = call_text.find("enabled:")
+            label_pos = call_text.find("label:")
+            if enabled_pos != -1 and label_pos != -1 and enabled_pos > label_pos:
+                line_no = text[: disc_match.start()].count("\n") + 1
+                raise AssertionError(f"{rel}:{line_no} passes 'enabled:' after 'label:' in ItemListDisclosureItem(...)")
+        if path.name == "AppDelegate.swift":
+            obs_match = re.search(
+                r"addObserver\(forName:\s*FullGramFonts\.didRequestAppRestartNotification.*?\n        \}",
+                text,
+                re.S,
+            )
+            if not obs_match or "MainActor.assumeIsolated" not in obs_match.group(0):
+                raise AssertionError(f"{rel} FullGramFonts restart observer must wrap UIKit work in MainActor.assumeIsolated")
 
     frames_path = ROOT / "submodules" / "Display" / "Source" / "FullGramAvatarFrames.swift"
     frames_text = frames_path.read_text(encoding="utf-8")
     if frames_text.count("public func stop()") < 2:
         raise AssertionError("FullGramAvatarFrames.swift must define public func stop() on FullGramAvatarFrameView and FullGramProfileEffectOverlayView")
 
+    # Guard against Swift 6 strict-concurrency pitfalls in FullGram*.swift files:
+    # 1) Mutable `var x = 0` captured & mutated (`+=`) inside NotificationCenter.default.addObserver
+    # 2) Non-isolated NSObjectProtocol observer properties inside UIKit classes that clean up in deinit
+    mut_cap_re = re.compile(r"\bvar\s+(\w+)\s*=\s*0\b([\s\S]{0,1600}?)NotificationCenter\.default\.addObserver[\s\S]{0,400}?\{[\s\S]{0,300}?\b\1\s*\+=")
+    uikit_class_re = re.compile(r"\bclass\s+\w+\s*:\s*(?:UIViewController|ViewController|UIView)\b")
+    plain_obs_prop_re = re.compile(r"^\s*(?:private|fileprivate|internal|public)?\s*var\s+\w+\s*:\s*(?:\[NSObjectProtocol\]|NSObjectProtocol\?)", re.MULTILINE)
+    for path in audit_files:
+        if not path.name.startswith("FullGram"):
+            continue
+        rel = path.relative_to(ROOT)
+        text = path.read_text(encoding="utf-8")
+        m_cap = mut_cap_re.search(text)
+        if m_cap:
+            line_no = text[: m_cap.start()].count("\n") + 1
+            raise AssertionError(
+                f"{rel}:{line_no} captures mutable `var {m_cap.group(1)} = 0` across NotificationCenter.default.addObserver (use Atomic<Int> for Swift 6)"
+            )
+        if uikit_class_re.search(text) and "deinit {" in text:
+            for obs_m in plain_obs_prop_re.finditer(text):
+                line_text = text[obs_m.start() : obs_m.end()]
+                if "nonisolated(unsafe)" not in line_text:
+                    line_no = text[: obs_m.start()].count("\n") + 1
+                    raise AssertionError(
+                        f"{rel}:{line_no} observer property inside UIKit class with deinit should be marked `nonisolated(unsafe)` for Swift 6"
+                    )
+
     return len(audit_files)
+
+
+def check_fullgram_frames() -> int:
+    """Validate generated FullGram avatar frames exist, are valid PNGs, and stay compact."""
+    frames_dir = ROOT / "assets" / "frames"
+    fg_frames = sorted(frames_dir.glob("fg_*.png"))
+    if len(fg_frames) < 50:
+        raise AssertionError(f"Expected at least 50 fg_*.png files in assets/frames, found {len(fg_frames)}")
+    max_bytes = 250 * 1024
+    for frame_path in fg_frames:
+        w, h = read_png_dimensions(frame_path)
+        if w <= 0 or h <= 0:
+            raise AssertionError(f"Invalid dimensions {w}x{h} in {frame_path.relative_to(ROOT)}")
+        size = frame_path.stat().st_size
+        if size >= max_bytes:
+            raise AssertionError(
+                f"Frame {frame_path.relative_to(ROOT)} is too large ({size} bytes >= {max_bytes}); optimize APNG before release"
+            )
+    return len(fg_frames)
 
 
 def read_png_dimensions(path: Path) -> tuple[int, int]:
@@ -690,6 +782,9 @@ def main() -> int:
 
     xcasset_count, alt_count = check_xcassets_and_icons()
     print(f"[OK] Asset catalogs and app icons ({xcasset_count} xcassets, {alt_count} alternate icons)")
+
+    frame_count = check_fullgram_frames()
+    print(f"[OK] FullGram avatar frames ({frame_count} compact fg_*.png APNGs)")
 
     check_submodules(require_populated=args.require_submodules)
     mode = "populated + valid URLs" if args.require_submodules else "valid URLs"

@@ -265,9 +265,9 @@ public final class MediaNavigationAccessoryHeaderNode: ASDisplayNode, ASScrollVi
            let displayData = item.displayData,
            case let .music(title, performer, _, _, _) = displayData,
            let trackTitle = title, !trackTitle.isEmpty,
-           let status = self.fullGramLastStatus,
-           status.duration > 0.0 {
-            FullGramMiniLyrics.shared.request(title: trackTitle, artist: performer, duration: status.duration)
+           let status = self.fullGramLastStatus {
+            let dur = status.duration > 1.0 ? status.duration : 180.0
+            FullGramMiniLyrics.shared.request(title: trackTitle, artist: performer, duration: dur)
             let elapsed: Double
             if case .playing = status.status, status.generationTimestamp > 0.0 {
                 elapsed = status.timestamp + max(0.0, CACurrentMediaTime() - status.generationTimestamp) * status.baseRate
@@ -286,8 +286,11 @@ public final class MediaNavigationAccessoryHeaderNode: ASDisplayNode, ASScrollVi
     
     public var playbackItems: (SharedMediaPlaylistItem?, SharedMediaPlaylistItem?, SharedMediaPlaylistItem?)? {
         didSet {
-            if !arePlaylistItemsEqual(self.playbackItems?.0, oldValue?.0) || !arePlaylistItemsEqual(self.playbackItems?.1, oldValue?.1) || !arePlaylistItemsEqual(self.playbackItems?.2, oldValue?.2), let layout = validLayout {
-                self.updateLayout(size: layout.0, leftInset: layout.1, rightInset: layout.2, transition: .immediate)
+            if !arePlaylistItemsEqual(self.playbackItems?.0, oldValue?.0) || !arePlaylistItemsEqual(self.playbackItems?.1, oldValue?.1) || !arePlaylistItemsEqual(self.playbackItems?.2, oldValue?.2) {
+                self.fullGramLyricsTick()
+                if let layout = validLayout {
+                    self.updateLayout(size: layout.0, leftInset: layout.1, rightInset: layout.2, transition: .immediate)
+                }
             }
         }
     }

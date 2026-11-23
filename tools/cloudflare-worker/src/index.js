@@ -80,960 +80,8 @@ const DEFAULT_BADGES = {
 };
 
 const DEFAULT_PLUGINS = {
-  version: 1,
-  plugins: [
-    {
-      id: "fg_layout_fixer",
-      name: "Исправление раскладки (.fix)",
-      language: "python",
-      version: "1.0",
-      author: "FullGram",
-      description: "Команда .fix <текст>: переводит раскладку (по умолчанию Рус → Англ, направление меняется во вкладке Плагины).",
-      code: `# @name Исправление раскладки (.fix)
-# @id fg_layout_fixer
-# @version 1.0
-# @author FullGram
-# @description Команда .fix <текст>: переводит раскладку (по умолчанию Рус → Англ, меняется во вкладке Плагины)
-
-import fullgram
-
-RU_CHARS = "йцукенгшщзхъфывапролджэячсмитьбюёЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮЁ"
-EN_CHARS = "qwertyuiop[]asdfghjkl;'zxcvbnm,.\`QWERTYUIOP{}ASDFGHJKL:\\"ZXCVBNM<>~"
-
-def convert_text(text, direction):
-    out = ""
-    for ch in text:
-        if direction == "ru2en":
-            idx = RU_CHARS.find(ch)
-            out = out + (EN_CHARS[idx] if idx >= 0 else ch)
-        elif direction == "en2ru":
-            idx = EN_CHARS.find(ch)
-            out = out + (RU_CHARS[idx] if idx >= 0 else ch)
-    return out
-
-def on_command(ctx):
-    if ctx["command"] != "fix":
-        return None
-    raw = str(ctx["args"]).strip()
-    if not raw:
-        mode = str(fullgram.storage_get("mode", "ru2en"))
-        return {"cancel": True, "toast": f"Формат: .fix <текст> (режим: {mode})"}
-
-    lower_raw = raw.lower()
-    if lower_raw == "mode ru2en":
-        fullgram.storage_set("mode", "ru2en")
-        return {"cancel": True, "toast": "Раскладка .fix: Русский → Английский"}
-    elif lower_raw == "mode en2ru":
-        fullgram.storage_set("mode", "en2ru")
-        return {"cancel": True, "toast": "Раскладка .fix: Английский → Русский"}
-    elif lower_raw == "mode auto":
-        fullgram.storage_set("mode", "auto")
-        return {"cancel": True, "toast": "Раскладка .fix: Авто (Рус ↔ Англ)"}
-
-    mode = str(fullgram.storage_get("mode", "ru2en"))
-    direction = mode
-    if mode == "auto":
-        ru_count = 0
-        en_count = 0
-        for ch in raw:
-            if RU_CHARS.find(ch) >= 0:
-                ru_count = ru_count + 1
-            elif EN_CHARS.find(ch) >= 0:
-                en_count = en_count + 1
-        direction = "ru2en" if ru_count >= en_count else "en2ru"
-
-    return convert_text(raw, direction)
-`
-    },
-    {
-      id: "fg_casino",
-      name: "Parimatch · Beton Казино (.casino / .zeus / .crash)",
-      language: "lua",
-      version: "5.1",
-      author: "FullGram",
-      description: "Полноэкранный HD графический GUI (Gates of Olympus, Aviator Live, 3D Рулетка, Beton Mines 5x5) на 60fps Canvas. Без спама в чат!",
-      code: `-- @name Parimatch · Beton Казино (.casino / .zeus / .crash)
--- @id fg_casino
--- @version 5.1
--- @author FullGram
--- @description Полноэкранный HD графический GUI (Gates of Olympus, Aviator Live, 3D Рулетка, Beton Mines 5x5) на 60fps Canvas. Без спама в чат!
-
-function get_num(key, def)
-    local v = tonumber(fullgram.storage_get(key, def))
-    if v == nil then return def end
-    return v
-end
-
-function get_balance()
-    return math.max(0, math.floor(get_num("balance", 1000) + 0.5))
-end
-
-function set_balance(val)
-    local b = math.max(0, math.floor((tonumber(val) or 0) + 0.5))
-    fullgram.storage_set("balance", b)
-    local best = get_num("best_balance", 1000)
-    if b > best then
-        fullgram.storage_set("best_balance", b)
-    end
-    return b
-end
-
-function fmt2(x)
-    local n = math.floor((tonumber(x) or 0) * 100 + 0.5)
-    local whole = math.floor(n / 100)
-    local frac = n % 100
-    local fstr = (frac < 10) and ("0" .. tostring(frac)) or tostring(frac)
-    return tostring(whole) .. "." .. fstr
-end
-
-function fmt_signed(delta)
-    if delta >= 0 then
-        return "+" .. tostring(delta)
-    end
-    return tostring(delta)
-end
-
-function add_session(wagered, returned, won)
-    fullgram.storage_set("sess_rounds", get_num("sess_rounds", 0) + 1)
-    fullgram.storage_set("sess_wagered", get_num("sess_wagered", 0) + wagered)
-    fullgram.storage_set("sess_returned", get_num("sess_returned", 0) + returned)
-    if won then
-        fullgram.storage_set("sess_wins", get_num("sess_wins", 0) + 1)
-    end
-end
-
-function pick_weighted(tbl)
-    local total = 0
-    for i = 1, #tbl do
-        total = total + tbl[i][2]
-    end
-    if total <= 0 then return tbl[1][1] end
-    local roll = math.random(0, total - 1)
-    for i = 1, #tbl do
-        local w = tbl[i][2]
-        if roll < w then
-            return tbl[i][1]
-        end
-        roll = roll - w
-    end
-    return tbl[1][1]
-end
-
-function pick_zeus_orb()
-    local roll = math.random(0, 999)
-    if roll < 480 then return 2 end
-    if roll < 720 then return 3 end
-    if roll < 860 then return 5 end
-    if roll < 940 then return 10 end
-    if roll < 980 then return 25 end
-    if roll < 995 then return 50 end
-    return 100
-end
-
-function is_red_pocket(num)
-    local reds = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
-    for i = 1, #reds do
-        if reds[i] == num then return true end
-    end
-    return false
-end
-
-function parse_bet(raw_str, bal)
-    local num = tonumber(string.match(tostring(raw_str or ""), "(%d+)"))
-    local bet = num or 100
-    if bet < 10 then bet = 10 end
-    if bal > 0 and bet > bal then bet = bal end
-    return math.floor(bet + 0.5)
-end
-
-function ensure_playable_balance()
-    local bal = get_balance()
-    if bal < 10 then
-        bal = set_balance(500)
-        return bal, true
-    end
-    return bal, false
-end
-
-function status_header()
-    local bal = get_balance()
-    local best = math.floor(get_num("best_balance", 1000) + 0.5)
-    local ante = (get_num("ante_bet", 0) == 1)
-    local fs = math.floor(get_num("free_spins", 0) + 0.5)
-    local gmult = math.floor(get_num("bonus_mult", 1) + 0.5)
-    local rounds = math.floor(get_num("sess_rounds", 0) + 0.5)
-    local wins = math.floor(get_num("sess_wins", 0) + 0.5)
-    local wag = get_num("sess_wagered", 0)
-    local ret = get_num("sess_returned", 0)
-    local win_pct = (rounds > 0) and fmt2((wins / rounds) * 100) or "0.00"
-    local sess_rtp = (wag > 0) and fmt2((ret / wag) * 100) or "—"
-    local line = "💰 Баланс: " .. tostring(bal) .. " 🪙 | 🏆 Рекорд: " .. tostring(best) .. " 🪙"
-    line = line .. "\\n⚡ Ante Bet (+25%): " .. (ante and "ВКЛ" or "ВЫКЛ")
-    if fs > 0 then
-        line = line .. " | 🎁 FS: " .. tostring(fs) .. " (x" .. tostring(gmult) .. ")"
-    end
-    line = line .. "\\n📊 Сессия: " .. tostring(rounds) .. " раунд. · Побед " .. win_pct .. "% · RTP " .. sess_rtp .. "%"
-    return line
-end
-
-function play_zeus(raw_arg)
-    local fs = math.floor(get_num("free_spins", 0) + 0.5)
-    local is_fs = (fs > 0)
-    local bal, refilled = ensure_playable_balance()
-    local ante = (get_num("ante_bet", 0) == 1)
-    local base_bet = is_fs and math.floor(get_num("bonus_bet", 100) + 0.5) or parse_bet(raw_arg, bal)
-    local spin_cost = is_fs and 0 or math.min(bal, ante and math.floor(base_bet * 1.25 + 0.5) or base_bet)
-
-    local weights = (ante or is_fs)
-        and {{"💎", 26}, {"⏳", 21}, {"🏆", 17}, {"💍", 14}, {"👑", 10}, {"⚡", 12}}
-        or  {{"💎", 30}, {"⏳", 23}, {"🏆", 18}, {"💍", 14}, {"👑", 9},  {"⚡", 6}}
-
-    if not is_fs then
-        bal = set_balance(bal - spin_cost)
-    else
-        fs = fs - 1
-        fullgram.storage_set("free_spins", fs)
-    end
-
-    local grid = {}
-    local counts = {}
-    for i = 1, 15 do
-        local s = pick_weighted(weights)
-        grid[i] = s
-        counts[s] = (counts[s] or 0) + 1
-    end
-
-    local bolts = counts["⚡"] or 0
-    local sym_base = { ["💎"] = 0.4, ["⏳"] = 0.6, ["🏆"] = 0.9, ["💍"] = 1.3, ["👑"] = 2.2 }
-    local syms = {"💎", "⏳", "🏆", "💍", "👑"}
-    local best_pay = 0.0
-    local best_sym = nil
-    for i = 1, #syms do
-        local s = syms[i]
-        local cnt = counts[s] or 0
-        if cnt >= 6 then
-            local cand = sym_base[s] * (1.0 + (cnt - 6) * 0.65)
-            if cand > best_pay then
-                best_pay = cand
-                best_sym = s
-            end
-        end
-    end
-
-    local mult = 0.0
-    local status = "❌ Пустой спин"
-    local gmult = math.floor(get_num("bonus_mult", 1) + 0.5)
-
-    if best_pay > 0.0 then
-        local orb = (bolts > 0 or is_fs) and pick_zeus_orb() or 1
-        if is_fs and orb > 1 then
-            gmult = gmult + orb
-            fullgram.storage_set("bonus_mult", gmult)
-        end
-        local eff_orb = is_fs and math.max(1, gmult) or orb
-        mult = best_pay * eff_orb
-        if eff_orb >= 25 then
-            status = "🔥 MAX ОРБ ЗЕВСА x" .. tostring(eff_orb) .. "!"
-        elseif eff_orb > 1 then
-            status = "⚡ МОЛНИЯ ЗЕВСА x" .. tostring(eff_orb) .. "!"
-        else
-            status = "👑 СЫГРОВКА " .. best_sym .. " x" .. fmt2(mult) .. "!"
-        end
-    end
-
-    if bolts >= 4 and not is_fs then
-        fullgram.storage_set("bonus_bet", base_bet)
-        fullgram.storage_set("free_spins", fs + 10)
-        fullgram.storage_set("bonus_mult", 1)
-        if mult < 3.0 then mult = 3.0 end
-        status = "⚡ 4+ SCATTER! БОНУС 10 ФРИСПИНОВ!"
-    elseif bolts >= 4 and is_fs then
-        fullgram.storage_set("free_spins", fs + 5)
-        status = "⚡ РЕТРИГГЕР +5 ФРИСПИНОВ!"
-    end
-
-    local payout = math.floor(base_bet * mult + 0.5)
-    bal = set_balance(bal + payout)
-    add_session(spin_cost, payout, payout > spin_cost)
-    local net = payout - spin_cost
-
-    local r1 = grid[1] .. " " .. grid[2] .. " " .. grid[3] .. " " .. grid[4] .. " " .. grid[5]
-    local r2 = grid[6] .. " " .. grid[7] .. " " .. grid[8] .. " " .. grid[9] .. " " .. grid[10]
-    local r3 = grid[11] .. " " .. grid[12] .. " " .. grid[13] .. " " .. grid[14] .. " " .. grid[15]
-    local fs_left = math.floor(get_num("free_spins", 0) + 0.5)
-    local tag = is_fs and ("🎁 ФРИСПИН (ост. " .. tostring(fs_left) .. ")") or ("Ставка: " .. tostring(spin_cost) .. " 🪙")
-    local note = refilled and "\\n🎁 Фрибет +500 🪙 на старте" or ""
-
-    return "⚡ GATES OF OLYMPUS (RTP 96.50%) | " .. tag .. "\\n"
-        .. r1 .. "\\n" .. r2 .. "\\n" .. r3 .. "\\n"
-        .. status .. " (выплата " .. tostring(payout) .. " 🪙, " .. fmt_signed(net) .. " 🪙)" .. note .. "\\n"
-        .. "💰 Баланс: " .. tostring(bal) .. " 🪙"
-end
-
-function play_dogs(raw_arg)
-    local fs = math.floor(get_num("free_spins", 0) + 0.5)
-    local is_fs = (fs > 0)
-    local bal, refilled = ensure_playable_balance()
-    local ante = (get_num("ante_bet", 0) == 1)
-    local base_bet = is_fs and math.floor(get_num("bonus_bet", 100) + 0.5) or parse_bet(raw_arg, bal)
-    local spin_cost = is_fs and 0 or math.min(bal, ante and math.floor(base_bet * 1.25 + 0.5) or base_bet)
-
-    local weights = (ante or is_fs)
-        and {{"🦴", 23}, {"🐾", 20}, {"🎾", 17}, {"💎", 14}, {"🐶", 11}, {"🏠", 15}}
-        or  {{"🦴", 27}, {"🐾", 22}, {"🎾", 18}, {"💎", 14}, {"🐶", 11}, {"🏠", 8}}
-
-    if not is_fs then
-        bal = set_balance(bal - spin_cost)
-    else
-        fs = fs - 1
-        fullgram.storage_set("free_spins", fs)
-    end
-
-    local grid = {}
-    local kennels = 0
-    local dogs_cnt = 0
-    for i = 1, 15 do
-        local s = pick_weighted(weights)
-        grid[i] = s
-        if s == "🏠" then kennels = kennels + 1 end
-        if s == "🐶" then dogs_cnt = dogs_cnt + 1 end
-    end
-
-    local line_w = { ["🦴"] = 0.4, ["🐾"] = 0.6, ["🎾"] = 0.85, ["💎"] = 1.4, ["🐶"] = 2.4 }
-    local line_sum = 0.0
-    for r = 0, 2 do
-        local anchor = "🐶"
-        for c = 1, 5 do
-            local sym = grid[r * 5 + c]
-            if sym ~= "🏠" then
-                anchor = sym
-                break
-            end
-        end
-        local streak = 0
-        for c = 1, 5 do
-            local sym = grid[r * 5 + c]
-            if sym == anchor or sym == "🏠" then
-                streak = streak + 1
-            else
-                break
-            end
-        end
-        if streak >= 3 then
-            line_sum = line_sum + (line_w[anchor] or 0.6) * (streak - 1)
-        end
-    end
-
-    local mult = 0.0
-    local status = "❌ Пустой спин"
-    local gmult = math.floor(get_num("bonus_mult", 1) + 0.5)
-
-    if line_sum > 0.0 then
-        local km = 1
-        if kennels > 0 then
-            local sum_w = 0
-            local cap = math.min(kennels, 4)
-            for i = 1, cap do
-                sum_w = sum_w + ((math.random(0, 9) < 7) and 2 or 3)
-            end
-            km = math.max(1, sum_w)
-        end
-        if is_fs and kennels > 0 then
-            gmult = math.min(27, gmult + km)
-            fullgram.storage_set("bonus_mult", gmult)
-            km = gmult
-        end
-        mult = line_sum * km
-        status = (km > 1) and ("🐶 БУДКИ x" .. tostring(km) .. " · ЗАНОС!") or "🐶 ЛИНИЯ СЫГРАЛА!"
-    elseif dogs_cnt >= 5 then
-        mult = 2.5
-        status = "🐶 СТАЯ СОБАК x2.5!"
-    end
-
-    if kennels >= 4 and not is_fs then
-        fullgram.storage_set("bonus_bet", base_bet)
-        fullgram.storage_set("free_spins", fs + 10)
-        fullgram.storage_set("bonus_mult", 1)
-        if mult < 2.0 then mult = 2.0 end
-        status = "🏠 БОНУС 10 ФРИСПИНОВ СОБАК!"
-    elseif kennels >= 4 and is_fs then
-        fullgram.storage_set("free_spins", fs + 5)
-        status = "🏠 РЕТРИГГЕР +5 ФРИСПИНОВ!"
-    end
-
-    local payout = math.floor(base_bet * mult + 0.5)
-    bal = set_balance(bal + payout)
-    add_session(spin_cost, payout, payout > spin_cost)
-    local net = payout - spin_cost
-
-    local r1 = grid[1] .. " " .. grid[2] .. " " .. grid[3] .. " " .. grid[4] .. " " .. grid[5]
-    local r2 = grid[6] .. " " .. grid[7] .. " " .. grid[8] .. " " .. grid[9] .. " " .. grid[10]
-    local r3 = grid[11] .. " " .. grid[12] .. " " .. grid[13] .. " " .. grid[14] .. " " .. grid[15]
-    local fs_left = math.floor(get_num("free_spins", 0) + 0.5)
-    local tag = is_fs and ("🎁 ФРИСПИН (ост. " .. tostring(fs_left) .. ")") or ("Ставка: " .. tostring(spin_cost) .. " 🪙")
-    local note = refilled and "\\n🎁 Фрибет +500 🪙 на старте" or ""
-
-    return "🐶 THE DOG HOUSE (RTP 96.51%) | " .. tag .. "\\n"
-        .. r1 .. "\\n" .. r2 .. "\\n" .. r3 .. "\\n"
-        .. status .. " (выплата " .. tostring(payout) .. " 🪙, " .. fmt_signed(net) .. " 🪙)" .. note .. "\\n"
-        .. "💰 Баланс: " .. tostring(bal) .. " 🪙"
-end
-
-function play_classic(raw_arg)
-    local bal, refilled = ensure_playable_balance()
-    local bet = parse_bet(raw_arg, bal)
-    local weights = {{"🍒", 36}, {"🍋", 26}, {"🔔", 18}, {"💎", 13}, {"7️⃣", 7}}
-    local s1 = pick_weighted(weights)
-    local s2 = pick_weighted(weights)
-    local s3 = pick_weighted(weights)
-
-    local sevens = ((s1 == "7️⃣") and 1 or 0) + ((s2 == "7️⃣") and 1 or 0) + ((s3 == "7️⃣") and 1 or 0)
-    local diamonds = ((s1 == "💎") and 1 or 0) + ((s2 == "💎") and 1 or 0) + ((s3 == "💎") and 1 or 0)
-
-    local mult = 0.0
-    local status = "❌ Мимо!"
-    if s1 == s2 and s2 == s3 then
-        if s1 == "7️⃣" then mult = 50.0; status = "🔥 МЕГА ДЖЕКПОТ 777 (x50)!"
-        elseif s1 == "💎" then mult = 15.0; status = "💎 АЛМАЗНЫЙ ДЖЕКПОТ (x15)!"
-        elseif s1 == "🔔" then mult = 8.0; status = "🔔 3 КОЛОКОЛА (x8)!"
-        elseif s1 == "🍋" then mult = 5.0; status = "🍋 3 ЛИМОНА (x5)!"
-        else mult = 3.0; status = "🍒 3 ВИШНИ (x3)!"
-        end
-    elseif sevens == 2 then
-        mult = 3.0; status = "7️⃣ Две Семёрки (x3)!"
-    elseif diamonds == 2 then
-        mult = 2.0; status = "💎 Два Алмаза (x2)!"
-    elseif s1 == s2 or s2 == s3 or s1 == s3 then
-        mult = 1.2; status = "✨ Пара (x1.2)!"
-    end
-
-    local payout = math.floor(bet * mult + 0.5)
-    local delta = payout - bet
-    bal = set_balance(bal + delta)
-    add_session(bet, payout, delta > 0)
-    local note = refilled and "\\n🎁 Фрибет +500 🪙" or ""
-
-    return "🎰 3 БАРАБАНА (RTP 96.20%) | Ставка: " .. tostring(bet) .. " 🪙\\n"
-        .. "┏━━━━━━━━━━━┓\\n┃  " .. s1 .. " │ " .. s2 .. " │ " .. s3 .. "  ┃\\n┗━━━━━━━━━━━┛\\n"
-        .. status .. " (" .. fmt_signed(delta) .. " 🪙)" .. note .. "\\n"
-        .. "💰 Баланс: " .. tostring(bal) .. " 🪙"
-end
-
-function play_crash(raw_arg, default_target)
-    local bal, refilled = ensure_playable_balance()
-    local s = tostring(raw_arg or "")
-    local target = default_target or 2.0
-    local bet = 100
-
-    local n1 = string.match(s, "^%s*([%d%.]+)%s+%d+")
-    local n2 = string.match(s, "^%s*[%d%.]+%s+(%d+)")
-    if n1 and n2 then
-        target = tonumber(n1) or target
-        bet = tonumber(n2) or bet
-    else
-        local with_x = string.match(s, "([%d%.]+)[xXхХ]")
-        if with_x then
-            target = tonumber(with_x) or target
-        else
-            local single = tonumber(string.match(s, "([%d%.]+)"))
-            if single then
-                if string.find(s, ".", 1, true) then
-                    target = single
-                else
-                    bet = single
-                end
-            end
-        end
-    end
-    if target < 1.05 then target = 1.05 end
-    if target > 100.0 then target = 100.0 end
-    if bet < 10 then bet = 10 end
-    if bet > bal then bet = bal end
-    bet = math.floor(bet + 0.5)
-
-    local crash_pt = 1.00
-    if math.random(0, 99) >= 3 then
-        local u = math.random(1, 990) / 1000.0
-        crash_pt = math.min(100.0, math.max(1.03, 0.97 / (1.0 - u)))
-    end
-
-    local won = (crash_pt >= target)
-    local payout = won and math.floor(bet * target + 0.5) or 0
-    local delta = payout - bet
-    bal = set_balance(bal + delta)
-    add_session(bet, payout, won)
-    local note = refilled and "\\n🎁 Фрибет +500 🪙" or ""
-
-    local res_line = won
-        and ("✅ Забрал на " .. fmt2(target) .. "x (краш был " .. fmt2(crash_pt) .. "x): +" .. tostring(delta) .. " 🪙")
-        or  ("💥 КРАШ на " .. fmt2(crash_pt) .. "x (цель " .. fmt2(target) .. "x): " .. tostring(delta) .. " 🪙")
-
-    return "🚀 CRASH (RTP 97.00% · 3% инста-краш) | Ставка: " .. tostring(bet) .. " 🪙\\n"
-        .. res_line .. note .. "\\n"
-        .. "💰 Баланс: " .. tostring(bal) .. " 🪙"
-end
-
-function play_roulette(choice_arg, bet_arg)
-    local bal, refilled = ensure_playable_balance()
-    local c = string.lower(tostring(choice_arg or "red"))
-    local bet = parse_bet(bet_arg, bal)
-    local num = math.random(0, 36)
-
-    local color = "black"
-    local badge = "⚫️ Чёрное"
-    if num == 0 then
-        color = "green"
-        badge = "🟢 Зеро (0)"
-    elseif is_red_pocket(num) then
-        color = "red"
-        badge = "🔴 Красное"
-    end
-
-    local exact_num = tonumber(c)
-    local won = false
-    local mult = 2
-    local bet_label = "🔴 Красное"
-    if exact_num ~= nil and exact_num >= 0 and exact_num <= 36 then
-        mult = 36
-        bet_label = "🎯 Число [" .. tostring(exact_num) .. "]"
-        won = (num == exact_num)
-    elseif c == "green" or c == "0" or c == "зеро" or c == "зеленое" then
-        mult = 36
-        bet_label = "🟢 Зеро [0]"
-        won = (color == "green")
-    elseif c == "black" or c == "черное" or c == "ч" then
-        mult = 2
-        bet_label = "⚫️ Чёрное"
-        won = (color == "black")
-    else
-        mult = 2
-        bet_label = "🔴 Красное"
-        won = (color == "red")
-    end
-
-    local payout = won and (bet * mult) or 0
-    local delta = payout - bet
-    bal = set_balance(bal + delta)
-    add_session(bet, payout, won)
-    local note = refilled and "\\n🎁 Фрибет +500 🪙" or ""
-    local outcome = won
-        and ("✅ Выигрыш x" .. tostring(mult) .. ": +" .. tostring(delta) .. " 🪙!")
-        or  ("❌ Мимо: " .. tostring(delta) .. " 🪙")
-
-    return "🎡 ЕВРОПЕЙСКАЯ РУЛЕТКА (RTP 97.30%) | " .. bet_label .. " · " .. tostring(bet) .. " 🪙\\n"
-        .. "Выпало: " .. badge .. " [" .. tostring(num) .. "]\\n"
-        .. outcome .. note .. "\\n"
-        .. "💰 Баланс: " .. tostring(bal) .. " 🪙"
-end
-
-function play_coin(side_arg, bet_arg)
-    local bal, refilled = ensure_playable_balance()
-    local bet = parse_bet(bet_arg, bal)
-    local pick_tails = (string.find(string.lower(tostring(side_arg or "")), "реш") ~= nil)
-        or (string.find(string.lower(tostring(side_arg or "")), "tail") ~= nil)
-    local won = (math.random(0, 99) < 49)
-    local landed_tails = false
-    if pick_tails then
-        landed_tails = won
-    else
-        landed_tails = not won
-    end
-    local landed_str = landed_tails and "🪙 Решка" or "🦅 Орёл"
-
-    local payout = won and (bet * 2) or 0
-    local delta = payout - bet
-    bal = set_balance(bal + delta)
-    add_session(bet, payout, won)
-    local note = refilled and "\\n🎁 Фрибет +500 🪙" or ""
-    local res = won and ("✅ Победа (49% шанс, x2): +" .. tostring(delta) .. " 🪙!") or ("❌ Не угадали: " .. tostring(delta) .. " 🪙")
-
-    return "🪙 МОНЕТКА (RTP 98.00%) | Ставка: " .. tostring(bet) .. " 🪙\\n"
-        .. "Выпал: " .. landed_str .. "\\n"
-        .. res .. note .. "\\n"
-        .. "💰 Баланс: " .. tostring(bal) .. " 🪙"
-end
-
-function rtp_summary()
-    return "📊 ЧЕСТНЫЕ ШАНСЫ И RTP КАЗИНО:\\n"
-        .. "• ⚡ Gates of Olympus — RTP 96.50% (орбы x2..x100, 4+ ⚡ = 10 FS)\\n"
-        .. "• 🐶 The Dog House — RTP 96.51% (линии + будки Wild x2/x3, до x27 в FS)\\n"
-        .. "• 🎰 3 Барабана — RTP 96.20% (777: x50, 💎: x15, 🔔: x8, пара: x1.2)\\n"
-        .. "• 🚀 Crash — RTP 97.00% (3% краш на 1.00x, хвост до x100)\\n"
-        .. "• 🎡 Рулетка (37 сект.) — RTP 97.30% (🔴/⚫️ 48.65% x2, 🟢 2.70% x36)\\n"
-        .. "• 🪙 Монетка — RTP 98.00% (49.0% победа, x2)\\n"
-        .. "ℹ️ Выдача баланса (.setbal <сумма>) НЕ меняет шансы.\\n\\n"
-        .. status_header()
-end
-
-function handle_set_balance(raw)
-    local s = tostring(raw or "")
-    local add_num = tonumber(string.match(s, "^%s*%+%s*(%d+)"))
-    if add_num ~= nil then
-        local nb = set_balance(get_balance() + add_num)
-        return "💰 Добавлено +" .. tostring(add_num) .. " 🪙!\\nБаланс: " .. tostring(nb) .. " 🪙 (шансы те же)"
-    end
-    local exact = tonumber(string.match(s, "(%d+)"))
-    if exact ~= nil then
-        local nb = set_balance(exact)
-        return "💰 Баланс установлен: " .. tostring(nb) .. " 🪙\\n(шансы и RTP без изменений!)"
-    end
-    local nb = set_balance(get_balance() + 10000)
-    return "🎁 Начислено +10000 🪙!\\nБаланс: " .. tostring(nb) .. " 🪙\\n(введите любое число в поле для точной выдачи)"
-end
-
-function open_casino_ui(game_id)
-    local g = tostring(game_id or "lobby")
-    fullgram.open_ui({
-        kind = "webview",
-        url = "https://fullgram.korsakovx.workers.dev/casino?game=" .. g,
-        title = "PARIMATCH · BETON"
-    })
-end
-
-function on_ui_event(ctx)
-    local act = tostring(ctx.action or "")
-    local inp = tostring(ctx.input or "")
-
-    if act == "bonus" then
-        local nb = set_balance(get_balance() + 1000)
-        return { balance = nb, best_balance = get_num("best_balance", 1000), text = "🎁 +1000 🪙!\\n" .. status_header() }
-    elseif act == "spin_zeus" then
-        return play_zeus(inp)
-    elseif act == "spin_dogs" then
-        return play_dogs(inp)
-    elseif act == "spin_classic" then
-        return play_classic(inp)
-    elseif act == "spin_crash" then
-        return play_crash(inp, 2.0)
-    elseif act == "spin_red" then
-        return play_roulette("red", inp)
-    elseif act == "spin_black" then
-        return play_roulette("black", inp)
-    elseif act == "spin_green" then
-        return play_roulette("green", inp)
-    elseif act == "spin_coin" then
-        return play_coin("eagle", inp)
-    elseif act == "toggle_ante" then
-        if get_num("free_spins", 0) > 0 then
-            return "⚠️ Нельзя менять Ante Bet во время фриспинов!\\n" .. status_header()
-        end
-        local cur = (get_num("ante_bet", 0) == 1) and 0 or 1
-        fullgram.storage_set("ante_bet", cur)
-        return (cur == 1 and "⚡ Ante Bet ВКЛ (+25% к ставке, x2 шанс бонуса)" or "⚡ Ante Bet ВЫКЛ") .. "\\n\\n" .. status_header()
-    elseif act == "buy_bonus" then
-        local bal = get_balance()
-        local bet = parse_bet(inp, bal)
-        local cost = bet * 100
-        if bal < cost then
-            return "❌ Нужно " .. tostring(cost) .. " 🪙 для покупки бонуса (x100 ставки).\\nВы можете выдать себе баланс кнопкой «💰 Выдать баланс»!\\n\\n" .. status_header()
-        end
-        set_balance(bal - cost)
-        fullgram.storage_set("sess_wagered", get_num("sess_wagered", 0) + cost)
-        fullgram.storage_set("bonus_bet", bet)
-        fullgram.storage_set("free_spins", get_num("free_spins", 0) + 10)
-        fullgram.storage_set("bonus_mult", 1)
-        return "🎁 БОНУС КУПЛЕН! 10 ФРИСПИНОВ по ставке " .. tostring(bet) .. " 🪙!\\nЖмите «⚡ Зевс» или «🐶 Собаки»!\\n\\n" .. status_header()
-    elseif act == "set_balance" then
-        return handle_set_balance(inp) .. "\\n\\n" .. status_header()
-    elseif act == "rtp_info" then
-        return rtp_summary()
-    end
-
-    return status_header()
-end
-
-function on_command(ctx)
-    local aliases = { roul = "roulette", givebal = "setbal", balance = "bal", odds = "rtp" }
-    local cmd = aliases[ctx.command] or ctx.command
-    local args = tostring(ctx.args or "")
-
-    if cmd == "casino" then
-        open_casino_ui(args ~= "" and args or "lobby")
-        return { cancel = true }
-    elseif cmd == "zeus" then
-        open_casino_ui("zeus")
-        return { cancel = true }
-    elseif cmd == "dogs" then
-        open_casino_ui("zeus")
-        return { cancel = true }
-    elseif cmd == "slots" then
-        open_casino_ui("zeus")
-        return { cancel = true }
-    elseif cmd == "crash" then
-        open_casino_ui("crash")
-        return { cancel = true }
-    elseif cmd == "roulette" then
-        open_casino_ui("roulette")
-        return { cancel = true }
-    elseif cmd == "mines" then
-        open_casino_ui("mines")
-        return { cancel = true }
-    elseif cmd == "coin" then
-        open_casino_ui("lobby")
-        return { cancel = true }
-    elseif cmd == "setbal" then
-        local exact = tonumber(string.match(args, "(%d+)"))
-        if exact == nil then
-            return { cancel = true, toast = "Формат: .setbal <сумма> (например: .setbal 100000)" }
-        end
-        local nb = set_balance(exact)
-        return { cancel = true, toast = "💰 Баланс установлен: " .. tostring(nb) .. " 🪙 (шансы не изменены)" }
-    elseif cmd == "bal" then
-        local lower = string.lower(args)
-        if string.sub(lower, 1, 4) == "set " then
-            local exact = tonumber(string.match(args, "(%d+)"))
-            if exact ~= nil then
-                local nb = set_balance(exact)
-                return { cancel = true, toast = "💰 Баланс: " .. tostring(nb) .. " 🪙 (шансы прежние)" }
-            end
-        elseif string.sub(lower, 1, 4) == "add " or string.sub(lower, 1, 1) == "+" then
-            local add_v = tonumber(string.match(args, "(%d+)"))
-            if add_v ~= nil then
-                local nb = set_balance(get_balance() + add_v)
-                return { cancel = true, toast = "💰 +" .. tostring(add_v) .. " 🪙 → Баланс: " .. tostring(nb) .. " 🪙" }
-            end
-        elseif lower == "bonus" then
-            local nb = set_balance(get_balance() + 1000)
-            return { cancel = true, toast = "🎁 +1000 🪙 → Баланс: " .. tostring(nb) .. " 🪙" }
-        end
-        return status_header()
-    elseif cmd == "ante" then
-        local cur = (get_num("ante_bet", 0) == 1) and 0 or 1
-        fullgram.storage_set("ante_bet", cur)
-        return { cancel = true, toast = cur == 1 and "⚡ Ante Bet ВКЛ (+25%, x2 шанс бонуса)" or "⚡ Ante Bet ВЫКЛ" }
-    elseif cmd == "buybonus" then
-        local bal = get_balance()
-        local bet = parse_bet(args, bal)
-        local cost = bet * 100
-        if bal < cost then
-            return { cancel = true, toast = "Нужно " .. tostring(cost) .. " 🪙 (можно выдать: .setbal " .. tostring(cost) .. ")" }
-        end
-        set_balance(bal - cost)
-        fullgram.storage_set("sess_wagered", get_num("sess_wagered", 0) + cost)
-        fullgram.storage_set("bonus_bet", bet)
-        fullgram.storage_set("free_spins", get_num("free_spins", 0) + 10)
-        fullgram.storage_set("bonus_mult", 1)
-        return { cancel = true, toast = "🎁 Куплено 10 фриспинов по ставке " .. tostring(bet) .. " 🪙! Играйте .zeus или .dogs" }
-    elseif cmd == "rtp" then
-        return rtp_summary()
-    end
-
-    return nil
-end`
-    },
-    {
-      id: "fg_anti_typos",
-      name: "Анти-опечатки",
-      language: "python",
-      version: "2.0",
-      author: "FullGram",
-      description: "Автоматически исправляет частые клавиатурные опечатки, двойные заглавные буквы и лишние пробелы перед знаками препинания.",
-      code: `# @name Анти-опечатки
-# @id fg_anti_typos
-# @version 2.0
-# @author FullGram
-# @description Автоматически исправляет клавиатурные опечатки, двойные заглавные буквы и пробелы у знаков препинания (без сленг-макросов)
-
-import re
-
-TYPOS = {
-    "привте": "привет",
-    "првиет": "привет",
-    "спсаибо": "спасибо",
-    "спаисбо": "спасибо",
-    "пожалусйта": "пожалуйста",
-    "пожалйста": "пожалуйста",
-    "сегодян": "сегодня",
-    "сейчса": "сейчас",
-    "хороош": "хорошо",
-    "хоршо": "хорошо",
-    "вообщше": "вообще",
-    "вобще": "вообще",
-    "кстти": "кстати",
-    "кстаит": "кстати",
-    "почмеу": "почему",
-    "ничгео": "ничего",
-    "коненчо": "конечно",
-    "протсо": "просто",
-    "толкьо": "только",
-    "склько": "сколько",
-    "извиин": "извини",
-    "поянл": "понял",
-    "будте": "будет",
-    "можте": "может",
-    "делате": "делает",
-    "нраивтся": "нравится",
-    "смотир": "смотри",
-    "каежтся": "кажется"
-}
-
-def fix_word(w):
-    if len(w) >= 3 and w[0] == w[0].upper() and w[1] == w[1].upper() and w[2] == w[2].lower() and w[0] != w[0].lower():
-        w = w[0] + w[1:].lower()
-    low = w.lower()
-    if low in TYPOS:
-        fixed = TYPOS[low]
-        if w[0] == w[0].upper() and w[0] != w[0].lower():
-            return fixed[0].upper() + fixed[1:]
-        return fixed
-    return w
-
-def clean_line(line):
-    if not line:
-        return line
-    out = re.sub(r"[ \\t]{2,}", " ", line)
-    for p in [",", ".", ":", ";", "!", "?"]:
-        out = out.replace(" " + p, p)
-    words = out.split(" ")
-    res = []
-    for w in words:
-        if not w:
-            continue
-        punct = ""
-        core = w
-        if len(w) > 1 and w[-1] in ",.!?:;":
-            punct = w[-1]
-            core = w[:-1]
-        res = res + [fix_word(core) + punct]
-    if len(res) == 0:
-        return line
-    return " ".join(res)
-
-def clean_text(text):
-    if not text or text.startswith("."):
-        return text
-    lines = text.split("\\n")
-    fixed_lines = []
-    for ln in lines:
-        fixed_lines = fixed_lines + [clean_line(ln)]
-    result = "\\n".join(fixed_lines)
-    if not result:
-        return text
-    return result
-
-def on_outgoing_message(ctx):
-    original = str(ctx["text"])
-    if not original or original.startswith("."):
-        return None
-    fixed = clean_text(original)
-    if fixed and fixed != original:
-        return fixed
-    return None
-
-def on_command(ctx):
-    if ctx["command"] == "typo":
-        sample = str(ctx["args"]).strip()
-        if sample:
-            return clean_text(sample)
-        return {"cancel": True, "toast": "Анти-опечатки активны! Проверьте: .typo ПРивте , сегодян хороош"}
-    return None
-`
-    },
-    {
-      id: "fg_deadlines",
-      name: "Дедлайны (.dl / .deadline)",
-      language: "python",
-      version: "2.0",
-      author: "FullGram",
-      description: "Управление сроками: .dl add <срок> | <задача>, .dl list, .dl done <№>, .dl send, .dl clear.",
-      code: `# @name Дедлайны (.dl / .deadline)
-# @id fg_deadlines
-# @version 2.0
-# @author FullGram
-# @description Управление сроками: .dl add <срок> | <задача>, .dl list, .dl done <№>, .dl send, .dl clear
-
-import fullgram
-import json
-
-def load_items():
-    raw = str(fullgram.storage_get("dl_json", "[]"))
-    data = json.loads(raw)
-    if data:
-        return data
-    return []
-
-def save_items(items):
-    fullgram.storage_set("dl_json", json.dumps(items))
-
-def format_list(items):
-    if len(items) == 0:
-        return "⏰ Дедлайнов пока нет.\\nДобавьте: .dl add Завтра 18:00 | Сдать проект"
-    lines = ["⏰ Список дедлайнов FullGram:", "━━━━━━━━━━━━━━━━━━━━"]
-    for idx, item in enumerate(items):
-        status = "✅" if item.get("done", False) else "⏳"
-        due = item.get("due", "Без срока")
-        task = item.get("task", "")
-        num = idx + 1
-        lines = lines + [f"{num}. {status} [{due}] — {task}"]
-    return "\\n".join(lines)
-
-def on_command(ctx):
-    cmd = ctx["command"]
-    if cmd != "dl" and cmd != "deadline":
-        return None
-
-    raw = str(ctx["args"]).strip()
-    items = load_items()
-
-    if not raw or raw == "list":
-        if fullgram.get("open_ui"):
-            fullgram.open_ui({"kind": "deadlines", "title": "Дедлайны FullGram"})
-            return {"cancel": True}
-        return {"cancel": True, "toast": format_list(items)}
-
-    if raw == "send":
-        return format_list(items)
-
-    if raw == "clear":
-        save_items([])
-        return {"cancel": True, "toast": "Все дедлайны очищены."}
-
-    if raw.startswith("done "):
-        idx_str = raw[5:].strip()
-        idx = int(idx_str) - 1
-        if idx >= 0 and idx < len(items):
-            cur = items[idx]
-            updated = []
-            for i, it in enumerate(items):
-                if i == idx:
-                    updated = updated + [{"due": cur.get("due", ""), "task": cur.get("task", ""), "done": True}]
-                else:
-                    updated = updated + [it]
-            save_items(updated)
-            return {"cancel": True, "toast": f"✅ Дедлайн №{idx + 1} выполнен!"}
-        return {"cancel": True, "toast": "Неверный номер дедлайна."}
-
-    if raw.startswith("del "):
-        idx_str = raw[4:].strip()
-        idx = int(idx_str) - 1
-        if idx >= 0 and idx < len(items):
-            updated = []
-            for i, it in enumerate(items):
-                if i != idx:
-                    updated = updated + [it]
-            save_items(updated)
-            return {"cancel": True, "toast": f"🗑 Дедлайн №{idx + 1} удалён."}
-        return {"cancel": True, "toast": "Неверный номер дедлайна."}
-
-    body = raw[4:].strip() if raw.startswith("add ") else raw
-    due = "Срочно"
-    task = body
-    if "|" in body:
-        parts = body.split("|")
-        due = parts[0].strip()
-        task = parts[1].strip()
-    else:
-        words = body.split(" ")
-        if len(words) >= 2:
-            due = words[0]
-            task = " ".join(words[1:])
-
-    new_list = items + [{"due": due, "task": task, "done": False}]
-    save_items(new_list)
-    return {"cancel": True, "toast": f"⏰ Дедлайн добавлен: [{due}] {task}"}
-`
-    }
-  ]
+  version: 2,
+  plugins: []
 };
 
 const DEFAULT_FEATURE_FLAGS = {
@@ -1447,10 +495,11 @@ async function applyNftChange(env, body, grantedBy) {
     const rawNum = Number(body.number);
     const number = Number.isFinite(rawNum) && rawNum >= 1 ? Math.min(9999999, Math.floor(rawNum)) : 1;
     const rawBackdropId = body.backdropId != null ? Number(body.backdropId) : null;
+    const rawTitle = typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 64) : "NFT";
     const entry = {
       id: entryId,
       giftId,
-      title: typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 64) : "NFT",
+      title: rawTitle,
       modelName: typeof body.modelName === "string" ? body.modelName.trim().slice(0, 64) : "",
       backdropName: typeof body.backdropName === "string" ? body.backdropName.trim().slice(0, 64) : "",
       backdropId: Number.isFinite(rawBackdropId) ? Math.floor(rawBackdropId) : null,
@@ -1458,6 +507,7 @@ async function applyNftChange(env, body, grantedBy) {
       number,
       note: typeof body.note === "string" ? body.note.trim().slice(0, 120) : "",
       pinned: body.pinned !== false,
+      hidden: Boolean(body.hidden),
       grantedBy: String(grantedBy || ""),
       grantedAt: Math.floor(Date.now() / 1000)
     };
@@ -1468,6 +518,303 @@ async function applyNftChange(env, body, grantedBy) {
   }
   await saveNfts(env, nfts);
   return { id: entryId, peerId, items: nfts.users[peerId] || [] };
+}
+
+async function applyNftAction(env, body, actorId, canManageAny) {
+  const action = String(body.action || "").trim().toLowerCase();
+  const fromPeerId = normalizePeerId(body.peerId != null ? String(body.peerId).trim() : String(actorId));
+  const entryId = String(body.id || "").trim().slice(0, 64);
+  const slug = String(body.slug || "").trim();
+  if (!fromPeerId || !/^-?\d{1,20}$/.test(fromPeerId)) {
+    throw new Error("Invalid peerId");
+  }
+  if (!canManageAny && fromPeerId !== normalizePeerId(String(actorId))) {
+    throw new Error("Forbidden: can only modify your own NFT");
+  }
+  const nfts = await loadNfts(env);
+  if (!nfts.users) nfts.users = {};
+  const list = Array.isArray(nfts.users[fromPeerId]) ? [...nfts.users[fromPeerId]] : [];
+  const idx = list.findIndex((item) => {
+    if (entryId && item.id === entryId) return true;
+    if (slug && `FullGram-${item.giftId}-${item.number}`.toLowerCase() === slug.toLowerCase()) return true;
+    return false;
+  });
+  if (idx < 0) {
+    throw new Error("NFT not found");
+  }
+  const item = { ...list[idx] };
+  if (action === "hide") {
+    item.hidden = true;
+    list[idx] = item;
+    nfts.users[fromPeerId] = list;
+  } else if (action === "show") {
+    item.hidden = false;
+    list[idx] = item;
+    nfts.users[fromPeerId] = list;
+  } else if (action === "pin") {
+    item.pinned = true;
+    list[idx] = item;
+    nfts.users[fromPeerId] = list;
+  } else if (action === "unpin") {
+    item.pinned = false;
+    list[idx] = item;
+    nfts.users[fromPeerId] = list;
+  } else if (action === "delete" || action === "remove" || action === "revoke") {
+    list.splice(idx, 1);
+    if (list.length) nfts.users[fromPeerId] = list;
+    else delete nfts.users[fromPeerId];
+  } else if (action === "upgrade") {
+    if (typeof body.modelName === "string" && body.modelName.trim()) item.modelName = body.modelName.trim().slice(0, 64);
+    if (typeof body.backdropName === "string" && body.backdropName.trim()) item.backdropName = body.backdropName.trim().slice(0, 64);
+    if (body.backdropId != null && Number.isFinite(Number(body.backdropId))) item.backdropId = Math.floor(Number(body.backdropId));
+    if (typeof body.patternName === "string" && body.patternName.trim()) item.patternName = body.patternName.trim().slice(0, 64);
+    if (body.number != null && Number.isFinite(Number(body.number)) && Number(body.number) >= 1) {
+      item.number = Math.min(9999999, Math.floor(Number(body.number)));
+    }
+    list[idx] = item;
+    nfts.users[fromPeerId] = list;
+  } else if (action === "transfer") {
+    const toPeerId = normalizePeerId(body.toPeerId != null ? String(body.toPeerId).trim() : "");
+    if (!toPeerId || !/^-?\d{1,20}$/.test(toPeerId) || toPeerId === fromPeerId) {
+      throw new Error("Invalid recipient peerId");
+    }
+    list.splice(idx, 1);
+    if (list.length) nfts.users[fromPeerId] = list;
+    else delete nfts.users[fromPeerId];
+    item.pinned = true;
+    item.hidden = false;
+    const targetList = Array.isArray(nfts.users[toPeerId]) ? [...nfts.users[toPeerId]] : [];
+    targetList.unshift(item);
+    nfts.users[toPeerId] = targetList.slice(0, 50);
+  } else {
+    throw new Error("Unsupported NFT action");
+  }
+  await saveNfts(env, nfts);
+  return { id: item.id, action, peerId: fromPeerId, items: nfts.users[fromPeerId] || [] };
+}
+
+async function loadEconomy(env) {
+  const cached = getMemCached("economy");
+  if (cached) return cached;
+  const empty = { version: 1, users: {} };
+  if (!env.FULLGRAM_KV) return empty;
+  const raw = await env.FULLGRAM_KV.get("economy_v1");
+  if (!raw) return empty;
+  try {
+    const parsed = JSON.parse(raw);
+    const res = {
+      version: parsed.version || 1,
+      users: parsed.users && typeof parsed.users === "object" ? parsed.users : {}
+    };
+    setMemCached("economy", res);
+    return res;
+  } catch {
+    return empty;
+  }
+}
+
+async function saveEconomy(env, eco) {
+  invalidateMemCache("economy");
+  if (!env.FULLGRAM_KV) return;
+  await env.FULLGRAM_KV.put("economy_v1", JSON.stringify(eco, null, 2));
+}
+
+async function applyEconomyChange(env, body, grantedBy) {
+  const peerId = normalizePeerId(body.peerId != null ? String(body.peerId).trim() : "");
+  if (!peerId || !/^-?\d{1,20}$/.test(peerId)) {
+    throw new Error("Invalid peerId");
+  }
+  const eco = await loadEconomy(env);
+  if (!eco.users) eco.users = {};
+  const userEntry = eco.users[peerId] && typeof eco.users[peerId] === "object"
+    ? {
+        gramBalance: Number(eco.users[peerId].gramBalance || 0),
+        starsBalance: Number(eco.users[peerId].starsBalance || 0),
+        usernames: Array.isArray(eco.users[peerId].usernames) ? [...eco.users[peerId].usernames] : [],
+        numbers: Array.isArray(eco.users[peerId].numbers) ? [...eco.users[peerId].numbers] : []
+      }
+    : { gramBalance: 0, starsBalance: 0, usernames: [], numbers: [] };
+
+  const action = String(body.action || "").trim().toLowerCase();
+  const nowSec = Math.floor(Date.now() / 1000);
+  const tonRate = 5.4;
+
+  if (action === "set_gram") {
+    const val = Number(body.amount);
+    if (!Number.isFinite(val) || val < 0) throw new Error("Invalid gram amount");
+    userEntry.gramBalance = Math.round(val * 100) / 100;
+  } else if (action === "set_stars") {
+    const val = Number(body.amount);
+    if (!Number.isFinite(val) || val < 0) throw new Error("Invalid stars amount");
+    userEntry.starsBalance = Math.floor(val);
+  } else if (action === "grant_username") {
+    const clean = String(body.username || "").trim().replace(/^@+/, "").toLowerCase();
+    if (!/^[a-z0-9_]{4,32}$/.test(clean)) throw new Error("Invalid username (4-32 latin/digits/_)");
+    const priceTon = Math.max(0, Number(body.priceTon || 0) || 0);
+    const isPrimary = body.isPrimary !== false;
+    if (isPrimary) {
+      userEntry.usernames = userEntry.usernames.map((u) => ({ ...u, isPrimary: false }));
+    }
+    userEntry.usernames = userEntry.usernames.filter((u) => String(u.username || "").toLowerCase() !== clean);
+    userEntry.usernames.unshift({
+      id: String(body.id || `fg_u_${Date.now()}_${Math.floor(Math.random() * 1000)}`),
+      username: clean,
+      priceTon,
+      priceUsd: Math.round(priceTon * tonRate * 100) / 100,
+      purchasedAt: nowSec,
+      isActive: true,
+      isPrimary,
+      grantedBy: String(grantedBy || "")
+    });
+    userEntry.usernames = userEntry.usernames.slice(0, 30);
+  } else if (action === "revoke_username") {
+    const clean = String(body.username || "").trim().replace(/^@+/, "").toLowerCase();
+    const targetId = String(body.id || "").trim();
+    userEntry.usernames = userEntry.usernames.filter((u) => u.id !== targetId && String(u.username || "").toLowerCase() !== clean);
+  } else if (action === "grant_number") {
+    const rawNum = String(body.number || "").trim();
+    if (!rawNum) throw new Error("Invalid number");
+    const digits = rawNum.replace(/\D/g, "");
+    let core = digits.startsWith("888") ? digits.slice(3) : digits;
+    if (core.length < 4) core = core.padEnd(8, "0");
+    if (core.length > 8) core = core.slice(0, 8);
+    const formatted = core.length === 8 ? `+888 ${core.slice(0, 4)} ${core.slice(4)}` : rawNum.slice(0, 32);
+    const priceTon = Math.max(0, Number(body.priceTon || 0) || 0);
+    userEntry.numbers = userEntry.numbers.map((n) => ({ ...n, isActive: false }));
+    userEntry.numbers.unshift({
+      id: String(body.id || `fg_n_${Date.now()}_${Math.floor(Math.random() * 1000)}`),
+      number: formatted,
+      priceTon,
+      priceUsd: Math.round(priceTon * tonRate * 100) / 100,
+      purchasedAt: nowSec,
+      isActive: true,
+      grantedBy: String(grantedBy || "")
+    });
+    userEntry.numbers = userEntry.numbers.slice(0, 30);
+  } else if (action === "revoke_number") {
+    const targetId = String(body.id || "").trim();
+    userEntry.numbers = userEntry.numbers.filter((n) => n.id !== targetId);
+  } else {
+    throw new Error("Unknown economy action");
+  }
+
+  eco.users[peerId] = userEntry;
+  await saveEconomy(env, eco);
+  return { peerId, economy: userEntry };
+}
+
+async function loadBetaInvites(env) {
+  if (!env.FULLGRAM_KV) return { version: 1, invites: {} };
+  const raw = await env.FULLGRAM_KV.get("beta_invites_v1");
+  if (!raw) return { version: 1, invites: {} };
+  try {
+    const parsed = JSON.parse(raw);
+    return { version: parsed.version || 1, invites: parsed.invites && typeof parsed.invites === "object" ? parsed.invites : {} };
+  } catch {
+    return { version: 1, invites: {} };
+  }
+}
+
+async function saveBetaInvites(env, data) {
+  if (!env.FULLGRAM_KV) return;
+  await env.FULLGRAM_KV.put("beta_invites_v1", JSON.stringify(data));
+}
+
+async function loadBetaUsers(env) {
+  if (!env.FULLGRAM_KV) return { version: 1, users: {} };
+  const raw = await env.FULLGRAM_KV.get("beta_users_v1");
+  if (!raw) return { version: 1, users: {} };
+  try {
+    const parsed = JSON.parse(raw);
+    return { version: parsed.version || 1, users: parsed.users && typeof parsed.users === "object" ? parsed.users : {} };
+  } catch {
+    return { version: 1, users: {} };
+  }
+}
+
+async function saveBetaUsers(env, data) {
+  if (!env.FULLGRAM_KV) return;
+  await env.FULLGRAM_KV.put("beta_users_v1", JSON.stringify(data));
+}
+
+async function issueBetaReceipt(peerId, deviceHash, code, env) {
+  const secret = getSessionSecret(env);
+  if (!secret) throw new Error("Server signing secret is not configured");
+  const payload = { uid: String(peerId), dh: String(deviceHash), code: String(code), iat: Math.floor(Date.now() / 1000) };
+  const payloadB64 = base64UrlEncodeString(JSON.stringify(payload));
+  const sigBytes = await hmacSha256Raw(new TextEncoder().encode(secret), `fgba1.${payloadB64}`);
+  return `fgba1.${payloadB64}.${base64UrlEncodeBytes(sigBytes)}`;
+}
+
+async function verifyBetaReceipt(receipt, env) {
+  if (typeof receipt !== "string" || !receipt.startsWith("fgba1.")) return null;
+  const secret = getSessionSecret(env);
+  if (!secret) return null;
+  const parts = receipt.split(".");
+  if (parts.length !== 3) return null;
+  const [, payloadB64, sig] = parts;
+  const expected = base64UrlEncodeBytes(await hmacSha256Raw(new TextEncoder().encode(secret), `fgba1.${payloadB64}`));
+  if (!timingSafeEqual(sig, expected)) return null;
+  try {
+    return JSON.parse(base64UrlDecodeToString(payloadB64));
+  } catch {
+    return null;
+  }
+}
+
+function renderBetaLandingHtml(code, origin, inviteStatus = null) {
+  const safeCode = escapeHtml(code);
+  const deepLink = `fullgram://beta?code=${encodeURIComponent(code)}`;
+  const tgDeepLink = `tg://fullgram/beta?code=${encodeURIComponent(code)}`;
+  let statusBadge = "Готово к активации";
+  let statusColor = "#34d399";
+  if (inviteStatus) {
+    if (inviteStatus.revoked) {
+      statusBadge = "Ссылка отозвана";
+      statusColor = "#f87171";
+    } else if (inviteStatus.expired) {
+      statusBadge = "Срок действия истёк";
+      statusColor = "#f87171";
+    } else if (inviteStatus.exhausted) {
+      statusBadge = "Лимит активаций исчерпан";
+      statusColor = "#fbbf24";
+    } else if (!inviteStatus.exists) {
+      statusBadge = "Код не найден";
+      statusColor = "#f87171";
+    } else {
+      statusBadge = `Активна · осталось ${inviteStatus.remaining} из ${inviteStatus.maxUses}`;
+    }
+  }
+  return `<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>FullGram · Закрытый бета-тест</title>
+  <style>
+    body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0a0b10;color:#fff;font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:24px;}
+    .card{max-width:410px;width:100%;background:#151822;border:1px solid rgba(255,255,255,.08);border-radius:22px;padding:28px;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.45);}
+    .pill{display:inline-block;padding:5px 12px;border-radius:999px;font-size:12px;font-weight:700;background:rgba(255,255,255,.06);margin-bottom:14px;}
+    h1{font-size:22px;margin:0 0 10px;}
+    p{font-size:14px;line-height:1.5;color:#a4abc0;margin:0 0 20px;}
+    .btn{display:block;padding:14px 18px;border-radius:14px;background:linear-gradient(135deg,#3390ec,#6c5ce7);color:#fff;text-decoration:none;font-weight:700;font-size:15px;margin-bottom:10px;}
+    .btn-sec{display:block;padding:12px 16px;border-radius:12px;background:rgba(255,255,255,.07);color:#e2e8f0;text-decoration:none;font-weight:600;font-size:13.5px;border:none;width:100%;cursor:pointer;margin-bottom:8px;}
+    .code{margin-top:14px;font-size:12px;color:#737b94;word-break:break-all;}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="pill" style="color:${statusColor};">${escapeHtml(statusBadge)}</div>
+    <h1>🔐 Закрытый бета-тест FullGram</h1>
+    <p>Нажмите кнопку ниже, чтобы открыть FullGram и активировать бета-функции. Если откроется меню Настройки → FullGram, можно также вставить код вручную.</p>
+    <a class="btn" href="${deepLink}">Открыть FullGram и активировать</a>
+    <a class="btn-sec" href="${tgDeepLink}">Альтернативная ссылка (tg://)</a>
+    <button class="btn-sec" type="button" onclick="navigator.clipboard?.writeText(${JSON.stringify(code)});this.textContent='✅ Код скопирован';">📋 Скопировать код приглашения</button>
+    <div class="code">Код: ${safeCode}</div>
+  </div>
+  <script>setTimeout(function(){ window.location.href = ${JSON.stringify(deepLink)}; }, 150);</script>
+</body>
+</html>`;
 }
 
 async function loadNfts(env) {
@@ -1889,6 +1236,12 @@ function adminBotKeyboard() {
         { text: "⚡ Токен (7 дн.)", callback_data: "gen_admin_7d" }
       ],
       [
+        { text: "🎟 Бета (1 юзер)", callback_data: "gen_beta_1" },
+        { text: "👥 Бета (5)", callback_data: "gen_beta_5" },
+        { text: "🚀 Бета (25)", callback_data: "gen_beta_25" }
+      ],
+      [
+        { text: "📋 Бета-список", callback_data: "beta_list" },
         { text: "📦 Плагины в маркете", callback_data: "list_plugins" }
       ]
     ]
@@ -1989,6 +1342,79 @@ async function handleTelegramWebhook(request, env, origin) {
         await answerTelegramCallback(env, cq.id, "❌ Ошибка генерации токена");
         await sendTelegramMessage(env, cq.from.id, `❌ Не удалось сгенерировать токен: ${err.message}`);
       }
+      return jsonResponse({ ok: true });
+    }
+    if (data === "gen_beta_1" || data === "gen_beta_5" || data === "gen_beta_25") {
+      if (!isPrivateChat) {
+        await answerTelegramCallback(env, cq.id, "🔒 Только в ЛС.");
+        return jsonResponse({ ok: true });
+      }
+      const maxUses = data === "gen_beta_25" ? 25 : (data === "gen_beta_5" ? 5 : 1);
+      const rand = new Uint8Array(12);
+      crypto.getRandomValues(rand);
+      const code = `fgb1_${bytesToHex(rand)}`;
+      const inv = await loadBetaInvites(env);
+      inv.invites[code] = { maxUses, uses: 0, note: "button", createdAt: Math.floor(Date.now() / 1000), revoked: false };
+      await saveBetaInvites(env, inv);
+      await answerTelegramCallback(env, cq.id, `✅ Бета-ссылка (${maxUses}) создана`);
+      await sendTelegramMessage(
+        env,
+        cq.from.id,
+        `🎟 <b>Ссылка для закрытого бета-теста FullGram</b>\n` +
+        `Лимит активаций: <b>${maxUses}</b>\n\n` +
+        `🔗 Веб-ссылка:\n<code>${origin}/beta/${code}</code>\n\n` +
+        `📲 FullGram:\n<code>fullgram://beta?code=${code}</code>\n` +
+        `📲 Telegram:\n<code>tg://fullgram/beta?code=${code}</code>`,
+        {
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: "🔄 Ещё (1)", callback_data: "gen_beta_1" },
+                { text: "👥 Ещё (5)", callback_data: "gen_beta_5" }
+              ],
+              [
+                { text: "🗑 Отозвать эту ссылку", callback_data: `beta_revoke:${code}` }
+              ]
+            ]
+          }
+        }
+      );
+      return jsonResponse({ ok: true });
+    }
+    if (data === "beta_list") {
+      const [inv, usr] = await Promise.all([loadBetaInvites(env), loadBetaUsers(env)]);
+      const invLines = Object.entries(inv.invites || {}).slice(-15).map(([c, info]) =>
+        `• <code>${escapeHtml(c)}</code> — ${info.uses || 0}/${info.maxUses || 1}${info.revoked ? " [ОТОЗВАН]" : ""}`
+      );
+      const usrLines = Object.entries(usr.users || {}).slice(-20).map(([uid, u]) =>
+        `• <code>${escapeHtml(uid)}</code>${u.revoked ? " [ОТОЗВАН]" : " [АКТИВЕН]"}`
+      );
+      await answerTelegramCallback(env, cq.id, `Инвайтов: ${Object.keys(inv.invites || {}).length}`);
+      await sendTelegramMessage(
+        env,
+        chatId,
+        `🎟 <b>Инвайты беты:</b>\n${invLines.join("\n") || "Нет"}\n\n👤 <b>Пользователи (${Object.keys(usr.users || {}).length}):</b>\n${usrLines.join("\n") || "Нет"}`,
+        { parse_mode: "HTML" }
+      );
+      return jsonResponse({ ok: true });
+    }
+    if (data.startsWith("beta_revoke:")) {
+      const target = data.slice("beta_revoke:".length).trim();
+      const [inv, usr] = await Promise.all([loadBetaInvites(env), loadBetaUsers(env)]);
+      let ok = false;
+      if (inv.invites[target]) {
+        inv.invites[target].revoked = true;
+        await saveBetaInvites(env, inv);
+        ok = true;
+      }
+      if (usr.users[target]) {
+        usr.users[target].revoked = true;
+        await saveBetaUsers(env, usr);
+        ok = true;
+      }
+      await answerTelegramCallback(env, cq.id, ok ? "🗑 Отозвано" : "⚠️ Не найдено");
+      await sendTelegramMessage(env, chatId, ok ? `🗑 Бета-доступ/инвайт <code>${escapeHtml(target)}</code> отозван.` : `⚠️ Не найдено: ${escapeHtml(target)}`, { parse_mode: "HTML" });
       return jsonResponse({ ok: true });
     }
     if (data === "list_plugins") {
@@ -2116,6 +1542,9 @@ async function handleTelegramWebhook(request, env, origin) {
       "• В начале скрипта можно указать @name, @id, @version, @author, @description.\n\n" +
       "Команды:\n" +
       "/token [дни] или /gen — автогенерация админ-токена (по умолчанию 30 дн., копируется в 1 тап)\n" +
+      "/beta [кол-во] [заметка] — создать ссылку для бета-теста\n" +
+      "/beta_list — список инвайтов и тестеров\n" +
+      "/beta_revoke <код_или_id> — отозвать ссылку или доступ тестера\n" +
       "/list — список плагинов в маркете\n" +
       "/del <id> — удалить плагин из маркета\n" +
       "/badge <id_или_@username> <creator|official|premium|dev|off> — выдать или снять бейдж",
@@ -2149,6 +1578,73 @@ async function handleTelegramWebhook(request, env, origin) {
       env,
       chatId,
       removed ? `🗑 Плагин «${id}» удалён из маркета.` : `⚠️ Плагин «${id}» не найден.`
+    );
+    return jsonResponse({ ok: true });
+  }
+
+  if (text.startsWith("/beta")) {
+    const parts = text.split(/\s+/);
+    const betaCmd = parts[0].toLowerCase().replace(/@[^@\s]+$/, "");
+    if (betaCmd === "/beta_list") {
+      const [inv, usr] = await Promise.all([loadBetaInvites(env), loadBetaUsers(env)]);
+      const invLines = Object.entries(inv.invites || {}).slice(-15).map(([c, info]) =>
+        `• <code>${escapeHtml(c)}</code> — ${info.uses || 0}/${info.maxUses || 1}${info.revoked ? " [ОТОЗВАН]" : ""}`
+      );
+      const usrLines = Object.entries(usr.users || {}).slice(-20).map(([uid, u]) =>
+        `• <code>${escapeHtml(uid)}</code>${u.revoked ? " [ОТОЗВАН]" : " [АКТИВЕН]"}`
+      );
+      await sendTelegramMessage(
+        env,
+        chatId,
+        `🎟 <b>Инвайты беты:</b>\n${invLines.join("\n") || "Нет"}\n\n👤 <b>Пользователи:</b>\n${usrLines.join("\n") || "Нет"}`,
+        { parse_mode: "HTML" }
+      );
+      return jsonResponse({ ok: true });
+    }
+    if (betaCmd === "/beta_revoke") {
+      const target = (parts[1] || "").trim();
+      if (!target) {
+        await sendTelegramMessage(env, chatId, "Формат: /beta_revoke <code_или_peerId>");
+        return jsonResponse({ ok: true });
+      }
+      const [inv, usr] = await Promise.all([loadBetaInvites(env), loadBetaUsers(env)]);
+      let ok = false;
+      if (inv.invites[target]) {
+        inv.invites[target].revoked = true;
+        await saveBetaInvites(env, inv);
+        ok = true;
+      }
+      if (usr.users[target]) {
+        usr.users[target].revoked = true;
+        await saveBetaUsers(env, usr);
+        ok = true;
+      }
+      await sendTelegramMessage(env, chatId, ok ? `🗑 Бета-доступ/инвайт ${target} отозван.` : `⚠️ Не найдено: ${target}`);
+      return jsonResponse({ ok: true });
+    }
+    const maxUsesRaw = Number(parts[1]);
+    const maxUses = Number.isFinite(maxUsesRaw) && maxUsesRaw >= 1 ? Math.min(500, Math.floor(maxUsesRaw)) : 1;
+    const note = (Number.isFinite(maxUsesRaw) ? parts.slice(2) : parts.slice(1)).join(" ").trim().slice(0, 80);
+    const rand = new Uint8Array(12);
+    crypto.getRandomValues(rand);
+    const code = `fgb1_${bytesToHex(rand)}`;
+    const inv = await loadBetaInvites(env);
+    inv.invites[code] = { maxUses, uses: 0, note, createdAt: Math.floor(Date.now() / 1000), revoked: false };
+    await saveBetaInvites(env, inv);
+    await sendTelegramMessage(
+      env,
+      chatId,
+      `🎟 <b>Ссылка для закрытого бета-теста FullGram</b>\n` +
+      `Лимит активаций: <b>${maxUses}</b>${note ? `\nЗаметка: ${escapeHtml(note)}` : ""}\n\n` +
+      `🔗 Веб-ссылка:\n<code>${origin}/beta/${code}</code>\n\n` +
+      `📲 FullGram:\n<code>fullgram://beta?code=${code}</code>\n` +
+      `📲 Telegram:\n<code>tg://fullgram/beta?code=${code}</code>`,
+      {
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [[{ text: "🗑 Отозвать эту ссылку", callback_data: `beta_revoke:${code}` }]]
+        }
+      }
     );
     return jsonResponse({ ok: true });
   }
@@ -2307,6 +1803,43 @@ export default {
       });
     }
 
+    if (request.method === "GET" && path.startsWith("/assets/frames/")) {
+      const fileName = path.slice("/assets/frames/".length).trim();
+      if (!/^[a-zA-Z0-9_-]+\.png$/.test(fileName)) {
+        return new Response("Not Found", { status: 404 });
+      }
+      const cache = caches.default;
+      const cachedResp = await cache.match(request);
+      if (cachedResp) {
+        return cachedResp;
+      }
+      const sources = [
+        `https://raw.githubusercontent.com/shermanko/FullGram/release/next/assets/frames/${fileName}`,
+        `https://cdn.jsdelivr.net/gh/shermanko/FullGram@release/next/assets/frames/${fileName}`
+      ];
+      for (const srcUrl of sources) {
+        try {
+          const upstream = await fetch(srcUrl, { cf: { cacheTtl: 86400, cacheEverything: true } });
+          if (upstream.ok) {
+            const resp = new Response(upstream.body, {
+              status: 200,
+              headers: {
+                "Content-Type": "image/png",
+                "Cache-Control": "public, max-age=86400, s-maxage=604800",
+                "Access-Control-Allow-Origin": "*",
+                "X-Content-Type-Options": "nosniff"
+              }
+            });
+            ctx.waitUntil(cache.put(request, resp.clone()));
+            return resp;
+          }
+        } catch {
+          // try next mirror
+        }
+      }
+      return new Response("Not Found", { status: 404 });
+    }
+
     if (request.method === "GET" && path.startsWith("/frames/")) {
       const fileName = path.slice("/frames/".length).replace(/[^a-zA-Z0-9._-]/g, "");
       if (!fileName || !env.FULLGRAM_KV) {
@@ -2416,6 +1949,113 @@ export default {
       return jsonResponse({ version: 2, frames: [], profileEffects: [] });
     }
 
+    if (request.method === "GET" && path.startsWith("/beta/")) {
+      const code = path.slice("/beta/".length).trim().replace(/[^a-zA-Z0-9_.-]/g, "");
+      if (!code) {
+        return new Response("Invalid beta invite code", { status: 400 });
+      }
+      const inv = await loadBetaInvites(env);
+      const entry = inv.invites && inv.invites[code] ? inv.invites[code] : null;
+      const now = Math.floor(Date.now() / 1000);
+      const maxUses = entry ? (entry.maxUses || 1) : 0;
+      const uses = entry ? (entry.uses || 0) : 0;
+      const statusInfo = {
+        exists: Boolean(entry),
+        revoked: Boolean(entry?.revoked),
+        expired: Boolean(entry?.expiresAt && now > entry.expiresAt),
+        exhausted: Boolean(entry && uses >= maxUses),
+        maxUses,
+        remaining: Math.max(0, maxUses - uses)
+      };
+      return new Response(renderBetaLandingHtml(code, origin, statusInfo), {
+        status: 200,
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "no-store"
+        }
+      });
+    }
+
+    if (request.method === "POST" && path === "/beta/activate") {
+      try {
+        const body = await request.json();
+        const code = String(body.code || "").trim();
+        const peerId = normalizePeerId(body.peerId != null ? String(body.peerId).trim() : "");
+        const deviceSecret = String(body.deviceSecret || "").trim();
+        if (!code || !peerId || !/^-?\d{1,20}$/.test(peerId) || deviceSecret.length < 16) {
+          return jsonResponse({ ok: false, error: "Требуется корректный код приглашения и устройство." }, 400);
+        }
+        const inv = await loadBetaInvites(env);
+        const entry = inv.invites[code];
+        const now = Math.floor(Date.now() / 1000);
+        if (!entry || entry.revoked) {
+          return jsonResponse({ ok: false, error: "Ссылка приглашения недействительна или отозвана." }, 403);
+        }
+        if (entry.expiresAt && now > entry.expiresAt) {
+          return jsonResponse({ ok: false, error: "Срок действия ссылки приглашения истёк." }, 403);
+        }
+        const deviceHash = await sha256Hex(deviceSecret);
+        const usersData = await loadBetaUsers(env);
+        const existingUser = usersData.users[peerId];
+        if (existingUser && existingUser.revoked && existingUser.code === code) {
+          return jsonResponse({ ok: false, error: "Ваш доступ по этому приглашению был отозван." }, 403);
+        }
+        if (!existingUser || existingUser.code !== code) {
+          if ((entry.uses || 0) >= (entry.maxUses || 1)) {
+            return jsonResponse({ ok: false, error: "Лимит активаций этой ссылки исчерпан." }, 403);
+          }
+          entry.uses = (entry.uses || 0) + 1;
+          inv.invites[code] = entry;
+          await saveBetaInvites(env, inv);
+        }
+        usersData.users[peerId] = {
+          deviceHash,
+          code,
+          activatedAt: now,
+          revoked: false
+        };
+        await saveBetaUsers(env, usersData);
+        const receipt = await issueBetaReceipt(peerId, deviceHash, code, env);
+        return jsonResponse({ ok: true, active: true, peerId, receipt });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err.message }, 400);
+      }
+    }
+
+    if (request.method === "POST" && path === "/beta/status") {
+      try {
+        const body = await request.json();
+        const receipt = String(body.receipt || "").trim();
+        const peerId = normalizePeerId(body.peerId != null ? String(body.peerId).trim() : "");
+        const deviceSecret = String(body.deviceSecret || "").trim();
+        if (!receipt || !peerId || deviceSecret.length < 16) {
+          return jsonResponse({ ok: true, active: false });
+        }
+        const verified = await verifyBetaReceipt(receipt, env);
+        if (!verified || verified.uid !== peerId) {
+          return jsonResponse({ ok: true, active: false });
+        }
+        const deviceHash = await sha256Hex(deviceSecret);
+        if (!timingSafeEqual(verified.dh, deviceHash)) {
+          return jsonResponse({ ok: true, active: false });
+        }
+        const usersData = await loadBetaUsers(env);
+        const userRec = usersData.users[peerId];
+        if (!userRec || userRec.revoked) {
+          return jsonResponse({ ok: true, active: false });
+        }
+        return jsonResponse({ ok: true, active: true, peerId });
+      } catch {
+        return jsonResponse({ ok: true, active: false });
+      }
+    }
+
+    if (request.method === "GET" && path === "/economy.json") {
+      return jsonResponse(await loadEconomy(env), 200, {
+        "Cache-Control": "public, max-age=15, s-maxage=30, stale-while-revalidate=60"
+      });
+    }
+
     if (request.method === "GET" && path === "/nfts.json") {
       return jsonResponse(await loadNfts(env), 200, {
         "Cache-Control": "public, max-age=15, s-maxage=30, stale-while-revalidate=60"
@@ -2523,6 +2163,17 @@ export default {
       }
       try {
         const body = await request.json();
+        const selfPeerId = normalizePeerId(String(auth.uid));
+        const requestedRaw = body.peerId != null
+          ? String(body.peerId).trim()
+          : (body.userId != null ? String(body.userId).trim() : selfPeerId);
+        const targetPeerId = normalizePeerId(requestedRaw || selfPeerId);
+        if (!targetPeerId || !/^-?\d{1,20}$/.test(targetPeerId)) {
+          return jsonResponse({ ok: false, error: "Invalid target peerId" }, 400);
+        }
+        if (!auth.isAdmin && sponsorTier !== "plus" && targetPeerId !== selfPeerId) {
+          return jsonResponse({ ok: false, error: "Forbidden: Sponsor+ access required to manage badges for other users" }, 403);
+        }
         const fallbackRole = sponsorTier === "plus" ? "sponsor_plus" : "sponsor";
         const reqRole = String(body.roleId || fallbackRole).trim().toLowerCase();
         const disallowedRoles = new Set(["creator", "official", "admin", "owner"]);
@@ -2532,7 +2183,7 @@ export default {
         const safeRole = disallowedRoles.has(reqRole) ? fallbackRole : reqRole;
         const badges = await applyBadgeChange(env, {
           ...body,
-          peerId: normalizePeerId(String(auth.uid)),
+          peerId: targetPeerId,
           username: null,
           roleId: safeRole
         });
@@ -2540,6 +2191,40 @@ export default {
           ok: true,
           usersCount: Object.keys(badges.users).length + Object.keys(badges.usernames).length
         });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err.message }, 400);
+      }
+    }
+
+    if (request.method === "POST" && path === "/nft/action") {
+      const auth = await authenticateRequest(request, env);
+      if (!auth) {
+        return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
+      }
+      try {
+        const body = await request.json();
+        const sponsorTier = auth.isAdmin ? "plus" : (await getSponsorTier(env, auth.uid));
+        const canManageAny = Boolean(auth.isAdmin || sponsorTier === "plus");
+        const result = await applyNftAction(env, body, auth.uid, canManageAny);
+        return jsonResponse({ ok: true, ...result });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err.message }, 400);
+      }
+    }
+
+    if (request.method === "POST" && path === "/sponsor/economy") {
+      const auth = await authenticateRequest(request, env);
+      if (!auth) {
+        return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
+      }
+      const sponsorTier = auth.isAdmin ? "plus" : (await getSponsorTier(env, auth.uid));
+      if (!auth.isAdmin && sponsorTier !== "plus") {
+        return jsonResponse({ ok: false, error: "Forbidden: Sponsor+ access required" }, 403);
+      }
+      try {
+        const body = await request.json();
+        const result = await applyEconomyChange(env, body, auth.uid);
+        return jsonResponse({ ok: true, ...result });
       } catch (err) {
         return jsonResponse({ ok: false, error: err.message }, 400);
       }
@@ -2663,6 +2348,16 @@ export default {
         try {
           const body = await request.json();
           const result = await applyNftChange(env, body, auth.uid);
+          return jsonResponse({ ok: true, ...result });
+        } catch (err) {
+          return jsonResponse({ ok: false, error: err.message }, 400);
+        }
+      }
+
+      if (request.method === "POST" && path === "/admin/economy") {
+        try {
+          const body = await request.json();
+          const result = await applyEconomyChange(env, body, auth.uid);
           return jsonResponse({ ok: true, ...result });
         } catch (err) {
           return jsonResponse({ ok: false, error: err.message }, 400);

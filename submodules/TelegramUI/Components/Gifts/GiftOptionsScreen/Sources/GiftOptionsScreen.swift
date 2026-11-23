@@ -192,6 +192,7 @@ final class GiftOptionsScreenComponent: Component {
         
         private let starsTitle = ComponentView<Empty>()
         private let starsDescription = ComponentView<Empty>()
+        private let fullGramMarketButton = ComponentView<Empty>()
         private var starsItems: [AnyHashable: ComponentView<Empty>] = [:]
         private let tabSelector = ComponentView<Empty>()
         private var starsFilter: StarsFilter = .all
@@ -1710,7 +1711,52 @@ final class GiftOptionsScreenComponent: Component {
                         descriptionTransition.setFrame(view: starsDescriptionView, frame: starsDescriptionFrame)
                     }
                     contentHeight += starsDescriptionSize.height
-                    contentHeight += 16.0
+                    contentHeight += 10.0
+
+                    let fgTitle = strings.baseLanguageCode.hasPrefix("ru") ? "🎁 Купить подарок FullGram ★" : "🎁 Buy FullGram Gift ★"
+                    let fgButtonSize = self.fullGramMarketButton.update(
+                        transition: transition,
+                        component: AnyComponent(
+                            PlainButtonComponent(
+                                content: AnyComponent(
+                                    MultilineTextComponent(
+                                        text: .plain(NSAttributedString(string: fgTitle, font: Font.semibold(15.0), textColor: accentColor)),
+                                        horizontalAlignment: .center
+                                    )
+                                ),
+                                effectAlignment: .center,
+                                action: { [weak self] in
+                                    guard let self, let component = self.component else {
+                                        return
+                                    }
+                                    let peerIdVal = component.peerId.toInt64()
+                                    let pName = self.state?.peer?.compactDisplayTitle ?? ""
+                                    controller()?.dismiss()
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                        NotificationCenter.default.post(
+                                            name: FullGramEconomy.openGiftMarketNotification,
+                                            object: nil,
+                                            userInfo: [
+                                                "peerId": peerIdVal,
+                                                "peerName": pName
+                                            ]
+                                        )
+                                    }
+                                },
+                                animateScale: true
+                            )
+                        ),
+                        environment: {},
+                        containerSize: CGSize(width: availableSize.width - headerSideInset - headerRightSideInset, height: 36.0)
+                    )
+                    if let fgButtonView = self.fullGramMarketButton.view {
+                        if fgButtonView.superview == nil {
+                            self.scrollView.addSubview(fgButtonView)
+                        }
+                        transition.setFrame(view: fgButtonView, frame: CGRect(origin: CGPoint(x: floor(bandCenterX - fgButtonSize.width / 2.0), y: contentHeight), size: fgButtonSize))
+                    }
+                    contentHeight += fgButtonSize.height
+                    contentHeight += 12.0
                 }
             }
             

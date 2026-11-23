@@ -163,59 +163,44 @@ enum FullGramSettingsIcons {
 }
 
 public enum FullGramCategory: Int32, CaseIterable {
-    case appearance = 0
-    case chats = 1
-    case privacy = 2
-    case security = 3
-    case antiScam = 4
-    case mediaAndAudio = 5
-    case plugins = 6
-    case aiAssistant = 7
-    case other = 8
+    case privacy = 0
+    case security = 1
+    case other = 2
+    case mediaAndAudio = 3
+    case plugins = 4
+    case aiAssistant = 5
 
     var title: String {
         switch self {
-        case .appearance:
-            return "Оформление"
-        case .chats:
-            return "Чаты"
         case .privacy:
             return "Приватность"
         case .security:
             return "Безопасность"
-        case .antiScam:
-            return "Анти-скам"
+        case .other:
+            return "Основное"
         case .mediaAndAudio:
             return "Медиа и Аудио"
         case .plugins:
             return "Плагины"
         case .aiAssistant:
             return "ИИ Ассистент"
-        case .other:
-            return "Прочее"
         }
     }
 
     var icon: UIImage? {
         switch self {
-        case .appearance:
-            return FullGramSettingsIcons.symbol("paintbrush.fill", color: UIColor(rgb: 0xAF52DE))
-        case .chats:
-            return FullGramSettingsIcons.bundleGlyph("FullGram/Chats", color: UIColor(rgb: 0x007AFF), side: 20.0, fallbackSystemName: "bubble.left.and.bubble.right.fill")
         case .privacy:
             return FullGramSettingsIcons.bundleGlyph("FullGram/Ghost", color: UIColor(rgb: 0x34C759), side: 20.0, fallbackSystemName: "hand.raised.fill")
         case .security:
             return FullGramSettingsIcons.symbol("lock.shield.fill", color: UIColor(rgb: 0xFF9500))
-        case .antiScam:
-            return FullGramSettingsIcons.symbol("checkmark.shield.fill", color: UIColor(rgb: 0xFF3B30))
+        case .other:
+            return FullGramSettingsIcons.symbol("gearshape.fill", color: UIColor(rgb: 0x8E8E93))
         case .mediaAndAudio:
             return FullGramSettingsIcons.symbol("waveform", color: UIColor(rgb: 0xFF2D55))
         case .plugins:
             return FullGramSettingsIcons.bundleGlyph("FullGram/Plugins", color: UIColor(rgb: 0x5856D6), side: 20.0, fallbackSystemName: "puzzlepiece.extension.fill")
         case .aiAssistant:
             return FullGramSettingsIcons.symbol("sparkles", color: UIColor(rgb: 0x6750A4))
-        case .other:
-            return FullGramSettingsIcons.symbol("gearshape.fill", color: UIColor(rgb: 0x8E8E93))
         }
     }
 }
@@ -528,7 +513,7 @@ private final class FullGramHeaderItemNode: ListViewItemNode {
 
             let (versionLayout, versionApply) = makeVersionLayout(TextNodeLayoutArguments(
                 attributedString: NSAttributedString(
-                    string: "1.6.1",
+                    string: FullGramVersion.displayString(russian: true),
                     font: Font.regular(15.0),
                     textColor: item.theme.list.itemSecondaryTextColor
                 ),
@@ -583,18 +568,210 @@ public func fullGramOpenFontsStack(context: AccountContext, in navigationControl
     guard let navigationController else {
         return
     }
-    let rootControllers: [ViewController]
+    let rootControllers: [UIViewController]
     if let first = navigationController.viewControllers.first {
         rootControllers = [first]
     } else {
         rootControllers = []
     }
-    let stack = rootControllers + [
+    let stack: [UIViewController] = rootControllers + [
         fullGramSettingsController(context: context),
         fullGramAppearanceCategoryController(context: context),
         fullGramFontsController(context: context)
     ]
     navigationController.setViewControllers(stack, animated: false)
+}
+
+public func fullGramBetaActivationController(context: AccountContext) -> ViewController {
+    var pushControllerImpl: ((ViewController) -> Void)?
+    var presentControllerImpl: ((ViewController) -> Void)?
+    var replaceWithSettingsImpl: (() -> Void)?
+
+    let changed = ValuePromise<Int>(0, ignoreRepeated: false)
+    let version = Atomic<Int>(value: 0)
+    let bump: () -> Void = {
+        changed.set(version.modify { $0 + 1 })
+    }
+    let observer = NotificationCenter.default.addObserver(forName: FullGramBetaAccess.didChangeNotification, object: nil, queue: .main) { _ in
+        bump()
+    }
+
+    enum BetaEntry: ItemListNodeEntry {
+        case header(String)
+        case versionRow(String, String)
+        case enterCode(String)
+        case openSettings(String)
+        case info(String)
+
+        var section: ItemListSectionId {
+            switch self {
+            case .header, .versionRow, .enterCode, .openSettings, .info: return 0
+            }
+        }
+
+        var stableId: Int32 {
+            switch self {
+            case .header: return 0
+            case .versionRow: return 1
+            case .enterCode: return 2
+            case .openSettings: return 3
+            case .info: return 4
+            }
+        }
+
+        static func < (lhs: BetaEntry, rhs: BetaEntry) -> Bool {
+            return lhs.stableId < rhs.stableId
+        }
+
+        func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
+            let args = arguments as! (() -> Void, () -> Void)
+            switch self {
+            case let .header(text):
+                return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+            case let .versionRow(title, value):
+                return ItemListDisclosureItem(
+                    presentationData: presentationData,
+                    systemStyle: .glass,
+                    title: title,
+                    label: value,
+                    sectionId: self.section,
+                    style: .blocks,
+                    disclosureStyle: .none,
+                    action: {}
+                )
+            case let .enterCode(title):
+                return ItemListActionItem(
+                    presentationData: presentationData,
+                    systemStyle: .glass,
+                    title: title,
+                    kind: .generic,
+                    alignment: .center,
+                    sectionId: self.section,
+                    style: .blocks,
+                    action: args.0
+                )
+            case let .openSettings(title):
+                return ItemListActionItem(
+                    presentationData: presentationData,
+                    systemStyle: .glass,
+                    title: title,
+                    kind: .generic,
+                    alignment: .center,
+                    sectionId: self.section,
+                    style: .blocks,
+                    action: args.1
+                )
+            case let .info(text):
+                return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
+            }
+        }
+    }
+
+    let promptForCode: () -> Void = {
+        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+        let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+        let alert = UIAlertController(
+            title: ru ? "Активация бета-теста" : "Activate Beta Test",
+            message: ru
+                ? "Вставьте ссылку-приглашение (https://.../beta/..., fullgram://beta?code=...) или код fgb1_..."
+                : "Paste your invite link or beta code (fgb1_...):",
+            preferredStyle: .alert
+        )
+        alert.addTextField { tf in
+            tf.placeholder = "fgb1_... или https://.../beta/..."
+            tf.autocorrectionType = .no
+            tf.autocapitalizationType = .none
+        }
+        alert.addAction(UIAlertAction(title: ru ? "Активировать" : "Activate", style: .default, handler: { _ in
+            let raw = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let code: String
+            if let url = URL(string: raw), let extracted = FullGramBetaAccess.extractBetaCode(from: url) {
+                code = extracted
+            } else {
+                code = raw
+            }
+            guard !code.isEmpty else { return }
+            let peerRawId = context.account.peerId.id._internalGetInt64Value()
+            FullGramBetaAccess.shared.activate(code: code, peerId: peerRawId) { result in
+                switch result {
+                case .success:
+                    let okAlert = textAlertController(
+                        context: context,
+                        title: "FullGram Beta",
+                        text: ru ? "Бета-тест активирован! Все функции FullGram открыты." : "Beta access activated! All FullGram features are unlocked.",
+                        actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {
+                            replaceWithSettingsImpl?()
+                        })]
+                    )
+                    presentControllerImpl?(okAlert)
+                case let .failure(err):
+                    let errAlert = textAlertController(
+                        context: context,
+                        title: ru ? "Ошибка активации" : "Activation Error",
+                        text: err.localizedDescription,
+                        actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]
+                    )
+                    presentControllerImpl?(errAlert)
+                }
+            }
+        }))
+        alert.addAction(UIAlertAction(title: presentationData.strings.Common_Cancel, style: .cancel))
+        context.sharedContext.applicationBindings.presentNativeController(alert)
+    }
+
+    let openFullGram: () -> Void = {
+        replaceWithSettingsImpl?()
+    }
+
+    let args = (promptForCode, openFullGram)
+    let signal = combineLatest(context.sharedContext.presentationData, changed.get())
+    |> deliverOnMainQueue
+    |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
+        let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+        let unlocked = FullGramBetaAccess.shared.isUnlocked(forPeerId: context.account.peerId.id._internalGetInt64Value())
+        var entries: [BetaEntry] = [
+            .header(ru ? "ЗАКРЫТЫЙ БЕТА-ТЕСТ FULLGRAM" : "FULLGRAM CLOSED BETA TEST"),
+            .versionRow(ru ? "Версия" : "Version", FullGramVersion.displayString(russian: ru))
+        ]
+        if unlocked {
+            entries.append(.openSettings(ru ? "Открыть функции FullGram" : "Open FullGram Features"))
+        } else {
+            entries.append(.enterCode(ru ? "Ввести ссылку или код приглашения" : "Enter Invite Link or Code"))
+        }
+        entries.append(.info(ru
+            ? "Функции FullGram доступны участникам закрытого бета-теста. Вы можете активировать доступ, нажав на выданную ботом ссылку-приглашение в любом чате или вставив её сюда."
+            : "FullGram features require a beta invite link. Tap your invite link in any chat or paste it here to unlock."))
+
+        let data = ItemListPresentationData(presentationData)
+        let state = ItemListControllerState(
+            presentationData: data,
+            title: .text("FullGram Beta"),
+            leftNavigationButton: nil,
+            rightNavigationButton: nil,
+            backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back)
+        )
+        return (state, (ItemListNodeState(presentationData: data, entries: entries, style: .blocks), args))
+    }
+    |> afterDisposed {
+        NotificationCenter.default.removeObserver(observer)
+    }
+
+    let controller = ItemListController(context: context, state: signal)
+    pushControllerImpl = { [weak controller] c in controller?.push(c) }
+    presentControllerImpl = { [weak controller] c in controller?.present(c, in: .window(.root)) }
+    replaceWithSettingsImpl = { [weak controller] in
+        guard let controller, let nav = controller.navigationController as? NavigationController else {
+            pushControllerImpl?(fullGramSettingsController(context: context))
+            return
+        }
+        var vcs = nav.viewControllers
+        if vcs.last === controller {
+            vcs.removeLast()
+        }
+        vcs.append(fullGramSettingsController(context: context))
+        nav.setViewControllers(vcs, animated: true)
+    }
+    return controller
 }
 
 public func fullGramSettingsController(context: AccountContext) -> ViewController {
@@ -605,6 +782,9 @@ public func fullGramSettingsController(context: AccountContext) -> ViewControlle
     let sponsorsTick = ValuePromise<Int>(0, ignoreRepeated: false)
     let sponsorsCounter = Atomic<Int>(value: 0)
     let sponsorsObserver = NotificationCenter.default.addObserver(forName: FullGramSponsors.didChangeNotification, object: nil, queue: .main) { _ in
+        sponsorsTick.set(sponsorsCounter.modify { $0 + 1 })
+    }
+    let betaObserver = NotificationCenter.default.addObserver(forName: FullGramBetaAccess.didChangeNotification, object: nil, queue: .main) { _ in
         sponsorsTick.set(sponsorsCounter.modify { $0 + 1 })
     }
     FullGramSponsors.shared.refreshIfNeeded(maxAge: 20.0)
@@ -631,21 +811,20 @@ public func fullGramSettingsController(context: AccountContext) -> ViewControlle
             })
         },
         openCategory: { category in
+            let selfRawId = context.account.peerId.id._internalGetInt64Value()
+            guard FullGramBetaAccess.shared.isUnlocked(forPeerId: selfRawId) else {
+                pushControllerImpl?(fullGramBetaActivationController(context: context))
+                return
+            }
             switch category {
             case .privacy:
                 pushControllerImpl?(fullGramPrivacyCategoryController(context: context))
-            case .chats:
-                pushControllerImpl?(fullGramChatsCategoryController(context: context))
-            case .appearance:
-                pushControllerImpl?(fullGramAppearanceCategoryController(context: context))
             case .security:
                 pushControllerImpl?(fullGramSecurityCategoryController(context: context))
-            case .antiScam:
-                pushControllerImpl?(fullGramAntiScamController(context: context))
-            case .mediaAndAudio:
-                pushControllerImpl?(fullGramMediaAudioCategoryController(context: context))
             case .other:
                 pushControllerImpl?(fullGramOtherCategoryController(context: context))
+            case .mediaAndAudio:
+                pushControllerImpl?(fullGramMediaAudioCategoryController(context: context))
             case .plugins:
                 pushControllerImpl?(fullGramPluginsController(context: context))
             case .aiAssistant:
@@ -714,6 +893,7 @@ public func fullGramSettingsController(context: AccountContext) -> ViewControlle
     }
     |> afterDisposed {
         NotificationCenter.default.removeObserver(sponsorsObserver)
+        NotificationCenter.default.removeObserver(betaObserver)
     }
 
     let controller = ItemListController(context: context, state: signal)
@@ -731,6 +911,8 @@ private struct FullGramPrivacyCategoryArguments {
     let openPrivateMode: () -> Void
     let openActivityAndTraces: () -> Void
     let openDeleted: () -> Void
+    let toggleAnonymousStories: (Bool) -> Void
+    let toggleDownloadStories: (Bool) -> Void
 }
 
 private enum FullGramPrivacyCategoryEntry: ItemListNodeEntry {
@@ -738,6 +920,10 @@ private enum FullGramPrivacyCategoryEntry: ItemListNodeEntry {
     case privateModeLink(PresentationTheme, Bool)
     case activityAndTracesLink(PresentationTheme)
     case deletedLink(PresentationTheme)
+    case storiesHeader(String)
+    case anonymousStories(Bool)
+    case downloadStories(Bool)
+    case storiesInfo(String)
 
     var section: ItemListSectionId {
         switch self {
@@ -745,6 +931,8 @@ private enum FullGramPrivacyCategoryEntry: ItemListNodeEntry {
             return 0
         case .deletedLink:
             return 1
+        case .storiesHeader, .anonymousStories, .downloadStories, .storiesInfo:
+            return 2
         }
     }
 
@@ -754,6 +942,10 @@ private enum FullGramPrivacyCategoryEntry: ItemListNodeEntry {
         case .privateModeLink: return 1
         case .activityAndTracesLink: return 2
         case .deletedLink: return 3
+        case .storiesHeader: return 10
+        case .anonymousStories: return 11
+        case .downloadStories: return 12
+        case .storiesInfo: return 13
         }
     }
 
@@ -767,6 +959,14 @@ private enum FullGramPrivacyCategoryEntry: ItemListNodeEntry {
             return lhsTheme === rhsTheme
         case let (.deletedLink(lhsTheme), .deletedLink(rhsTheme)):
             return lhsTheme === rhsTheme
+        case let (.storiesHeader(a), .storiesHeader(b)):
+            return a == b
+        case let (.anonymousStories(a), .anonymousStories(b)):
+            return a == b
+        case let (.downloadStories(a), .downloadStories(b)):
+            return a == b
+        case let (.storiesInfo(a), .storiesInfo(b)):
+            return a == b
         default:
             return false
         }
@@ -827,6 +1027,14 @@ private enum FullGramPrivacyCategoryEntry: ItemListNodeEntry {
                 disclosureStyle: .arrow,
                 action: arguments.openDeleted
             )
+        case let .storiesHeader(text):
+            return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+        case let .anonymousStories(value):
+            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Анонимный просмотр историй", value: value, sectionId: self.section, style: .blocks, updated: arguments.toggleAnonymousStories)
+        case let .downloadStories(value):
+            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Скачивание историй в галерею", value: value, sectionId: self.section, style: .blocks, updated: arguments.toggleDownloadStories)
+        case let .storiesInfo(text):
+            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         }
     }
 }
@@ -852,6 +1060,12 @@ func fullGramPrivacyCategoryController(context: AccountContext) -> ViewControlle
         },
         openDeleted: {
             pushControllerImpl?(fullGramMessageHistoryController(context: context))
+        },
+        toggleAnonymousStories: { value in
+            FullGramExtras.shared.anonymousStoryViewing = value
+        },
+        toggleDownloadStories: { value in
+            FullGramExtras.shared.allowStoryDownload = value
         }
     )
 
@@ -862,7 +1076,11 @@ func fullGramPrivacyCategoryController(context: AccountContext) -> ViewControlle
             .ghostModeLink(presentationData.theme, settings.isActive),
             .privateModeLink(presentationData.theme, FullGramExtras.shared.privateMode),
             .activityAndTracesLink(presentationData.theme),
-            .deletedLink(presentationData.theme)
+            .deletedLink(presentationData.theme),
+            .storiesHeader("ИСТОРИИ"),
+            .anonymousStories(FullGramExtras.shared.anonymousStoryViewing),
+            .downloadStories(FullGramExtras.shared.allowStoryDownload),
+            .storiesInfo("Анонимный просмотр скрывает ваш просмотр историй от автора (не отправляет статус прочтения). Скачивание позволяет сохранять любые фото и видео из историй в галерею без Premium и даже при запрете сохранения.")
         ]
 
         let controllerState = ItemListControllerState(
@@ -886,6 +1104,9 @@ func fullGramPrivacyCategoryController(context: AccountContext) -> ViewControlle
     let controller = ItemListController(context: context, state: signal)
     pushControllerImpl = { [weak controller] c in
         controller?.push(c)
+    }
+    presentControllerImpl = { [weak controller] c in
+        controller?.present(c, in: .window(.root))
     }
     return controller
 }
@@ -1551,6 +1772,7 @@ private struct FullGramChatsCategoryArguments {
     let openMessageMenu: () -> Void
     let openReactions: () -> Void
     let openAutoResponder: () -> Void
+    let pickDeleteAnimation: () -> Void
     let toggle: (FullGramChatsToggle, Bool) -> Void
 }
 
@@ -1565,13 +1787,14 @@ private enum FullGramChatsCategoryEntry: ItemListNodeEntry {
     case autoResponderLink(PresentationTheme, String)
     case optionsHeader(String)
     case toggle(FullGramChatsToggle, String, Bool)
+    case deleteAnimationStyle(String, String)
     case optionsInfo(String)
 
     var section: ItemListSectionId {
         switch self {
         case .sectionsHeader, .messageHistoryLink, .restrictionBypassLink, .sendingLink, .translationLink, .messageMenuLink, .reactionsLink, .autoResponderLink:
             return 0
-        case .optionsHeader, .toggle, .optionsInfo:
+        case .optionsHeader, .toggle, .deleteAnimationStyle, .optionsInfo:
             return 1
         }
     }
@@ -1598,6 +1821,8 @@ private enum FullGramChatsCategoryEntry: ItemListNodeEntry {
             return 100
         case let .toggle(option, _, _):
             return 100 + option.rawValue
+        case .deleteAnimationStyle:
+            return 150
         case .optionsInfo:
             return 200
         }
@@ -1708,6 +1933,17 @@ private enum FullGramChatsCategoryEntry: ItemListNodeEntry {
                     arguments.toggle(option, newValue)
                 }
             )
+        case let .deleteAnimationStyle(title, label):
+            return ItemListDisclosureItem(
+                presentationData: presentationData,
+                systemStyle: .glass,
+                title: title,
+                label: label,
+                sectionId: self.section,
+                style: .blocks,
+                disclosureStyle: .arrow,
+                action: arguments.pickDeleteAnimation
+            )
         case let .optionsInfo(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         }
@@ -1735,24 +1971,23 @@ private func fullGramLanguageDisplayName(code: String, isRussian: Bool) -> Strin
 
 func fullGramChatsCategoryController(context: AccountContext) -> ViewController {
     var pushControllerImpl: ((ViewController) -> Void)?
+    var presentControllerImpl: ((ViewController) -> Void)?
     let store = context.account.network.fullGramGhostMode
     let extrasChanged = ValuePromise<Int>(0, ignoreRepeated: false)
-    var extrasVersion = 0
+    let extrasVersion = Atomic<Int>(value: 0)
     let observer = NotificationCenter.default.addObserver(
         forName: FullGramExtras.didChangeNotification,
         object: nil,
         queue: .main
     ) { _ in
-        extrasVersion += 1
-        extrasChanged.set(extrasVersion)
+        extrasChanged.set(extrasVersion.modify { $0 + 1 })
     }
     let autoResponderObserver = NotificationCenter.default.addObserver(
         forName: FullGramAutoResponderSettings.didChangeNotification,
         object: nil,
         queue: .main
     ) { _ in
-        extrasVersion += 1
-        extrasChanged.set(extrasVersion)
+        extrasChanged.set(extrasVersion.modify { $0 + 1 })
     }
 
     let arguments = FullGramChatsCategoryArguments(
@@ -1776,6 +2011,26 @@ func fullGramChatsCategoryController(context: AccountContext) -> ViewController 
         },
         openAutoResponder: {
             pushControllerImpl?(fullGramAutoResponderController(context: context))
+        },
+        pickDeleteAnimation: {
+            let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+            let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+            let sheet = ActionSheetController(presentationData: presentationData)
+            let items: [ActionSheetItem] = FullGramExtras.DeleteAnimationStyle.allCases.map { style in
+                ActionSheetButtonItem(title: style.title(russian: ru), color: .accent, action: { [weak sheet] in
+                    sheet?.dismissAnimated()
+                    FullGramExtras.shared.deleteAnimationStyle = style
+                })
+            }
+            sheet.setItemGroups([
+                ActionSheetItemGroup(items: items),
+                ActionSheetItemGroup(items: [
+                    ActionSheetButtonItem(title: presentationData.strings.Common_Cancel, color: .accent, font: .bold, action: { [weak sheet] in
+                        sheet?.dismissAnimated()
+                    })
+                ])
+            ])
+            presentControllerImpl?(sheet)
         },
         toggle: { option, value in
             switch option {
@@ -1847,7 +2102,7 @@ func fullGramChatsCategoryController(context: AccountContext) -> ViewController 
             .toggle(.hideFastShare, t("Скрыть кнопку быстрого репоста", "Hide fast share button"), ui.hideFastShare),
             .toggle(.horizonLockVideoMessages, t("Фиксация горизонта в видеокружках", "Horizon lock in video messages"), ui.horizonLockVideoMessages),
             .toggle(.autoRevealSpoilers, t("Автораскрытие спойлеров", "Auto-reveal spoilers"), FullGramExtras.shared.autoRevealSpoilers),
-            .toggle(.deletePaperAnimation, t("Анимация удаления (бумага в мусорку)", "Paper trash delete animation"), FullGramExtras.shared.deletePaperAnimation),
+            .deleteAnimationStyle(t("Анимация удаления сообщений", "Message delete animation"), FullGramExtras.shared.deleteAnimationStyle.title(russian: isRussian)),
             .optionsInfo(t(
                 "Настройки мгновенно применяются ко всем открытым чатам.",
                 "Settings take effect immediately in chats."
@@ -1876,6 +2131,9 @@ func fullGramChatsCategoryController(context: AccountContext) -> ViewController 
     let controller = ItemListController(context: context, state: signal)
     pushControllerImpl = { [weak controller] c in
         controller?.push(c)
+    }
+    presentControllerImpl = { [weak controller] c in
+        controller?.present(c, in: .window(.root))
     }
     return controller
 }
@@ -2083,14 +2341,13 @@ public func fullGramMessageHistoryController(context: AccountContext) -> ViewCon
     var pushControllerImpl: ((ViewController) -> Void)?
 
     let extrasChanged = ValuePromise<Int>(0, ignoreRepeated: false)
-    var extrasVersion = 0
+    let extrasVersion = Atomic<Int>(value: 0)
     let observer = NotificationCenter.default.addObserver(
         forName: FullGramExtras.didChangeNotification,
         object: nil,
         queue: .main
     ) { _ in
-        extrasVersion += 1
-        extrasChanged.set(extrasVersion)
+        extrasChanged.set(extrasVersion.modify { $0 + 1 })
     }
 
     let arguments = FullGramMessageHistoryArguments(
@@ -2650,14 +2907,13 @@ private enum FullGramRestrictionBypassEntry: ItemListNodeEntry {
 
 public func fullGramRestrictionBypassController(context: AccountContext) -> ViewController {
     let extrasChanged = ValuePromise<Int>(0, ignoreRepeated: false)
-    var extrasVersion = 0
+    let extrasVersion = Atomic<Int>(value: 0)
     let observer = NotificationCenter.default.addObserver(
         forName: FullGramExtras.didChangeNotification,
         object: nil,
         queue: .main
     ) { _ in
-        extrasVersion += 1
-        extrasChanged.set(extrasVersion)
+        extrasChanged.set(extrasVersion.modify { $0 + 1 })
     }
 
     let update: (FullGramRestrictionBypassToggle, Bool) -> Void = { option, value in
@@ -2854,22 +3110,20 @@ public func fullGramSendingController(context: AccountContext) -> ViewController
     var presentControllerImpl: ((ViewController) -> Void)?
     var pushControllerImpl: ((ViewController) -> Void)?
     let extrasChanged = ValuePromise<Int>(0, ignoreRepeated: false)
-    var extrasVersion = 0
+    let extrasVersion = Atomic<Int>(value: 0)
     let observer = NotificationCenter.default.addObserver(
         forName: FullGramExtras.didChangeNotification,
         object: nil,
         queue: .main
     ) { _ in
-        extrasVersion += 1
-        extrasChanged.set(extrasVersion)
+        extrasChanged.set(extrasVersion.modify { $0 + 1 })
     }
     let queueObserver = NotificationCenter.default.addObserver(
         forName: FullGramTransferQueue.didChangeNotification,
         object: nil,
         queue: .main
     ) { _ in
-        extrasVersion += 1
-        extrasChanged.set(extrasVersion)
+        extrasChanged.set(extrasVersion.modify { $0 + 1 })
     }
 
     let arguments = FullGramSendingArguments(
@@ -3073,13 +3327,13 @@ private enum FullGramTransferQueueEntry: ItemListNodeEntry {
         case let .statusHeader(text), let .itemsHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .networkStatus(title, value):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .none, enabled: false, action: {})
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, enabled: false, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .none, action: {})
         case let .resumeAll(title):
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.resumeAll)
         case let .clearCompleted(title):
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .destructive, alignment: .natural, sectionId: self.section, style: .blocks, action: args.clearCompleted)
         case let .transferRow(_, title, label):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: label, sectionId: self.section, style: .blocks, disclosureStyle: .none, enabled: false, action: {})
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, enabled: false, label: label, sectionId: self.section, style: .blocks, disclosureStyle: .none, action: {})
         case let .empty(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         }
@@ -3088,14 +3342,13 @@ private enum FullGramTransferQueueEntry: ItemListNodeEntry {
 
 public func fullGramTransferQueueController(context: AccountContext) -> ViewController {
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
-    var version = 0
+    let version = Atomic<Int>(value: 0)
     let observer = NotificationCenter.default.addObserver(
         forName: FullGramTransferQueue.didChangeNotification,
         object: nil,
         queue: .main
     ) { _ in
-        version += 1
-        changed.set(version)
+        changed.set(version.modify { $0 + 1 })
     }
 
     let args = FullGramTransferQueueArguments(
@@ -3741,6 +3994,8 @@ private struct FullGramAppearanceCategoryArguments {
     let openIcons: () -> Void
     let openFrames: () -> Void
     let openNicknames: () -> Void
+    let toggleNFTBubbles: (Bool) -> Void
+    let openDebugSettings: () -> Void
 }
 
 private enum FullGramAppearanceCategoryEntry: ItemListNodeEntry {
@@ -3750,11 +4005,14 @@ private enum FullGramAppearanceCategoryEntry: ItemListNodeEntry {
     case icons(String)
     case frames(String, String)
     case nicknames(String, String)
+    case nftBubblesToggle(Bool)
+    case debugSettings(String)
 
     var section: ItemListSectionId {
         switch self {
         case .fonts, .themes, .design, .icons: return 0
         case .frames, .nicknames: return 1
+        case .nftBubblesToggle, .debugSettings: return 2
         }
     }
 
@@ -3766,6 +4024,8 @@ private enum FullGramAppearanceCategoryEntry: ItemListNodeEntry {
         case .icons: return 3
         case .frames: return 10
         case .nicknames: return 11
+        case .nftBubblesToggle: return 20
+        case .debugSettings: return 21
         }
     }
 
@@ -3788,6 +4048,10 @@ private enum FullGramAppearanceCategoryEntry: ItemListNodeEntry {
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: FullGramSettingsIcons.symbol("person.crop.circle.dashed", color: UIColor(rgb: 0x34C759)), title: title, label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openFrames)
         case let .nicknames(title, label):
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: FullGramSettingsIcons.symbol("signature", color: UIColor(rgb: 0xAF52DE)), title: title, label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openNicknames)
+        case let .nftBubblesToggle(value):
+            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Пузыри NFT в профиле (Profile V2)", value: value, sectionId: self.section, style: .blocks, updated: args.toggleNFTBubbles)
+        case let .debugSettings(title):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: FullGramSettingsIcons.symbol("wrench.and.screwdriver.fill", color: UIColor(rgb: 0x8E8E93)), title: title, label: "1 клик", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openDebugSettings)
         }
     }
 }
@@ -3802,6 +4066,7 @@ public func fullGramAppearanceCategoryController(context: AccountContext) -> Vie
     let cloudObs = NotificationCenter.default.addObserver(forName: FullGramCloudCosmetics.didChangeNotification, object: nil, queue: .main) { _ in bump() }
     let framesObs = NotificationCenter.default.addObserver(forName: FullGramAvatarFrames.didChangeNotification, object: nil, queue: .main) { _ in bump() }
     let nickObs = NotificationCenter.default.addObserver(forName: FullGramNicknameStyle.didChangeNotification, object: nil, queue: .main) { _ in bump() }
+    let extrasObs = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { _ in bump() }
 
     let args = FullGramAppearanceCategoryArguments(
         openFonts: { pushImpl?(fullGramFontsController(context: context)) },
@@ -3809,7 +4074,13 @@ public func fullGramAppearanceCategoryController(context: AccountContext) -> Vie
         openDesign: { pushImpl?(fullGramDesignController(context: context)) },
         openIcons: { pushImpl?(fullGramAppIconsController(context: context)) },
         openFrames: { pushImpl?(fullGramAvatarFramesController(context: context)) },
-        openNicknames: { pushImpl?(fullGramNicknameStyleController(context: context)) }
+        openNicknames: { pushImpl?(fullGramNicknameStyleController(context: context)) },
+        toggleNFTBubbles: { value in FullGramExtras.shared.profileNFTBubbles = value },
+        openDebugSettings: {
+            if let debugVC = context.sharedContext.makeDebugSettingsController(context: context) {
+                pushImpl?(debugVC)
+            }
+        }
     )
     let selfPeerId = context.account.peerId.toInt64()
     let signal = combineLatest(context.sharedContext.presentationData, cosmeticsTick.get())
@@ -3823,7 +4094,9 @@ public func fullGramAppearanceCategoryController(context: AccountContext) -> Vie
             .design("Дизайн"),
             .icons("Иконки приложения"),
             .frames("Анимированные рамки", frameLabel),
-            .nicknames("Стили ников", nickLabel)
+            .nicknames("Стили ников", nickLabel),
+            .nftBubblesToggle(FullGramExtras.shared.profileNFTBubbles),
+            .debugSettings("Спец. настройки (Profile V2 / Debug)")
         ]
         let data = ItemListPresentationData(presentationData)
         let state = ItemListControllerState(presentationData: data, title: .text("Оформление"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
@@ -3834,6 +4107,7 @@ public func fullGramAppearanceCategoryController(context: AccountContext) -> Vie
         NotificationCenter.default.removeObserver(cloudObs)
         NotificationCenter.default.removeObserver(framesObs)
         NotificationCenter.default.removeObserver(nickObs)
+        NotificationCenter.default.removeObserver(extrasObs)
     }
     let controller = ItemListController(context: context, state: signal)
     pushImpl = { [weak controller] c in controller?.push(c) }
@@ -3902,14 +4176,12 @@ private enum FullGramSecurityEntry: ItemListNodeEntry {
 func fullGramSecurityCategoryController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
-    var version = 0
+    let version = Atomic<Int>(value: 0)
     let extrasObserver = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { _ in
-        version += 1
-        changed.set(version)
+        changed.set(version.modify { $0 + 1 })
     }
     let antiScamObserver = NotificationCenter.default.addObserver(forName: FullGramAntiScam.didChangeNotification, object: nil, queue: .main) { _ in
-        version += 1
-        changed.set(version)
+        changed.set(version.modify { $0 + 1 })
     }
     let args = FullGramSecurityArguments(toggle: { opt, value in
         switch opt {
@@ -3955,7 +4227,12 @@ func fullGramSecurityCategoryController(context: AccountContext) -> ViewControll
 
 private struct FullGramOtherCategoryArguments {
     let toggleLocalPremium: (Bool) -> Void
+    let openChats: () -> Void
+    let openAppearance: () -> Void
     let openGeneral: () -> Void
+    let openWork: () -> Void
+    let openEconomy: () -> Void
+    let openSmartFeatures: () -> Void
     let openPowerSaving: () -> Void
     let openAIAssistant: () -> Void
     let openBadges: () -> Void
@@ -3966,7 +4243,12 @@ private struct FullGramOtherCategoryArguments {
 private enum FullGramOtherCategoryEntry: ItemListNodeEntry {
     case localPremium(Bool)
     case localPremiumInfo(String)
+    case chatsLink(String)
+    case appearanceLink(String)
     case generalLink(String)
+    case workLink(String, String)
+    case economyLink(String, String)
+    case smartFeaturesLink(String, String)
     case powerSavingLink(String, String)
     case aiAssistantLink(String, String)
     case badgesLink(String, String)
@@ -3978,7 +4260,7 @@ private enum FullGramOtherCategoryEntry: ItemListNodeEntry {
     var section: ItemListSectionId {
         switch self {
         case .localPremium, .localPremiumInfo: return 0
-        case .generalLink, .powerSavingLink, .aiAssistantLink, .badgesLink: return 1
+        case .chatsLink, .appearanceLink, .generalLink, .workLink, .economyLink, .smartFeaturesLink, .powerSavingLink, .aiAssistantLink, .badgesLink: return 1
         case .backupHeader, .exportBackup, .importBackup, .backupInfo: return 2
         }
     }
@@ -3987,10 +4269,15 @@ private enum FullGramOtherCategoryEntry: ItemListNodeEntry {
         switch self {
         case .localPremium: return 0
         case .localPremiumInfo: return 1
+        case .chatsLink: return 8
+        case .appearanceLink: return 9
         case .generalLink: return 10
-        case .powerSavingLink: return 11
-        case .aiAssistantLink: return 12
-        case .badgesLink: return 13
+        case .workLink: return 11
+        case .economyLink: return 12
+        case .smartFeaturesLink: return 13
+        case .powerSavingLink: return 14
+        case .aiAssistantLink: return 15
+        case .badgesLink: return 16
         case .backupHeader: return 20
         case .exportBackup: return 21
         case .importBackup: return 22
@@ -4009,8 +4296,23 @@ private enum FullGramOtherCategoryEntry: ItemListNodeEntry {
             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Локальный Premium", value: value, sectionId: self.section, style: .blocks, updated: args.toggleLocalPremium)
         case let .localPremiumInfo(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
+        case let .chatsLink(title):
+            let icon = FullGramSettingsIcons.bundleGlyph("FullGram/Chats", color: UIColor(rgb: 0x007AFF), side: 20.0, fallbackSystemName: "bubble.left.and.bubble.right.fill") ?? PresentationResourcesSettings.privateChats
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openChats)
+        case let .appearanceLink(title):
+            let icon = FullGramSettingsIcons.symbol("paintbrush.fill", color: UIColor(rgb: 0xAF52DE)) ?? PresentationResourcesSettings.appearance
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openAppearance)
         case let .generalLink(title):
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesSettings.dataAndStorage, title: title, label: "", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openGeneral)
+        case let .workLink(title, value):
+            let icon = FullGramSettingsIcons.symbol("briefcase.fill", color: UIColor(rgb: 0x007AFF)) ?? PresentationResourcesSettings.dataAndStorage
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openWork)
+        case let .economyLink(title, value):
+            let icon = FullGramSettingsIcons.symbol("star.circle.fill", color: UIColor(rgb: 0xFF9500)) ?? PresentationResourcesSettings.stars
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openEconomy)
+        case let .smartFeaturesLink(title, value):
+            let icon = FullGramSettingsIcons.symbol("wand.and.stars", color: UIColor(rgb: 0xAF52DE)) ?? PresentationResourcesSettings.stickers
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openSmartFeatures)
         case let .powerSavingLink(title, value):
             let icon = FullGramSettingsIcons.symbol("bolt.batteryblock.fill", color: UIColor(rgb: 0x34c759)) ?? PresentationResourcesSettings.powerSaving
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openPowerSaving)
@@ -4046,29 +4348,36 @@ func fullGramOtherCategoryController(context: AccountContext) -> ViewController 
     var pushImpl: ((ViewController) -> Void)?
     var presentNativeImpl: ((UIViewController) -> Void)?
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
-    var version = 0
-    let observer = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { _ in
-        version += 1
-        changed.set(version)
+    let version = Atomic<Int>(value: 0)
+    let bump: @Sendable () -> Void = {
+        changed.set(version.modify { $0 + 1 })
     }
-    let backupObserver = NotificationCenter.default.addObserver(forName: FullGramBackup.didRestoreNotification, object: nil, queue: .main) { _ in
-        version += 1
-        changed.set(version)
-    }
-    let aiObserver = NotificationCenter.default.addObserver(forName: FullGramAINotifications.settingsChanged, object: nil, queue: .main) { _ in
-        version += 1
-        changed.set(version)
-    }
-    let badgesObserver = NotificationCenter.default.addObserver(forName: FullGramBadges.didChangeNotification, object: nil, queue: .main) { _ in
-        version += 1
-        changed.set(version)
-    }
+    let observer = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { _ in bump() }
+    let backupObserver = NotificationCenter.default.addObserver(forName: FullGramBackup.didRestoreNotification, object: nil, queue: .main) { _ in bump() }
+    let aiObserver = NotificationCenter.default.addObserver(forName: FullGramAINotifications.settingsChanged, object: nil, queue: .main) { _ in bump() }
+    let badgesObserver = NotificationCenter.default.addObserver(forName: FullGramBadges.didChangeNotification, object: nil, queue: .main) { _ in bump() }
+    let ecoObserver = NotificationCenter.default.addObserver(forName: FullGramEconomy.didChangeNotification, object: nil, queue: .main) { _ in bump() }
     let args = FullGramOtherCategoryArguments(
         toggleLocalPremium: { value in
             FullGramExtras.shared.localPremium = value
         },
+        openChats: {
+            pushImpl?(fullGramChatsCategoryController(context: context))
+        },
+        openAppearance: {
+            pushImpl?(fullGramAppearanceCategoryController(context: context))
+        },
         openGeneral: {
             pushImpl?(fullGramOtherGeneralController(context: context))
+        },
+        openWork: {
+            pushImpl?(fullGramWorkController(context: context))
+        },
+        openEconomy: {
+            pushImpl?(fullGramEconomyHubController(context: context))
+        },
+        openSmartFeatures: {
+            pushImpl?(fullGramSmartFeaturesController(context: context))
         },
         openPowerSaving: {
             pushImpl?(fullGramPowerSavingController(context: context))
@@ -4142,10 +4451,18 @@ func fullGramOtherCategoryController(context: AccountContext) -> ViewController 
         let aiStatus = FullGramAIStore.shared.hasConfiguredKey ? FullGramAIStore.shared.provider.title : "Не настроен"
         let badgesStatus = FullGramBadges.shared.isEnabled ? "\(FullGramBadges.shared.totalCount)" : "Выкл."
         let powerStatus = FullGramPowerSaving.profile().mode.title
+        let ecoStatus = "\(FullGramEconomy.shared.starsBalance) ★"
+        let workCount = FullGramExtras.shared.confirmSendPeerIds.count
+        let workStatus = workCount > 0 ? "\(workCount) чат." : "Открыть"
         var entries: [FullGramOtherCategoryEntry] = [
             .localPremium(FullGramExtras.shared.localPremium),
             .localPremiumInfo("Открывает клиентские возможности Telegram Premium только на этом устройстве (без серверного эмодзи-статуса)."),
-            .generalLink("Основное"),
+            .chatsLink("Чаты"),
+            .appearanceLink("Оформление"),
+            .generalLink("Прочее"),
+            .workLink("Работа", workStatus),
+            .economyLink("Кошелёк Gram, Звёзды и Fragment", ecoStatus),
+            .smartFeaturesLink("10 умных функций FullGram", "10"),
             .powerSavingLink("Энергосбережение", powerStatus),
             .aiAssistantLink("ИИ Ассистент и свой агент", aiStatus)
         ]
@@ -4159,7 +4476,7 @@ func fullGramOtherCategoryController(context: AccountContext) -> ViewController 
             .backupInfo("Сохраняет в один файл .fullgram все переключатели, белый список Анти-скама, пресеты Микшера, шрифты, темы и установленные плагины.")
         ])
         let data = ItemListPresentationData(presentationData)
-        let state = ItemListControllerState(presentationData: data, title: .text("Прочее"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
+        let state = ItemListControllerState(presentationData: data, title: .text("Основное"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
         let listState = ItemListNodeState(presentationData: data, entries: entries, style: .blocks, animateChanges: false)
         return (state, (listState, args))
     }
@@ -4168,6 +4485,7 @@ func fullGramOtherCategoryController(context: AccountContext) -> ViewController 
         NotificationCenter.default.removeObserver(backupObserver)
         NotificationCenter.default.removeObserver(aiObserver)
         NotificationCenter.default.removeObserver(badgesObserver)
+        NotificationCenter.default.removeObserver(ecoObserver)
     }
     let controller = ItemListController(context: context, state: signal)
     pushImpl = { [weak controller] c in controller?.push(c) }
@@ -4189,6 +4507,7 @@ private enum FullGramOtherGeneralToggle: Int32, CaseIterable {
     case localFreeTranscription = 11
     case videoSubtitles = 12
     case autoCleanTempCaches = 13
+    case autoResponderHomeNotify = 14
 
     var title: String {
         switch self {
@@ -4205,6 +4524,7 @@ private enum FullGramOtherGeneralToggle: Int32, CaseIterable {
         case .localFreeTranscription: return "Бесплатная расшифровка голосовых и кружков"
         case .videoSubtitles: return "Субтитры для кружков и видео"
         case .autoCleanTempCaches: return "Автоочистка временных кэшей (оптимизация)"
+        case .autoResponderHomeNotify: return "Уведомление на главный экран от авто-ответчика"
         }
     }
 }
@@ -4268,11 +4588,12 @@ private enum FullGramOtherGeneralEntry: ItemListNodeEntry {
 func fullGramOtherGeneralController(context: AccountContext) -> ViewController {
     var presentImpl: ((UIViewController) -> Void)?
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
-    var version = 0
-    let observer = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { _ in
-        version += 1
-        changed.set(version)
+    let version = Atomic<Int>(value: 0)
+    let bump: @Sendable () -> Void = {
+        changed.set(version.modify { $0 + 1 })
     }
+    let observer = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { _ in bump() }
+    let arObserver = NotificationCenter.default.addObserver(forName: FullGramAutoResponderSettings.didChangeNotification, object: nil, queue: .main) { _ in bump() }
     let args = FullGramOtherGeneralArguments(
         toggle: { opt, value in
             switch opt {
@@ -4293,6 +4614,8 @@ func fullGramOtherGeneralController(context: AccountContext) -> ViewController {
                 if value {
                     let _ = FullGramTransferQueue.shared.purgeStaleTemporaryFiles()
                 }
+            case .autoResponderHomeNotify:
+                FullGramAutoResponderSettings.shared.notifyOnHomeScreen = value
             }
         },
         pickDownloadBoostMultiplier: {
@@ -4329,9 +4652,10 @@ func fullGramOtherGeneralController(context: AccountContext) -> ViewController {
             (.keepScreenOnInVoice, extras.keepScreenOnInVoice),
             (.localFreeTranscription, extras.localFreeTranscription),
             (.videoSubtitles, extras.videoSubtitlesEnabled),
-            (.autoCleanTempCaches, extras.autoCleanTempCaches)
+            (.autoCleanTempCaches, extras.autoCleanTempCaches),
+            (.autoResponderHomeNotify, FullGramAutoResponderSettings.shared.notifyOnHomeScreen)
         ]
-        var entries: [FullGramOtherGeneralEntry] = [.header("ОСНОВНОЕ")]
+        var entries: [FullGramOtherGeneralEntry] = [.header("ПРОЧЕЕ")]
         for (opt, val) in values {
             entries.append(.toggle(opt, val))
         }
@@ -4339,14 +4663,15 @@ func fullGramOtherGeneralController(context: AccountContext) -> ViewController {
         entries.append(.boostToggle(extras.downloadBoost))
         let multLabel = extras.downloadBoost ? "x\(extras.downloadBoostMultiplier)" : "Выкл (x\(extras.downloadBoostMultiplier))"
         entries.append(.boostMultiplier(multLabel))
-        entries.append(.info("Переключатель «не гасить экран в голосовых и кружках» отключает датчик приближения при прослушивании.\n\n«Улучшение загрузки» увеличивает пул параллельных соединений до DC и CDN с выбранным множителем (x2–x8), распределяет части равномерно по сокетам и ускоряет загрузку крупных файлов."))
+        entries.append(.info("Переключатель «не гасить экран в голосовых и кружках» отключает датчик приближения при прослушивании.\n\n«Уведомление на главный экран от авто-ответчика» присылает локальное уведомление каждый раз, когда авто-ответчик отправляет ответ собеседнику."))
         let data = ItemListPresentationData(presentationData)
-        let state = ItemListControllerState(presentationData: data, title: .text("Основное"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
+        let state = ItemListControllerState(presentationData: data, title: .text("Прочее"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
         let listState = ItemListNodeState(presentationData: data, entries: entries, style: .blocks, animateChanges: false)
         return (state, (listState, args))
     }
     |> afterDisposed {
         NotificationCenter.default.removeObserver(observer)
+        NotificationCenter.default.removeObserver(arObserver)
     }
     let controller = ItemListController(context: context, state: signal)
     presentImpl = { [weak controller] vc in
@@ -4576,6 +4901,7 @@ private final class FullGramAutoResponderArguments {
     let editCustomText: () -> Void
     let selectCooldown: () -> Void
     let toggleGroupsMention: (Bool) -> Void
+    let toggleHomeNotification: (Bool) -> Void
     let resetCooldowns: () -> Void
 
     init(
@@ -4583,12 +4909,14 @@ private final class FullGramAutoResponderArguments {
         editCustomText: @escaping () -> Void,
         selectCooldown: @escaping () -> Void,
         toggleGroupsMention: @escaping (Bool) -> Void,
+        toggleHomeNotification: @escaping (Bool) -> Void,
         resetCooldowns: @escaping () -> Void
     ) {
         self.selectMode = selectMode
         self.editCustomText = editCustomText
         self.selectCooldown = selectCooldown
         self.toggleGroupsMention = toggleGroupsMention
+        self.toggleHomeNotification = toggleHomeNotification
         self.resetCooldowns = resetCooldowns
     }
 }
@@ -4609,6 +4937,7 @@ private enum FullGramAutoResponderEntry: ItemListNodeEntry {
     case rulesHeader(String)
     case cooldown(String, String)
     case groupsMention(String, Bool)
+    case homeNotification(String, Bool)
     case resetCooldowns(String)
     case statsFooter(String)
 
@@ -4616,7 +4945,7 @@ private enum FullGramAutoResponderEntry: ItemListNodeEntry {
         switch self {
         case .modeHeader, .modeOption, .modeFooter: return FullGramAutoResponderSection.mode.rawValue
         case .templateHeader, .editCustomText, .previewText: return FullGramAutoResponderSection.template.rawValue
-        case .rulesHeader, .cooldown, .groupsMention, .resetCooldowns, .statsFooter: return FullGramAutoResponderSection.rules.rawValue
+        case .rulesHeader, .cooldown, .groupsMention, .homeNotification, .resetCooldowns, .statsFooter: return FullGramAutoResponderSection.rules.rawValue
         }
     }
 
@@ -4631,7 +4960,8 @@ private enum FullGramAutoResponderEntry: ItemListNodeEntry {
         case .rulesHeader: return 50
         case .cooldown: return 51
         case .groupsMention: return 52
-        case .resetCooldowns: return 53
+        case .homeNotification: return 53
+        case .resetCooldowns: return 54
         case .statsFooter: return 60
         }
     }
@@ -4663,6 +4993,8 @@ private enum FullGramAutoResponderEntry: ItemListNodeEntry {
             return ItemListDisclosureItem(presentationData: presentationData, title: title, label: label, sectionId: self.section, style: .blocks, action: args.selectCooldown)
         case let .groupsMention(title, value):
             return ItemListSwitchItem(presentationData: presentationData, title: title, value: value, sectionId: self.section, style: .blocks, updated: args.toggleGroupsMention)
+        case let .homeNotification(title, value):
+            return ItemListSwitchItem(presentationData: presentationData, title: title, value: value, sectionId: self.section, style: .blocks, updated: args.toggleHomeNotification)
         case let .resetCooldowns(title):
             return ItemListActionItem(presentationData: presentationData, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.resetCooldowns)
         case let .statsFooter(text):
@@ -4673,10 +5005,9 @@ private enum FullGramAutoResponderEntry: ItemListNodeEntry {
 
 func fullGramAutoResponderController(context: AccountContext) -> ViewController {
     let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
-    var tick = 0
+    let tick = Atomic<Int>(value: 0)
     let bump: () -> Void = {
-        tick += 1
-        refresh.set(tick)
+        refresh.set(tick.modify { $0 + 1 })
     }
 
     var presentUIKitImpl: ((UIViewController) -> Void)?
@@ -4728,6 +5059,10 @@ func fullGramAutoResponderController(context: AccountContext) -> ViewController 
             FullGramAutoResponderSettings.shared.replyInGroupsOnMention = val
             bump()
         },
+        toggleHomeNotification: { val in
+            FullGramAutoResponderSettings.shared.notifyOnHomeScreen = val
+            bump()
+        },
         resetCooldowns: {
             FullGramAutoResponderSettings.shared.resetCooldowns()
             bump()
@@ -4765,6 +5100,7 @@ func fullGramAutoResponderController(context: AccountContext) -> ViewController 
         entries.append(.rulesHeader("ПРАВИЛА И ЗАЩИТА ОТ СПАМА"))
         entries.append(.cooldown("Пауза для одного собеседника", cooldownLabel))
         entries.append(.groupsMention("Отвечать в группах при упоминании (@тег / реплай)", s.replyInGroupsOnMention))
+        entries.append(.homeNotification("Уведомление на главный экран при ответе", s.notifyOnHomeScreen))
         entries.append(.resetCooldowns("Сбросить таймеры ответов сейчас"))
         entries.append(.statsFooter("Всего отправлено авто-ответов за всё время: \(s.totalRepliesSent)."))
 

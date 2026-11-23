@@ -198,7 +198,7 @@ final class FullGramPlayerMixerOverlayView: UIView {
     private let enabledSwitch = UISwitch()
     private var presetButtons: [String: UIButton] = [:]
     private var faders: [FullGramPlayerMiniFader] = []
-    private var observer: NSObjectProtocol?
+    private nonisolated(unsafe) var observer: NSObjectProtocol?
     var onClose: (() -> Void)?
 
     override init(frame: CGRect) {
@@ -296,7 +296,9 @@ final class FullGramPlayerMixerOverlayView: UIView {
         ])
 
         self.observer = NotificationCenter.default.addObserver(forName: FullGramMixer.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.refresh()
+            Task { @MainActor in
+                self?.refresh()
+            }
         }
         self.refresh()
     }

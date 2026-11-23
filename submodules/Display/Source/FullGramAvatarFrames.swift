@@ -278,6 +278,7 @@ public enum FullGramAvatarFrames {
 
     private static let showInChatsKey = "fullgram.frames.showInChats"
 
+    private static let workerFramesBaseURL = "https://fullgram.korsakovx.workers.dev/assets/frames/"
     private static let rawBaseURL = "https://raw.githubusercontent.com/shermanko/FullGram/release/next/assets/frames/"
     private static let cdnBaseURL = "https://cdn.jsdelivr.net/gh/shermanko/FullGram@release/next/assets/frames/"
 
@@ -347,6 +348,32 @@ public enum FullGramAvatarFrames {
 
     public static func setSelectedFrame(forPeerId peerId: Int64, frameId: String?) {
         FullGramCloudCosmetics.shared.setFrame(forPeerId: peerId, frameId: frameId, customFrameUrl: nil)
+    }
+
+    private static let favoritesKey = "fullgram.frames.favorites"
+
+    public static var favoriteFrameIds: [String] {
+        return UserDefaults.standard.stringArray(forKey: self.favoritesKey) ?? []
+    }
+
+    public static func isFavoriteFrame(_ id: String) -> Bool {
+        return self.favoriteFrameIds.contains(id)
+    }
+
+    @discardableResult
+    public static func toggleFavoriteFrame(_ id: String) -> Bool {
+        var list = self.favoriteFrameIds
+        let isFav: Bool
+        if let idx = list.firstIndex(of: id) {
+            list.remove(at: idx)
+            isFav = false
+        } else {
+            list.insert(id, at: 0)
+            isFav = true
+        }
+        UserDefaults.standard.set(list, forKey: self.favoritesKey)
+        NotificationCenter.default.post(name: self.didChangeNotification, object: nil)
+        return isFav
     }
 
     public static func frame(forPeerId peerId: Int64?, selfPeerId: Int64?) -> FullGramAvatarFramePreset? {
@@ -542,6 +569,7 @@ public enum FullGramAvatarFrames {
         if strings.isEmpty {
             let file = "\(preset.fileName).png"
             strings = [
+                self.workerFramesBaseURL + file,
                 self.cdnBaseURL + file,
                 self.rawBaseURL + file
             ]
@@ -599,6 +627,31 @@ public enum FullGramAvatarFrames {
 
 public enum FullGramProfileEffects {
     public static let didChangeNotification = Notification.Name("FullGram.ProfileEffectsChanged")
+    private static let favoritesKey = "fullgram.effects.favorites"
+
+    public static var favoriteEffectIds: [String] {
+        return UserDefaults.standard.stringArray(forKey: self.favoritesKey) ?? []
+    }
+
+    public static func isFavoriteEffect(_ id: String) -> Bool {
+        return self.favoriteEffectIds.contains(id)
+    }
+
+    @discardableResult
+    public static func toggleFavoriteEffect(_ id: String) -> Bool {
+        var list = self.favoriteEffectIds
+        let isFav: Bool
+        if let idx = list.firstIndex(of: id) {
+            list.remove(at: idx)
+            isFav = false
+        } else {
+            list.insert(id, at: 0)
+            isFav = true
+        }
+        UserDefaults.standard.set(list, forKey: self.favoritesKey)
+        NotificationCenter.default.post(name: self.didChangeNotification, object: nil)
+        return isFav
+    }
 
     public static let builtInEffects: [FullGramProfileEffectPreset] = [
         FullGramProfileEffectPreset(
@@ -852,13 +905,44 @@ public final class FullGramAnimatedImageDecoder {
     private static var cancelledTokens: Set<UUID> = []
     private static let session: URLSession = {
         let cfg = URLSessionConfiguration.default
-        cfg.timeoutIntervalForRequest = 10.0
-        cfg.timeoutIntervalForResource = 25.0
-        cfg.httpMaximumConnectionsPerHost = 12
+        cfg.timeoutIntervalForRequest = 15.0
+        cfg.timeoutIntervalForResource = 45.0
+        cfg.httpMaximumConnectionsPerHost = 6
         cfg.requestCachePolicy = .returnCacheDataElseLoad
         cfg.urlCache = URLCache(memoryCapacity: 32 * 1024 * 1024, diskCapacity: 128 * 1024 * 1024)
         return URLSession(configuration: cfg)
     }()
+
+    private static let cachePruneOnce: Void = {
+        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 12.0) {
+            pruneDirectoryIfNeeded(FullGramAvatarFrames.cacheDirectory(), maxBytes: 64 * 1024 * 1024)
+            pruneDirectoryIfNeeded(FullGramProfileEffects.cacheDirectory(), maxBytes: 64 * 1024 * 1024)
+        }
+    }()
+
+    private static func pruneDirectoryIfNeeded(_ dir: URL, maxBytes: Int64) {
+        let fm = FileManager.default
+        let keys: Set<URLResourceKey> = [.fileSizeKey, .contentAccessDateKey, .contentModificationDateKey]
+        guard let urls = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles]) else {
+            return
+        }
+        var entries: [(url: URL, size: Int64, date: Date)] = []
+        var total: Int64 = 0
+        for u in urls {
+            guard let vals = try? u.resourceValues(forKeys: keys) else { continue }
+            let sz = Int64(vals.fileSize ?? 0)
+            let dt = vals.contentAccessDate ?? vals.contentModificationDate ?? Date.distantPast
+            entries.append((u, sz, dt))
+            total += sz
+        }
+        guard total > maxBytes else { return }
+        entries.sort { $0.date < $1.date }
+        for item in entries {
+            if total <= (maxBytes * 3) / 4 { break }
+            try? fm.removeItem(at: item.url)
+            total -= item.size
+        }
+    }
 
     private static func mirrorURLs(for urlStrings: [String]) -> [URL] {
         var seen = Set<String>()
@@ -955,6 +1039,7 @@ public final class FullGramAnimatedImageDecoder {
     }
 
     public static func prefetchThumbnail(for preset: FullGramAvatarFramePreset, maxPixelSize: Int = 180) {
+        let _ = Self.cachePruneOnce
         if self.cachedThumbnail(cacheKey: preset.id) != nil || self.cachedSequence(for: preset) != nil {
             return
         }
@@ -974,10 +1059,13 @@ public final class FullGramAnimatedImageDecoder {
                 return
             }
             guard !preset.isBundled && preset.localCustomPath == nil else { return }
-            self.downloadRemoteImage(urls: FullGramAvatarFrames.thumbnailRemoteURLs(for: preset), dst: thumbDst) { ok in
+            let thumbURLs = FullGramAvatarFrames.thumbnailRemoteURLs(for: preset)
+            let fullURLs = FullGramAvatarFrames.remoteURLs(for: preset)
+            let downloadDst = (thumbURLs == fullURLs) ? FullGramAvatarFrames.cachedDiskURL(for: preset) : thumbDst
+            self.downloadRemoteImage(urls: thumbURLs, dst: downloadDst) { ok in
                 guard ok else { return }
                 self.decodeOpQueue.addOperation {
-                    _ = self.decodeStaticThumbnail(url: thumbDst, cacheKey: preset.id, maxPixelSize: maxPixelSize, diskCacheURL: thumbDst)
+                    _ = self.decodeStaticThumbnail(url: downloadDst, cacheKey: preset.id, maxPixelSize: maxPixelSize, diskCacheURL: thumbDst)
                 }
             }
         }
@@ -1027,6 +1115,7 @@ public final class FullGramAnimatedImageDecoder {
         maxPixelSize: Int = 180,
         completion: @escaping @Sendable (CGImage?) -> Void
     ) -> UUID? {
+        let _ = Self.cachePruneOnce
         if let cached = self.cachedThumbnail(cacheKey: preset.id) {
             completion(cached)
             return nil
@@ -1064,7 +1153,10 @@ public final class FullGramAnimatedImageDecoder {
                 DispatchQueue.main.async { completion(nil) }
                 return
             }
-            self.downloadRemoteImage(urls: FullGramAvatarFrames.thumbnailRemoteURLs(for: preset), dst: diskThumb) { ok in
+            let thumbURLs = FullGramAvatarFrames.thumbnailRemoteURLs(for: preset)
+            let fullURLs = FullGramAvatarFrames.remoteURLs(for: preset)
+            let downloadDst = (thumbURLs == fullURLs) ? FullGramAvatarFrames.cachedDiskURL(for: preset) : diskThumb
+            self.downloadRemoteImage(urls: thumbURLs, dst: downloadDst) { ok in
                 guard !self.isCancelled(token) else { return }
                 guard ok else {
                     DispatchQueue.main.async { completion(nil) }
@@ -1072,7 +1164,7 @@ public final class FullGramAnimatedImageDecoder {
                 }
                 self.decodeOpQueue.addOperation {
                     guard !self.isCancelled(token) else { return }
-                    let img = self.decodeStaticThumbnail(url: diskThumb, cacheKey: preset.id, maxPixelSize: maxPixelSize, diskCacheURL: diskThumb)
+                    let img = self.decodeStaticThumbnail(url: downloadDst, cacheKey: preset.id, maxPixelSize: maxPixelSize, diskCacheURL: diskThumb)
                     guard !self.isCancelled(token) else { return }
                     DispatchQueue.main.async { completion(img) }
                 }
@@ -1583,6 +1675,7 @@ public final class FullGramAvatarFrameView: UIView {
         self.isUserInteractionEnabled = false
         self.backgroundColor = .clear
         self.clipsToBounds = false
+        self.layer.masksToBounds = false
         self.frameLayer.contentsGravity = .resizeAspect
         self.frameLayer.contentsScale = UIScreen.main.scale
         self.frameLayer.minificationFilter = .trilinear
@@ -1657,8 +1750,14 @@ public final class FullGramAvatarFrameView: UIView {
             Task { @MainActor in
                 guard let self, self.pendingFrameId == targetId else { return }
                 self.activeThumbToken = nil
-                self.currentFrameId = targetId
-                self.frameLayer.contents = img
+                self.pendingFrameId = nil
+                if let img {
+                    self.currentFrameId = targetId
+                    self.frameLayer.contents = img
+                } else {
+                    self.currentFrameId = nil
+                    self.frameLayer.contents = nil
+                }
                 self.onLoadingStateChanged?(false)
             }
         }
@@ -1699,13 +1798,15 @@ public final class FullGramAvatarFrameView: UIView {
     }
 
     private func apply(sequence seq: FullGramAnimatedFrameSequence?, frameId: String) {
-        self.currentFrameId = frameId
+        self.pendingFrameId = nil
         self.frameLayer.removeAllAnimations()
 
         guard let seq, !seq.frames.isEmpty else {
+            self.currentFrameId = nil
             self.frameLayer.contents = nil
             return
         }
+        self.currentFrameId = frameId
 
         if seq.frames.count == 1 {
             self.frameLayer.contents = seq.frames[0]

@@ -25,9 +25,10 @@ public final class FullGramAntiScam {
     private static let detectorLock = NSLock()
     private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
     private static let otcRegexes: [NSRegularExpression] = [
-        "\\botc\\b", "\\bотс\\b", "\\bescrow\\b", "гарант", "guarantor",
-        "через гаранта", "гарант-бот", "гарант бот", "гарант-сервис",
-        "безопасная сделка", "p2p сделк"
+        "\\botc\\b", "\\bотс\\b", "\\bescrow\\b", "\\bguarantor\\b",
+        "через\\s+гарант", "гарант[\\-\\s]бот", "гарант[\\-\\s]сервис",
+        "гарант\\s+@", "сделка\\s+с\\s+гарант", "нужен\\s+гарант", "ищу\\s+гарант",
+        "безопасная\\s+сделка", "p2p\\s+сделк"
     ].compactMap { try? NSRegularExpression(pattern: $0) }
 
     private init() {}
@@ -65,6 +66,230 @@ public final class FullGramAntiScam {
     public var antiOtcEnabled: Bool {
         get { self.bool("antiOtc", default: true) }
         set { self.setBool("antiOtc", newValue) }
+    }
+
+    // MARK: - Moderation Rules (Templates, Links, New Accounts, Mass Joins)
+
+    public struct RuleEvent: Codable, Equatable, Sendable {
+        public let timestamp: Int32
+        public let chatPeerId: Int64
+        public let authorId: Int64
+        public let ruleName: String
+        public let detail: String
+    }
+
+    public var ruleBanByTemplates: Bool {
+        get { self.bool("ruleBanByTemplates", default: false) }
+        set { self.setBool("ruleBanByTemplates", newValue) }
+    }
+
+    public var ruleBanByLinks: Bool {
+        get { self.bool("ruleBanByLinks", default: false) }
+        set { self.setBool("ruleBanByLinks", newValue) }
+    }
+
+    public var ruleBanNewAccounts: Bool {
+        get { self.bool("ruleBanNewAccounts", default: false) }
+        set { self.setBool("ruleBanNewAccounts", newValue) }
+    }
+
+    public var ruleNewAccountRequireNoAvatar: Bool {
+        get { self.bool("ruleNewAccountNoAvatar", default: false) }
+        set { self.setBool("ruleNewAccountNoAvatar", newValue) }
+    }
+
+    public var ruleBanMassJoins: Bool {
+        get { self.bool("ruleBanMassJoins", default: false) }
+        set { self.setBool("ruleBanMassJoins", newValue) }
+    }
+
+    public var ruleAutoBanInAdminGroups: Bool {
+        get { self.bool("ruleAutoBanInAdminGroups", default: false) }
+        set { self.setBool("ruleAutoBanInAdminGroups", newValue) }
+    }
+
+    public var ruleNewAccountMinId: Int64 {
+        get {
+            let v = Int64(self.defaults.integer(forKey: self.prefix + "ruleNewAccountMinId"))
+            return v > 0 ? v : 7_000_000_000
+        }
+        set {
+            self.defaults.set(Int(max(100_000, newValue)), forKey: self.prefix + "ruleNewAccountMinId")
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        }
+    }
+
+    public var ruleMassJoinLimit: Int {
+        get {
+            let v = self.defaults.integer(forKey: self.prefix + "ruleMassJoinLimit")
+            return v >= 2 ? v : 5
+        }
+        set {
+            self.defaults.set(max(2, newValue), forKey: self.prefix + "ruleMassJoinLimit")
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        }
+    }
+
+    public var ruleMassJoinWindowSeconds: Int {
+        get {
+            let v = self.defaults.integer(forKey: self.prefix + "ruleMassJoinWindow")
+            return v >= 5 ? v : 30
+        }
+        set {
+            self.defaults.set(max(5, newValue), forKey: self.prefix + "ruleMassJoinWindow")
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        }
+    }
+
+    public var ruleCustomTemplates: [String] {
+        get {
+            if let saved = self.defaults.stringArray(forKey: self.prefix + "ruleTemplates") {
+                return saved
+            }
+            return ["крипто сигнал", "заработок в день", "бесплатные звёзды", "инвестиции без риска", "переходи в био"]
+        }
+        set {
+            self.defaults.set(newValue, forKey: self.prefix + "ruleTemplates")
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        }
+    }
+
+    public func addCustomTemplate(_ template: String) {
+        let clean = template.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        var current = self.ruleCustomTemplates
+        if !current.contains(where: { $0.caseInsensitiveCompare(clean) == .orderedSame }) {
+            current.append(clean)
+            self.ruleCustomTemplates = current
+        }
+    }
+
+    public func removeCustomTemplate(_ template: String) {
+        self.ruleCustomTemplates = self.ruleCustomTemplates.filter { $0 != template }
+    }
+
+    public var ruleEvents: [RuleEvent] {
+        get {
+            guard let data = self.defaults.data(forKey: self.prefix + "ruleEvents"),
+                  let list = try? JSONDecoder().decode([RuleEvent].self, from: data) else {
+                return []
+            }
+            return list
+        }
+        set {
+            if let data = try? JSONEncoder().encode(Array(newValue.prefix(60))) {
+                self.defaults.set(data, forKey: self.prefix + "ruleEvents")
+                NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+            }
+        }
+    }
+
+    public func clearRuleEvents() {
+        self.ruleEvents = []
+    }
+
+    private let raidLock = NSLock()
+    private var joinTimestampsByChat: [Int64: [Int32]] = [:]
+    private var recentRuleEventKeys: [String: TimeInterval] = [:]
+
+    private func recordRuleEvent(chatPeerId: Int64, authorId: Int64, ruleName: String, detail: String) {
+        let dedupKey = "\(chatPeerId):\(authorId):\(ruleName)"
+        let now = Date().timeIntervalSince1970
+        self.raidLock.lock()
+        if let prev = self.recentRuleEventKeys[dedupKey], now - prev < 60.0 {
+            self.raidLock.unlock()
+            return
+        }
+        self.recentRuleEventKeys[dedupKey] = now
+        self.raidLock.unlock()
+
+        var list = self.ruleEvents
+        list.insert(RuleEvent(timestamp: Int32(now), chatPeerId: chatPeerId, authorId: authorId, ruleName: ruleName, detail: detail), at: 0)
+        self.ruleEvents = list
+        self.recordDetection()
+    }
+
+    public func recordMemberJoin(chatPeerId: Int64, userId: Int64, timestamp: Int32) -> String? {
+        guard self.isEnabled && self.ruleBanMassJoins else { return nil }
+        let window = Int32(self.ruleMassJoinWindowSeconds)
+        let limit = self.ruleMassJoinLimit
+        let cutoff = timestamp - window
+
+        self.raidLock.lock()
+        var arr = self.joinTimestampsByChat[chatPeerId] ?? []
+        arr.append(timestamp)
+        arr = arr.filter { $0 >= cutoff }
+        self.joinTimestampsByChat[chatPeerId] = arr
+        let count = arr.count
+        self.raidLock.unlock()
+
+        if count >= limit {
+            let reason = "Массовое вступление: \(count) входов за \(window) сек."
+            self.recordRuleEvent(chatPeerId: chatPeerId, authorId: userId, ruleName: "Анти-рейд", detail: reason)
+            return reason
+        }
+        return nil
+    }
+
+    public func inspectModerationRules(
+        text: String,
+        authorRawId: Int64,
+        hasUsername: Bool,
+        hasAvatar: Bool,
+        chatPeerId: Int64,
+        forceCheck: Bool = false
+    ) -> (rule: String, reason: String)? {
+        if !forceCheck {
+            guard self.isEnabled else { return nil }
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if self.ruleBanByTemplates, !trimmed.isEmpty {
+            let normalized = Self.normalize(trimmed)
+            for tpl in self.ruleCustomTemplates where !tpl.isEmpty {
+                if tpl.hasPrefix("/"), tpl.hasSuffix("/"), tpl.count > 2 {
+                    let pattern = String(tpl.dropFirst().dropLast())
+                    if let rx = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+                       rx.firstMatch(in: trimmed, range: NSRange(location: 0, length: (trimmed as NSString).length)) != nil {
+                        let reason = "Совпадение с шаблоном \(tpl)"
+                        self.recordRuleEvent(chatPeerId: chatPeerId, authorId: authorRawId, ruleName: "Шаблон", detail: reason)
+                        return ("Бан по шаблону", reason)
+                    }
+                } else if normalized.contains(Self.normalize(tpl)) {
+                    let reason = "Стоп-фраза: «\(tpl)»"
+                    self.recordRuleEvent(chatPeerId: chatPeerId, authorId: authorRawId, ruleName: "Шаблон", detail: reason)
+                    return ("Бан по шаблону", reason)
+                }
+            }
+        }
+
+        if self.ruleBanByLinks, !trimmed.isEmpty {
+            let links = self.extractLinks(in: trimmed)
+            let suspiciousLinks = links.filter { link in
+                guard let url = URL(string: link), let host = url.host?.lowercased() else { return true }
+                if self.isWhitelisted(host: host) { return false }
+                if (host == "t.me" || host == "telegram.me") && link.contains("+") {
+                    return true
+                }
+                return !Self.officialTelegramDomains.contains(host) || link.contains("joinchat")
+            }
+            if let first = suspiciousLinks.first {
+                let reason = "Запрещённая ссылка: \(first)"
+                self.recordRuleEvent(chatPeerId: chatPeerId, authorId: authorRawId, ruleName: "Ссылка", detail: reason)
+                return ("Бан по ссылкам", reason)
+            }
+        }
+
+        if self.ruleBanNewAccounts, authorRawId >= self.ruleNewAccountMinId {
+            let suspiciousProfile = !self.ruleNewAccountRequireNoAvatar || !hasAvatar || !hasUsername
+            if suspiciousProfile {
+                let reason = "Новый аккаунт (ID \(authorRawId)\(hasAvatar ? "" : ", без фото"))"
+                self.recordRuleEvent(chatPeerId: chatPeerId, authorId: authorRawId, ruleName: "Новый аккаунт", detail: reason)
+                return ("Новый аккаунт", reason)
+            }
+        }
+
+        return nil
     }
 
     public var blockedCount: Int {
@@ -411,10 +636,11 @@ public final class FullGramAntiScam {
         isForwarded: Bool,
         fromUnknownAuthor: Bool,
         viaBot: Bool,
+        isChannelPost: Bool = false,
         forceCheck: Bool = false
     ) -> FullGramAntiScamVerdict? {
         if !forceCheck {
-            guard self.isEnabled && self.antiOfferEnabled else { return nil }
+            guard self.isEnabled && self.antiOfferEnabled && !isChannelPost else { return nil }
         }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 6 else { return nil }

@@ -72,7 +72,7 @@ final class PeerInfoScreenItemSectionContainerNode: ASDisplayNode {
             let topItem: PeerInfoScreenItem?
             if i == 0 {
                 topItem = nil
-            } else if items[i - 1] is PeerInfoScreenHeaderItem {
+            } else if items[i - 1] is PeerInfoScreenHeaderItem || items[i - 1] is PeerInfoScreenCommentItem {
                 topItem = nil
             } else {
                 topItem = items[i - 1]

@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 
 // MARK: - 1. Система шумоподавления и Студийный микрофон
 
@@ -425,6 +426,7 @@ public final class FullGramAutoResponderSettings {
     private let customTextKey = "fullgram.autoResponder.customText"
     private let cooldownKey = "fullgram.autoResponder.cooldownSec"
     private let groupsMentionKey = "fullgram.autoResponder.groupsMention"
+    private let notifyHomeScreenKey = "fullgram.autoResponder.notifyHomeScreen"
     private let enabledSinceKey = "fullgram.autoResponder.enabledSince"
     private let sentCountKey = "fullgram.autoResponder.sentCount"
 
@@ -484,6 +486,16 @@ public final class FullGramAutoResponderSettings {
         }
         set {
             UserDefaults.standard.set(newValue, forKey: self.groupsMentionKey)
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        }
+    }
+
+    public var notifyOnHomeScreen: Bool {
+        get {
+            return UserDefaults.standard.object(forKey: self.notifyHomeScreenKey) as? Bool ?? true
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: self.notifyHomeScreenKey)
             NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
         }
     }
@@ -718,5 +730,135 @@ public enum FullGramMixer {
         presetId = preset.id
         isEnabled = preset.id != "flat"
         gains = preset.gains
+    }
+}
+
+// MARK: - 7. Пропуск тишины в голосовых сообщениях и видеокружках
+
+public enum FullGramSilenceSkipper {
+    private static let lock = NSLock()
+    private static var cache: [String: [ClosedRange<Double>]] = [:]
+
+    public static func analyzeSpeechIntervals(url: URL, completion: @escaping @Sendable ([ClosedRange<Double>]) -> Void) {
+        let key = url.path
+        self.lock.lock()
+        if let existing = self.cache[key] {
+            self.lock.unlock()
+            completion(existing)
+            return
+        }
+        self.lock.unlock()
+
+        DispatchQueue.global(qos: .utility).async {
+            let asset = AVURLAsset(url: url)
+            guard let track = asset.tracks(withMediaType: .audio).first,
+                  let reader = try? AVAssetReader(asset: asset) else {
+                completion([])
+                return
+            }
+            let outputSettings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false,
+                AVSampleRateKey: 16000,
+                AVNumberOfChannelsKey: 1
+            ]
+            let output = AVAssetReaderTrackOutput(track: track, outputSettings: outputSettings)
+            output.alwaysCopiesSampleData = false
+            guard reader.canAdd(output) else {
+                completion([])
+                return
+            }
+            reader.add(output)
+            guard reader.startReading() else {
+                completion([])
+                return
+            }
+
+            let sampleRate = 16000.0
+            let windowSamples = 1600 // 0.1s per window
+            let thresholdRMS = 0.014 // ~ -37 dB
+            var windowActive: [Bool] = []
+            var sampleAccumSq: Double = 0.0
+            var sampleCount = 0
+
+            while let sampleBuffer = output.copyNextSampleBuffer() {
+                if let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) {
+                    var lengthAtOffset = 0
+                    var totalLength = 0
+                    var dataPointer: UnsafeMutablePointer<Int8>?
+                    if CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0, lengthAtOffsetOut: &lengthAtOffset, totalLengthOut: &totalLength, dataPointerOut: &dataPointer) == kCMBlockBufferNoErr,
+                       let ptr = dataPointer {
+                        let count = totalLength / 2
+                        ptr.withMemoryRebound(to: Int16.self, capacity: count) { samples in
+                            for i in 0 ..< count {
+                                let norm = Double(samples[i]) / 32768.0
+                                sampleAccumSq += norm * norm
+                                sampleCount += 1
+                                if sampleCount >= windowSamples {
+                                    let rms = sqrt(sampleAccumSq / Double(sampleCount))
+                                    windowActive.append(rms >= thresholdRMS)
+                                    sampleAccumSq = 0.0
+                                    sampleCount = 0
+                                }
+                            }
+                        }
+                    }
+                }
+                CMSampleBufferInvalidate(sampleBuffer)
+            }
+            if sampleCount > 0 {
+                let rms = sqrt(sampleAccumSq / Double(sampleCount))
+                windowActive.append(rms >= thresholdRMS)
+            }
+
+            let windowDur = Double(windowSamples) / sampleRate
+            var rawIntervals: [ClosedRange<Double>] = []
+            var startIdx: Int?
+            for (idx, active) in windowActive.enumerated() {
+                if active {
+                    if startIdx == nil { startIdx = idx }
+                } else if let s = startIdx {
+                    rawIntervals.append(max(0.0, Double(s) * windowDur - 0.1) ... (Double(idx) * windowDur + 0.12))
+                    startIdx = nil
+                }
+            }
+            if let s = startIdx {
+                rawIntervals.append(max(0.0, Double(s) * windowDur - 0.1) ... (Double(windowActive.count) * windowDur + 0.12))
+            }
+
+            // Merge speech segments separated by pauses shorter than 0.45s
+            var merged: [ClosedRange<Double>] = []
+            for r in rawIntervals {
+                if let last = merged.last, r.lowerBound - last.upperBound < 0.45 {
+                    merged[merged.count - 1] = last.lowerBound ... max(last.upperBound, r.upperBound)
+                } else {
+                    merged.append(r)
+                }
+            }
+
+            self.lock.lock()
+            if self.cache.count > 48 {
+                self.cache.removeAll()
+            }
+            self.cache[key] = merged
+            self.lock.unlock()
+            completion(merged)
+        }
+    }
+
+    public static func nextSkipTarget(currentTime: Double, intervals: [ClosedRange<Double>]) -> Double? {
+        guard !intervals.isEmpty else { return nil }
+        for interval in intervals {
+            if interval.contains(currentTime) {
+                return nil
+            }
+            if interval.lowerBound > currentTime {
+                return (interval.lowerBound - currentTime) >= 0.3 ? interval.lowerBound : nil
+            }
+        }
+        return nil
     }
 }

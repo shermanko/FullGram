@@ -134,27 +134,93 @@ public enum FullGramFonts {
         Option(id: "ptmono", title: "PT Mono", postScriptName: "PTMono-Regular", sample: "Привет, Hello 123", author: "ParaType", subtitle: "Строгий русский моноширинный", fileName: "ptmono.ttf", sizeBytes: 185912)
     ]
 
+    public struct CustomFontRecord: Codable, Equatable, Sendable {
+        public let id: String
+        public let title: String
+        public let postScriptName: String
+        public let fileName: String
+        public let sizeBytes: Int
+    }
+
     public static let options: [Option] = builtInOptions + remoteOptions
+    public static var allOptions: [Option] {
+        return self.builtInOptions + self.customOptions + self.remoteOptions
+    }
 
     public static let didChangeNotification = Notification.Name("FullGram.FontChanged")
     public static let didRequestAppRestartNotification = Notification.Name("FullGramDidRequestAppRestartNotification")
 
     private static let reopenFontsAfterRestartKey = "fullgram_reopen_fonts_after_restart"
+    private static let customFontsKey = "fullgram.appearance.customFonts"
+    private static let key = "fullgram.appearance.fontId"
+    private static let psKeyPrefix = "fullgram.appearance.fontPS."
+    private static var _cachedLaunchFontName: String? = nil
+    private static var _didInitLaunchFontName: Bool = false
 
     public static var reopenFontsAfterRestart: Bool {
         get { UserDefaults.standard.bool(forKey: self.reopenFontsAfterRestartKey) }
         set { UserDefaults.standard.set(newValue, forKey: self.reopenFontsAfterRestartKey) }
     }
 
+    public static var customOptions: [Option] {
+        guard let data = UserDefaults.standard.data(forKey: self.customFontsKey),
+              let records = try? JSONDecoder().decode([CustomFontRecord].self, from: data) else {
+            return []
+        }
+        return records.map { rec in
+            Option(
+                id: rec.id,
+                title: rec.title,
+                postScriptName: rec.postScriptName,
+                sample: "Привет, Hello 123",
+                author: "Пользовательский",
+                subtitle: rec.fileName,
+                fileName: "custom/" + rec.fileName,
+                sizeBytes: rec.sizeBytes
+            )
+        }
+    }
+
+    public static func customDirectory() -> URL {
+        let dir = self.cacheDirectory().appendingPathComponent("custom", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir
+    }
+
+    private static func resolveLaunchFontNameLocked() -> String? {
+        let id = UserDefaults.standard.string(forKey: self.key) ?? "system"
+        guard let option = self.allOptions.first(where: { $0.id == id }) else {
+            return nil
+        }
+        let resolvedName: String?
+        if option.isRemote {
+            resolvedName = self.registerFontFileIfNeeded(option: option)
+        } else {
+            resolvedName = option.postScriptName
+        }
+        guard let name = resolvedName, UIFont(name: name, size: 12.0) != nil else {
+            return nil
+        }
+        return name
+    }
+
     public static func reloadActiveFont() {
-        if let option = self.options.first(where: { $0.id == self.selectedId }) {
+        for custom in self.customOptions {
+            _ = self.registerFontFileIfNeeded(option: custom)
+        }
+        if let option = self.allOptions.first(where: { $0.id == self.selectedId }) {
             _ = self.registerFontFileIfNeeded(option: option)
         }
+        let fresh = self.resolveLaunchFontNameLocked()
+        self.lock.lock()
+        self._cachedLaunchFontName = fresh
+        self._didInitLaunchFontName = true
+        self.lock.unlock()
         Font.clearCache()
         NotificationCenter.default.post(name: self.didChangeNotification, object: nil)
     }
-    private static let key = "fullgram.appearance.fontId"
-    private static let psKeyPrefix = "fullgram.appearance.fontPS."
 
     public static var selectedId: String {
         get { return UserDefaults.standard.string(forKey: key) ?? "system" }
@@ -176,6 +242,10 @@ public enum FullGramFonts {
 
     public static func cachedFileURL(for option: Option) -> URL? {
         guard let fileName = option.fileName else { return nil }
+        if fileName.hasPrefix("custom/") {
+            let rel = String(fileName.dropFirst("custom/".count))
+            return self.customDirectory().appendingPathComponent(rel)
+        }
         return cacheDirectory().appendingPathComponent(fileName)
     }
 
@@ -213,8 +283,80 @@ public enum FullGramFonts {
         return psName
     }
 
+    public static func importCustomFont(from sourceURL: URL) -> Result<Option, Error> {
+        let accessed = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if accessed {
+                sourceURL.stopAccessingSecurityScopedResource()
+            }
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: sourceURL)
+        } catch {
+            return .failure(error)
+        }
+        guard data.count > 1024, data.count <= 25_000_000,
+              let provider = CGDataProvider(data: data as CFData),
+              let cgFont = CGFont(provider),
+              let psName = cgFont.postScriptName as String?,
+              !psName.isEmpty else {
+            return .failure(DownloadError.invalidFontFile)
+        }
+        let ext = sourceURL.pathExtension.lowercased() == "otf" ? "otf" : "ttf"
+        let id = "custom_" + UUID().uuidString.prefix(8).lowercased()
+        let fileName = "\(id).\(ext)"
+        let destURL = self.customDirectory().appendingPathComponent(fileName)
+        do {
+            try data.write(to: destURL, options: .atomic)
+        } catch {
+            return .failure(error)
+        }
+        _ = CTFontManagerRegisterGraphicsFont(cgFont, nil)
+        UserDefaults.standard.set(psName, forKey: self.psKeyPrefix + id)
+        self.lock.lock()
+        self.registeredIds.insert(id)
+        self.lock.unlock()
+
+        let baseTitle = sourceURL.deletingPathExtension().lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = baseTitle.isEmpty ? psName : baseTitle
+        var records: [CustomFontRecord] = []
+        if let raw = UserDefaults.standard.data(forKey: self.customFontsKey),
+           let existing = try? JSONDecoder().decode([CustomFontRecord].self, from: raw) {
+            records = existing
+        }
+        records.append(CustomFontRecord(id: id, title: title, postScriptName: psName, fileName: fileName, sizeBytes: data.count))
+        if let encoded = try? JSONEncoder().encode(records) {
+            UserDefaults.standard.set(encoded, forKey: self.customFontsKey)
+        }
+        let opt = Option(id: id, title: title, postScriptName: psName, sample: "Привет, Hello 123", author: "Пользовательский", subtitle: fileName, fileName: "custom/" + fileName, sizeBytes: data.count)
+        NotificationCenter.default.post(name: self.didChangeNotification, object: nil)
+        return .success(opt)
+    }
+
+    public static func deleteCustomFont(id: String) {
+        var records: [CustomFontRecord] = []
+        if let raw = UserDefaults.standard.data(forKey: self.customFontsKey),
+           let existing = try? JSONDecoder().decode([CustomFontRecord].self, from: raw) {
+            records = existing
+        }
+        if let target = records.first(where: { $0.id == id }) {
+            let fileURL = self.customDirectory().appendingPathComponent(target.fileName)
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+        records.removeAll { $0.id == id }
+        if let encoded = try? JSONEncoder().encode(records) {
+            UserDefaults.standard.set(encoded, forKey: self.customFontsKey)
+        }
+        if self.selectedId == id {
+            self.selectAndRestart(optionId: "system")
+        } else {
+            NotificationCenter.default.post(name: self.didChangeNotification, object: nil)
+        }
+    }
+
     public static func selectAndRestart(optionId: String) {
-        if let option = self.options.first(where: { $0.id == optionId }) {
+        if let option = self.allOptions.first(where: { $0.id == optionId }) {
             _ = self.registerFontFileIfNeeded(option: option)
         }
         self.selectedId = optionId
@@ -305,27 +447,26 @@ public enum FullGramFonts {
         }
     }
 
-    /// Шрифты кэшируются в Font, поэтому выбор действует с момента запуска.
-    public static let launchFontName: String? = {
-        let id = UserDefaults.standard.string(forKey: "fullgram.appearance.fontId") ?? "system"
-        guard let option = options.first(where: { $0.id == id }) else {
-            return nil
+    /// Шрифты кэшируются в Font, поэтому обновляются при reloadActiveFont() и перезапуске UI.
+    public static var launchFontName: String? {
+        self.lock.lock()
+        let initialized = self._didInitLaunchFontName
+        let cached = self._cachedLaunchFontName
+        self.lock.unlock()
+        if initialized {
+            return cached
         }
-        let resolvedName: String?
-        if option.isRemote {
-            resolvedName = registerFontFileIfNeeded(option: option)
-        } else {
-            resolvedName = option.postScriptName
-        }
-        guard let name = resolvedName, UIFont(name: name, size: 12.0) != nil else {
-            return nil
-        }
-        return name
-    }()
+        let resolved = self.resolveLaunchFontNameLocked()
+        self.lock.lock()
+        self._cachedLaunchFontName = resolved
+        self._didInitLaunchFontName = true
+        self.lock.unlock()
+        return resolved
+    }
 
     public static var needsRelaunch: Bool {
         let id = selectedId
-        guard let option = options.first(where: { $0.id == id }) else {
+        guard let option = self.allOptions.first(where: { $0.id == id }) else {
             return false
         }
         let current = UserDefaults.standard.string(forKey: psKeyPrefix + option.id) ?? option.postScriptName

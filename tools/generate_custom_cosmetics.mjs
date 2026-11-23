@@ -49,14 +49,181 @@ function makeChunk(type, data) {
 const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 function encodeRawRGBA(width, height, rgba) {
-  const stride = width * 4;
+  const bpp = 4;
+  const stride = width * bpp;
   const raw = Buffer.alloc((stride + 1) * height);
+  const candidates = [
+    new Uint8Array(stride), // 0: None
+    new Uint8Array(stride), // 1: Sub
+    new Uint8Array(stride), // 2: Up
+    new Uint8Array(stride), // 4: Paeth
+  ];
+
   for (let y = 0; y < height; y++) {
-    const rowStart = y * (stride + 1);
-    raw[rowStart] = 0; // filter None (fast & clean)
-    rgba.copy(raw, rowStart + 1, y * stride, (y + 1) * stride);
+    const rowOff = y * stride;
+    const prevOff = (y - 1) * stride;
+    let sad0 = 0, sad1 = 0, sad2 = 0, sad4 = 0;
+
+    for (let x = 0; x < stride; x++) {
+      const cur = rgba[rowOff + x];
+      const left = x >= bpp ? rgba[rowOff + x - bpp] : 0;
+      const up = y > 0 ? rgba[prevOff + x] : 0;
+      const upLeft = (x >= bpp && y > 0) ? rgba[prevOff + x - bpp] : 0;
+
+      const f0 = cur;
+      const f1 = (cur - left) & 0xff;
+      const f2 = (cur - up) & 0xff;
+      const f4 = (cur - paeth(left, up, upLeft)) & 0xff;
+
+      candidates[0][x] = f0;
+      candidates[1][x] = f1;
+      candidates[2][x] = f2;
+      candidates[3][x] = f4;
+
+      sad0 += f0 < 128 ? f0 : 256 - f0;
+      sad1 += f1 < 128 ? f1 : 256 - f1;
+      sad2 += f2 < 128 ? f2 : 256 - f2;
+      sad4 += f4 < 128 ? f4 : 256 - f4;
+    }
+
+    let bestType = 0;
+    let bestBuf = candidates[0];
+    let bestSad = sad0;
+    if (sad1 < bestSad) { bestSad = sad1; bestType = 1; bestBuf = candidates[1]; }
+    if (sad2 < bestSad) { bestSad = sad2; bestType = 2; bestBuf = candidates[2]; }
+    if (sad4 < bestSad) { bestSad = sad4; bestType = 4; bestBuf = candidates[3]; }
+
+    const outRow = y * (stride + 1);
+    raw[outRow] = bestType;
+    raw.set(bestBuf, outRow + 1);
   }
-  return zlib.deflateSync(raw, { level: 6 });
+  return zlib.deflateSync(raw, { level: 9 });
+}
+
+function encodeRawIndexed(width, height, indices) {
+  const raw = Buffer.alloc((width + 1) * height);
+  const candidates = [
+    new Uint8Array(width), // 0: None
+    new Uint8Array(width), // 1: Sub
+    new Uint8Array(width), // 2: Up
+    new Uint8Array(width), // 4: Paeth
+  ];
+
+  for (let y = 0; y < height; y++) {
+    const rowOff = y * width;
+    const prevOff = (y - 1) * width;
+    let sad0 = 0, sad1 = 0, sad2 = 0, sad4 = 0;
+
+    for (let x = 0; x < width; x++) {
+      const cur = indices[rowOff + x];
+      const left = x >= 1 ? indices[rowOff + x - 1] : 0;
+      const up = y > 0 ? indices[prevOff + x] : 0;
+      const upLeft = (x >= 1 && y > 0) ? indices[prevOff + x - 1] : 0;
+
+      const f0 = cur;
+      const f1 = (cur - left) & 0xff;
+      const f2 = (cur - up) & 0xff;
+      const f4 = (cur - paeth(left, up, upLeft)) & 0xff;
+
+      candidates[0][x] = f0;
+      candidates[1][x] = f1;
+      candidates[2][x] = f2;
+      candidates[3][x] = f4;
+
+      sad0 += f0 < 128 ? f0 : 256 - f0;
+      sad1 += f1 < 128 ? f1 : 256 - f1;
+      sad2 += f2 < 128 ? f2 : 256 - f2;
+      sad4 += f4 < 128 ? f4 : 256 - f4;
+    }
+
+    let bestType = 0;
+    let bestBuf = candidates[0];
+    let bestSad = sad0;
+    if (sad1 < bestSad) { bestSad = sad1; bestType = 1; bestBuf = candidates[1]; }
+    if (sad2 < bestSad) { bestSad = sad2; bestType = 2; bestBuf = candidates[2]; }
+    if (sad4 < bestSad) { bestSad = sad4; bestType = 4; bestBuf = candidates[3]; }
+
+    const outRow = y * (width + 1);
+    raw[outRow] = bestType;
+    raw.set(bestBuf, outRow + 1);
+  }
+  return zlib.deflateSync(raw, { level: 9 });
+}
+
+function quantizeFramesToPalette(framesRGBA) {
+  const buckets = new Map();
+  for (const rgba of framesRGBA) {
+    for (let i = 0; i < rgba.length; i += 4) {
+      const a = rgba[i + 3];
+      if (a < 4) continue;
+      const r = rgba[i];
+      const g = rgba[i + 1];
+      const b = rgba[i + 2];
+      const key = ((r >> 3) << 15) | ((g >> 3) << 10) | ((b >> 3) << 5) | (a >> 3);
+      let bkt = buckets.get(key);
+      if (!bkt) {
+        bkt = { count: 0, sr: 0, sg: 0, sb: 0, sa: 0 };
+        buckets.set(key, bkt);
+      }
+      bkt.count++;
+      bkt.sr += r;
+      bkt.sg += g;
+      bkt.sb += b;
+      bkt.sa += a;
+    }
+  }
+
+  const sorted = Array.from(buckets.values()).sort((x, y) => y.count - x.count).slice(0, 255);
+  const palette = [[0, 0, 0, 0]];
+  for (const bkt of sorted) {
+    palette.push([
+      Math.round(bkt.sr / bkt.count),
+      Math.round(bkt.sg / bkt.count),
+      Math.round(bkt.sb / bkt.count),
+      Math.round(bkt.sa / bkt.count),
+    ]);
+  }
+
+  const lookupCache = new Map();
+  const findNearest = (r, g, b, a) => {
+    const key = ((r >> 3) << 15) | ((g >> 3) << 10) | ((b >> 3) << 5) | (a >> 3);
+    const cached = lookupCache.get(key);
+    if (cached !== undefined) return cached;
+    let bestIdx = 1;
+    let bestDist = Infinity;
+    for (let j = 1; j < palette.length; j++) {
+      const p = palette[j];
+      const dr = r - p[0];
+      const dg = g - p[1];
+      const db = b - p[2];
+      const da = a - p[3];
+      const d = dr * dr + dg * dg + db * db + da * da * 2;
+      if (d < bestDist) {
+        bestDist = d;
+        bestIdx = j;
+        if (d === 0) break;
+      }
+    }
+    lookupCache.set(key, bestIdx);
+    return bestIdx;
+  };
+
+  const indexedFrames = framesRGBA.map((rgba) => {
+    const pxCount = rgba.length >> 2;
+    const out = new Uint8Array(pxCount);
+    for (let i = 0; i < pxCount; i++) {
+      const off = i << 2;
+      const a = rgba[off + 3];
+      if (a < 4) {
+        out[i] = 0;
+      } else {
+        out[i] = findNearest(rgba[off], rgba[off + 1], rgba[off + 2], a);
+      }
+    }
+    return out;
+  });
+
+  return { palette, indexedFrames };
 }
 
 function encodePNG(width, height, rgba) {
@@ -78,24 +245,41 @@ function encodePNG(width, height, rgba) {
   ]);
 }
 
-function encodeAPNG(width, height, framesRGBA, delayNum = 80, delayDen = 1000) {
+function encodeAPNG(width, height, framesRGBA, delayNum = 75, delayDen = 1000) {
+  const { palette, indexedFrames } = quantizeFramesToPalette(framesRGBA);
+
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
-  ihdr[8] = 8;
-  ihdr[9] = 6;
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 3; // Indexed-color (PLTE + tRNS)
   ihdr[10] = 0;
   ihdr[11] = 0;
   ihdr[12] = 0;
 
+  const plte = Buffer.alloc(palette.length * 3);
+  const trns = Buffer.alloc(palette.length);
+  for (let i = 0; i < palette.length; i++) {
+    plte[i * 3] = palette[i][0];
+    plte[i * 3 + 1] = palette[i][1];
+    plte[i * 3 + 2] = palette[i][2];
+    trns[i] = palette[i][3];
+  }
+
   const actl = Buffer.alloc(8);
-  actl.writeUInt32BE(framesRGBA.length, 0);
+  actl.writeUInt32BE(indexedFrames.length, 0);
   actl.writeUInt32BE(0, 4); // infinite loop
 
-  const parts = [PNG_SIG, makeChunk("IHDR", ihdr), makeChunk("acTL", actl)];
+  const parts = [
+    PNG_SIG,
+    makeChunk("IHDR", ihdr),
+    makeChunk("PLTE", plte),
+    makeChunk("tRNS", trns),
+    makeChunk("acTL", actl),
+  ];
   let seq = 0;
 
-  for (let i = 0; i < framesRGBA.length; i++) {
+  for (let i = 0; i < indexedFrames.length; i++) {
     const fctl = Buffer.alloc(26);
     fctl.writeUInt32BE(seq++, 0);
     fctl.writeUInt32BE(width, 4);
@@ -108,8 +292,7 @@ function encodeAPNG(width, height, framesRGBA, delayNum = 80, delayDen = 1000) {
     fctl[25] = 0; // APNG_BLEND_OP_SOURCE
     parts.push(makeChunk("fcTL", fctl));
 
-    const frameBuf = Buffer.from(framesRGBA[i].buffer, framesRGBA[i].byteOffset, framesRGBA[i].byteLength);
-    const compressed = encodeRawRGBA(width, height, frameBuf);
+    const compressed = encodeRawIndexed(width, height, indexedFrames[i]);
     if (i === 0) {
       parts.push(makeChunk("IDAT", compressed));
     } else {
@@ -360,19 +543,19 @@ const CUSTOM_FRAMES = [
 ];
 
 function renderFrameAPNG(spec) {
-  const S = 288;
+  const S = 224;
   const cx = S / 2;
   const cy = S / 2;
-  const numFrames = 16;
+  const numFrames = 12;
   const rgb1 = hexToRGB(spec.c1);
   const rgb2 = hexToRGB(spec.c2);
   const rgb3 = hexToRGB(spec.c3);
 
-  // Strict ring bounds for 288x288 canvas: inner clear circle >= 111px so center of avatar
-  // stays 100% unobstructed, outer edge <= 142px with razor-sharp sculpted bevels & specular rims.
-  const R_INNER = 114.5;
-  const R_MID = 127.0;
-  const R_OUTER = 141.5;
+  // Strict ring bounds for 224x224 canvas: inner clear circle >= 86px so center of avatar
+  // stays 100% unobstructed, outer edge <= 110px with sculpted bevels & crisp visibility.
+  const R_INNER = 87.5;
+  const R_MID = 98.5;
+  const R_OUTER = 110.2;
 
   const frames = [];
 
@@ -659,8 +842,8 @@ function renderFrameAPNG(spec) {
           }
         }
 
-        const finalAlpha = alpha * innerMask * outerMask;
-        if (finalAlpha <= 0.004) continue;
+        const finalAlpha = clamp(alpha * 1.15, 0, 1) * innerMask * outerMask;
+        if (finalAlpha <= 0.008) continue;
 
         let cr = lerp(rgb1[0], rgb2[0], mixT);
         let cg = lerp(rgb1[1], rgb2[1], mixT);
@@ -670,13 +853,20 @@ function renderFrameAPNG(spec) {
           cg = lerp(cg, rgb3[1], clamp(hi, 0, 1));
           cb = lerp(cb, rgb3[2], clamp(hi, 0, 1));
         }
+        // Subtle outer contrast rim so bright frames remain legible on light themes
+        const edgeShade = outerBevel * 0.24;
+        if (edgeShade > 0.01) {
+          cr *= (1 - edgeShade);
+          cg *= (1 - edgeShade);
+          cb *= (1 - edgeShade);
+        }
         blendPixel(buf, idx, cr, cg, cb, finalAlpha);
       }
     }
     frames.push(buf);
   }
 
-  return encodeAPNG(S, S, frames, 65, 1000);
+  return encodeAPNG(S, S, frames, 75, 1000);
 }
 
 // ============================================================

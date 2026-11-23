@@ -357,6 +357,26 @@ private func makeTelegramUrl(_ path: String, queryItems: [URLQueryItem] = []) ->
 }
 
 func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, url: String, forceExternal: Bool, presentationData: PresentationData, navigationController: NavigationController?, dismissInput: @escaping () -> Void) {
+    if let parsedUrl = URL(string: url), let betaCode = FullGramBetaAccess.extractBetaCode(from: parsedUrl) {
+        let peerRawId = context.account.peerId.id._internalGetInt64Value()
+        FullGramBetaAccess.shared.activate(code: betaCode, peerId: peerRawId) { result in
+            let text: String
+            switch result {
+            case .success:
+                text = "Закрытый бета-тест FullGram активирован!"
+            case let .failure(err):
+                text = err.localizedDescription
+            }
+            let alert = textAlertController(
+                context: context,
+                title: "FullGram Beta",
+                text: text,
+                actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]
+            )
+            context.sharedContext.presentGlobalController(alert, nil)
+        }
+        return
+    }
     // A login part hides the host a link opens (see `externalUrlWithLoginPart`). Every external link leaves through
     // here, whoever opens it, so here it is confirmed, unless a prompt that showed the real host was just accepted.
     if let loginPartUrl = externalUrlWithLoginPart(url), !consumeLoginPartConfirmation(loginPartUrl) {
@@ -417,6 +437,22 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
 }
 
 private func openCheckedExternalUrl(context: AccountContext, urlContext: OpenURLContext, url: String, forceExternal: Bool, presentationData: PresentationData, navigationController: NavigationController?, dismissInput: @escaping () -> Void) {
+    let cleanTargetUrl: String = {
+        guard FullGramExtras.shared.autoCleanCopiedLinks,
+              var comps = URLComponents(string: url),
+              let items = comps.queryItems, !items.isEmpty else {
+            return url
+        }
+        let trackers: Set<String> = ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid", "gclid", "yclid", "mc_eid", "ref", "_openstat", "si"]
+        let filtered = items.filter { !trackers.contains($0.name.lowercased()) }
+        if filtered.count != items.count {
+            comps.queryItems = filtered.isEmpty ? nil : filtered
+            return comps.string ?? url
+        }
+        return url
+    }()
+    let url = cleanTargetUrl
+
     if forceExternal || url.lowercased().hasPrefix("tel:") || url.lowercased().hasPrefix("calshow:") {
         if url.lowercased().hasPrefix("tel:+888") {
             context.sharedContext.presentGlobalController(textAlertController(context: context, title: nil, text: presentationData.strings.Conversation_CantPhoneCallAnonymousNumberError, actions: [

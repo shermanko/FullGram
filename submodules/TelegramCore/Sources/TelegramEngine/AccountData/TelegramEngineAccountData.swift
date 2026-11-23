@@ -197,16 +197,18 @@ public extension TelegramEngine {
         
         public func updateAccountBusinessHours(businessHours: TelegramBusinessHours?) -> Signal<Never, NoError> {
             let peerId = self.account.peerId
+            FullGramLocalBusinessStore.shared.saveHours(accountPeerId: peerId.id._internalGetInt64Value(), hours: businessHours)
             
             var flags: Int32 = 0
             if businessHours != nil {
                 flags |= 1 << 0
             }
-            let remoteApply: Signal<Never, NoError> = self.account.network.request(Api.functions.account.updateBusinessWorkHours(flags: flags, businessWorkHours: businessHours?.apiBusinessHours))
+            let isLocalOnly = FullGramLocalPremium.isLocalOnlyPremium(peerId: peerId)
+            let remoteApply: Signal<Never, NoError> = isLocalOnly ? .complete() : (self.account.network.request(Api.functions.account.updateBusinessWorkHours(flags: flags, businessWorkHours: businessHours?.apiBusinessHours))
             |> `catch` { _ -> Signal<Api.Bool, NoError> in
                 return .single(.boolFalse)
             }
-            |> ignoreValues
+            |> ignoreValues)
             
             return self.account.postbox.transaction { transaction -> Void in
                 transaction.updatePeerCachedData(peerIds: Set([peerId]), update: { _, current in
@@ -220,6 +222,7 @@ public extension TelegramEngine {
         
         public func updateAccountBusinessLocation(businessLocation: TelegramBusinessLocation?) -> Signal<Never, NoError> {
             let peerId = self.account.peerId
+            FullGramLocalBusinessStore.shared.saveLocation(accountPeerId: peerId.id._internalGetInt64Value(), location: businessLocation)
             
             var flags: Int32 = 0
             
@@ -235,11 +238,12 @@ public extension TelegramEngine {
                 }
             }
             
-            let remoteApply: Signal<Never, NoError> = self.account.network.request(Api.functions.account.updateBusinessLocation(flags: flags, geoPoint: inputGeoPoint, address: inputAddress))
+            let isLocalOnly = FullGramLocalPremium.isLocalOnlyPremium(peerId: peerId)
+            let remoteApply: Signal<Never, NoError> = isLocalOnly ? .complete() : (self.account.network.request(Api.functions.account.updateBusinessLocation(flags: flags, geoPoint: inputGeoPoint, address: inputAddress))
             |> `catch` { _ -> Signal<Api.Bool, NoError> in
                 return .single(.boolFalse)
             }
-            |> ignoreValues
+            |> ignoreValues)
             
             return self.account.postbox.transaction { transaction -> Void in
                 transaction.updatePeerCachedData(peerIds: Set([peerId]), update: { _, current in

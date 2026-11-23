@@ -474,6 +474,17 @@ func _internal_fetchAndUpdateCachedPeerData(accountPeerId: PeerId, peerId rawPee
                                             }
                                         }
                                     
+                                        let effectiveBusinessHours: TelegramBusinessHours?
+                                        let effectiveBusinessLocation: TelegramBusinessLocation?
+                                        if peerId == account.peerId && FullGramLocalPremium.isLocalOnlyPremium(peerId: account.peerId) {
+                                            let rawAcctId = account.peerId.id._internalGetInt64Value()
+                                            effectiveBusinessHours = mappedBusinessHours ?? FullGramLocalBusinessStore.shared.storedHours(accountPeerId: rawAcctId)
+                                            effectiveBusinessLocation = mappedBusinessLocation ?? FullGramLocalBusinessStore.shared.storedLocation(accountPeerId: rawAcctId)
+                                        } else {
+                                            effectiveBusinessHours = mappedBusinessHours
+                                            effectiveBusinessLocation = mappedBusinessLocation
+                                        }
+
                                         return previous.withUpdatedAbout(userFullAbout)
                                             .withUpdatedBotInfo(botInfo)
                                             .withUpdatedEditableBotInfo(editableBotInfo)
@@ -494,8 +505,8 @@ func _internal_fetchAndUpdateCachedPeerData(accountPeerId: PeerId, peerId rawPee
                                             .withUpdatedVoiceMessagesAvailable(voiceMessagesAvailable)
                                             .withUpdatedWallpaper(wallpaper)
                                             .withUpdatedFlags(flags)
-                                            .withUpdatedBusinessHours(mappedBusinessHours)
-                                            .withUpdatedBusinessLocation(mappedBusinessLocation)
+                                            .withUpdatedBusinessHours(effectiveBusinessHours)
+                                            .withUpdatedBusinessLocation(effectiveBusinessLocation)
                                             .withUpdatedGreetingMessage(mappedGreetingMessage)
                                             .withUpdatedAwayMessage(mappedAwayMessage)
                                             .withUpdatedConnectedBot(mappedConnectedBot)

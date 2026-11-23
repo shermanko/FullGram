@@ -734,77 +734,98 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
         let shouldNotifyChat = self.notifyInChat
 
         let handleGrantResult: @Sendable (Result<String, Error>) -> Void = { [weak self] result in
-            guard let self else { return }
-            self.isGranting = false
-            self.grantButton.isEnabled = true
-            var resetCfg = self.grantButton.configuration ?? UIButton.Configuration.filled()
-            var resetTitle = AttributedString(ru ? "Выдать" : "Grant")
-            resetTitle.font = UIFont.systemFont(ofSize: 12.5, weight: .bold)
-            resetCfg.attributedTitle = resetTitle
-            self.grantButton.configuration = resetCfg
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.isGranting = false
+                    self.grantButton.isEnabled = true
+                    var resetCfg = self.grantButton.configuration ?? UIButton.Configuration.filled()
+                    var resetTitle = AttributedString(ru ? "Выдать" : "Grant")
+                    resetTitle.font = UIFont.systemFont(ofSize: 12.5, weight: .bold)
+                    resetCfg.attributedTitle = resetTitle
+                    self.grantButton.configuration = resetCfg
 
-            switch result {
-            case let .success(entryId):
-                let localNFT = FullGramGrantedNFT(
-                    id: entryId,
-                    giftId: String(giftId),
-                    title: title,
-                    modelName: modelName,
-                    backdropName: backdropName,
-                    backdropId: backdropId,
-                    patternName: patternName,
-                    number: number,
-                    note: "",
-                    pinned: true
-                )
-                FullGramGrantedNFTStore.shared.appendLocal(peerId: cleanPeerId, nft: localNFT)
-                FullGramGrantedNFTStore.shared.refreshNow { _ in }
+                    switch result {
+                    case let .success(entryId):
+                        let localNFT = FullGramGrantedNFT(
+                            id: entryId,
+                            giftId: String(giftId),
+                            title: title,
+                            modelName: modelName,
+                            backdropName: backdropName,
+                            backdropId: backdropId,
+                            patternName: patternName,
+                            number: number,
+                            note: "",
+                            pinned: true
+                        )
+                        FullGramGrantedNFTStore.shared.appendLocal(peerId: cleanPeerId, nft: localNFT)
+                        FullGramGrantedNFTStore.shared.refreshNow { _ in }
 
-                if shouldNotifyChat, let chatPeerId = self.targetEnginePeerId {
-                    let chatMsg = ru
-                        ? "🎁 Подарок NFT FullGram!\n✨ \(title) #\(number)\nМодель: \(modelName) · Фон: \(backdropName) · Узор: \(patternName)\nПодарок уже отображается в вашем профиле FullGram!"
-                        : "🎁 FullGram NFT Gift!\n✨ \(title) #\(number)\nModel: \(modelName) · Backdrop: \(backdropName) · Pattern: \(patternName)\nVisible now in your FullGram profile!"
-                    let _ = enqueueMessages(
-                        account: self.context.account,
-                        peerId: chatPeerId,
-                        messages: [
-                            .message(
-                                text: chatMsg,
-                                attributes: [],
-                                inlineStickers: [:],
-                                mediaReference: nil,
-                                threadId: nil,
-                                replyToMessageId: nil,
-                                replyToStoryId: nil,
-                                localGroupingKey: nil,
-                                correlationId: nil,
-                                bubbleUpEmojiOrStickersets: []
-                            )
-                        ]
-                    ).startStandalone()
+                        if shouldNotifyChat, let chatPeerId = self.targetEnginePeerId {
+                            let displayTitle = FullGramGrantedNFT.decoratedTitle(title)
+                            let chatMsg = FullGramChatGiftPayload(
+                                kind: .nft,
+                                giftRecordId: localNFT.id,
+                                title: displayTitle,
+                                emoji: "🎁",
+                                number: number,
+                                starsPrice: 0,
+                                modelName: modelName,
+                                backdropName: backdropName,
+                                backdropInnerHex: 0x3E7BF2,
+                                backdropOuterHex: 0x1A397A,
+                                patternName: patternName,
+                                rarityText: "Редкий NFT FullGram",
+                                comment: "",
+                                canUpgrade: true,
+                                senderName: "FullGram",
+                                slug: "FullGram-\(giftId)-\(number)"
+                            ).encodeMessageText()
+                            let _ = enqueueMessages(
+                                account: self.context.account,
+                                peerId: chatPeerId,
+                                messages: [
+                                    .message(
+                                        text: chatMsg,
+                                        attributes: [],
+                                        inlineStickers: [:],
+                                        mediaReference: nil,
+                                        threadId: nil,
+                                        replyToMessageId: nil,
+                                        replyToStoryId: nil,
+                                        localGroupingKey: nil,
+                                        correlationId: nil,
+                                        bubbleUpEmojiOrStickersets: []
+                                    )
+                                ]
+                            ).startStandalone()
+                        }
+
+                        let decorated = FullGramGrantedNFT.decoratedTitle(title)
+                        let banner = UndoOverlayController(
+                            presentationData: self.presentationData,
+                            content: .succeed(
+                                text: ru
+                                    ? "NFT «\(decorated) #\(number)» выдан пользователю \(self.targetDisplayName)!"
+                                    : "NFT \"\(decorated) #\(number)\" granted to \(self.targetDisplayName)!",
+                                timeout: 4.0,
+                                customUndoText: nil
+                            ),
+                            elevatedLayout: false,
+                            action: { _ in return false }
+                        )
+                        self.present(banner, in: .window(.root))
+                    case let .failure(error):
+                        let alert = UIAlertController(
+                            title: ru ? "Ошибка выдачи NFT" : "Failed to grant NFT",
+                            message: error.localizedDescription,
+                            preferredStyle: .alert
+                        )
+                        alert.addAction(UIAlertAction(title: "OK", style: .default))
+                        self.present(alert, animated: true)
+                    }
                 }
-
-                let banner = UndoOverlayController(
-                    presentationData: self.presentationData,
-                    content: .succeed(
-                        text: ru
-                            ? "NFT «\(title) #\(number)» выдан пользователю \(self.targetDisplayName)!"
-                            : "NFT \"\(title) #\(number)\" granted to \(self.targetDisplayName)!",
-                        timeout: 4.0,
-                        customUndoText: nil
-                    ),
-                    elevatedLayout: false,
-                    action: { _ in return false }
-                )
-                self.present(banner, in: .window(.root))
-            case let .failure(error):
-                let alert = UIAlertController(
-                    title: ru ? "Ошибка выдачи NFT" : "Failed to grant NFT",
-                    message: error.localizedDescription,
-                    preferredStyle: .alert
-                )
-                alert.addAction(UIAlertAction(title: "OK", style: .default))
-                self.present(alert, animated: true)
             }
         }
 
@@ -1029,9 +1050,46 @@ private final class FullGramNFTComponentCell: UICollectionViewCell {
     }
 }
 
+private final class FullGramRadialGradientView: UIView {
+    override class var layerClass: AnyClass {
+        return CAGradientLayer.self
+    }
+
+    var gradientLayer: CAGradientLayer? {
+        return self.layer as? CAGradientLayer
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        if let gl = self.gradientLayer {
+            gl.type = .radial
+            gl.startPoint = CGPoint(x: 0.5, y: 0.5)
+            gl.endPoint = CGPoint(x: 1.0, y: 1.0)
+            gl.locations = [0.0, 1.0]
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func updateColors(inner: UIColor, outer: UIColor) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if let gl = self.gradientLayer {
+            gl.type = .radial
+            gl.startPoint = CGPoint(x: 0.5, y: 0.5)
+            gl.endPoint = CGPoint(x: 1.0, y: 1.0)
+            gl.locations = [0.0, 1.0]
+            gl.colors = [inner.cgColor, outer.cgColor]
+        }
+        CATransaction.commit()
+    }
+}
+
 private final class FullGramNFTBackdropCell: UICollectionViewCell {
-    private let swatchView = UIView()
-    private let gradientLayer = CAGradientLayer()
+    private let swatchView = FullGramRadialGradientView()
     private let titleLabel = UILabel()
 
     override init(frame: CGRect) {
@@ -1044,10 +1102,6 @@ private final class FullGramNFTBackdropCell: UICollectionViewCell {
         self.swatchView.layer.cornerRadius = 9.0
         self.swatchView.layer.cornerCurve = .continuous
         self.swatchView.clipsToBounds = true
-        self.gradientLayer.type = .radial
-        self.gradientLayer.startPoint = CGPoint(x: 0.5, y: 0.5)
-        self.gradientLayer.endPoint = CGPoint(x: 1.0, y: 1.0)
-        self.swatchView.layer.addSublayer(self.gradientLayer)
         self.contentView.addSubview(self.swatchView)
 
         self.titleLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -1074,18 +1128,13 @@ private final class FullGramNFTBackdropCell: UICollectionViewCell {
         fatalError("init(coder:) has not been implemented")
     }
 
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        self.gradientLayer.frame = self.swatchView.bounds
-    }
-
     func configure(title: String, innerColor: UIColor, outerColor: UIColor, selected: Bool, theme: PresentationTheme) {
         self.contentView.backgroundColor = theme.list.itemBlocksBackgroundColor
         self.contentView.layer.borderWidth = selected ? 2.0 : 0.5
         self.contentView.layer.borderColor = (selected ? theme.list.itemAccentColor : theme.list.itemBlocksSeparatorColor.withAlphaComponent(0.35)).cgColor
-        self.gradientLayer.colors = [innerColor.cgColor, outerColor.cgColor]
-        self.gradientLayer.frame = self.swatchView.bounds
+        self.swatchView.updateColors(inner: innerColor, outer: outerColor)
         self.titleLabel.text = title
         self.titleLabel.textColor = selected ? theme.list.itemAccentColor : theme.list.itemPrimaryTextColor
+        self.setNeedsLayout()
     }
 }

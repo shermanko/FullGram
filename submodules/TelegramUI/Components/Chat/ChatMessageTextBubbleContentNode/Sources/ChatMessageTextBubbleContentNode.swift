@@ -69,6 +69,7 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
     private var textSelectionNode: TextSelectionNode?
     private var fullGramScamBannerView: UIView?
     private var fullGramScamBannerLabel: UILabel?
+    private var fullGramGiftCardView: FullGramChatGiftCardView?
     
     private var textHighlightingNodes: [LinkHighlightingNode] = []
     
@@ -367,6 +368,8 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                     }
                 }
                 
+                var fullGramScamWarningText: String?
+                var fullGramGiftPayload: FullGramChatGiftPayload?
                 var isSummaryApplied = false
                 var isTranslating = false
                 if let invoice {
@@ -380,31 +383,49 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                     } else {
                         rawText = item.message.text
                     }
-                    rawText = FullGramPluginManager.shared.processRenderMessage(
-                        text: rawText,
-                        peerId: item.message.id.peerId.toInt64(),
-                        isIncoming: incoming,
-                        messageId: item.message.id.id
-                    )
-                    if incoming {
+                    if let parsedGift = FullGramChatGiftPayload.parse(from: rawText) {
+                        fullGramGiftPayload = parsedGift
+                        rawText = " "
+                        messageEntities = nil
+                    } else {
+                        rawText = FullGramPluginManager.shared.processRenderMessage(
+                            text: rawText,
+                            peerId: item.message.id.peerId.toInt64(),
+                            isIncoming: incoming,
+                            messageId: item.message.id.id
+                        )
+                    }
+                    if incoming && fullGramGiftPayload == nil {
                         let sourceText = rawText
                         var warnings: [String] = []
                         let isForwarded = item.message.forwardInfo != nil
+                        let isChannelPost = (item.message.id.peerId.namespace == Namespaces.Peer.CloudChannel) && (item.message.author == nil || item.message.author?.id == item.message.id.peerId)
                         let fromUnknown = item.message.forwardInfo?.author == nil || item.message.forwardInfo?.author?.id != item.message.author?.id
                         let viaBot = item.message.attributes.contains(where: { $0 is InlineBotMessageAttribute }) || (item.message.author as? TelegramUser)?.botInfo != nil
                         if let offerVerdict = FullGramAntiScam.shared.inspectOffer(
                             text: sourceText,
                             isForwarded: isForwarded,
                             fromUnknownAuthor: fromUnknown,
-                            viaBot: viaBot
+                            viaBot: viaBot,
+                            isChannelPost: isChannelPost
                         ) {
                             warnings.append("⚠️ Анти-офер: \(offerVerdict.summary) (\(offerVerdict.reasons.joined(separator: ", ")))")
                         }
-                        if let otcWarning = FullGramAntiScam.shared.inspectOTC(text: sourceText) {
+                        if !isChannelPost, let otcWarning = FullGramAntiScam.shared.inspectOTC(text: sourceText) {
                             warnings.append("⚠️ \(otcWarning)")
                         }
                         if let scamVerdict = FullGramAntiScam.shared.inspectIncomingMessage(sourceText) {
                             warnings.append("⚠️ Возможный скам: \(scamVerdict.reasons.first ?? scamVerdict.summary)")
+                        }
+                        let authorUser = item.message.author as? TelegramUser
+                        if let ruleVerdict = FullGramAntiScam.shared.inspectModerationRules(
+                            text: sourceText,
+                            authorRawId: item.message.author?.id.id._internalGetInt64Value() ?? 0,
+                            hasUsername: (authorUser?.addressName?.isEmpty == false),
+                            hasAvatar: !(authorUser?.photo.isEmpty ?? true),
+                            chatPeerId: item.message.id.peerId.toInt64()
+                        ) {
+                            warnings.append("🛡 \(ruleVerdict.rule): \(ruleVerdict.reason)")
                         }
                         if !warnings.isEmpty {
                             fullGramScamWarningText = warnings.joined(separator: "\n")
@@ -795,7 +816,16 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                     )
                 }
 
-                var suggestedBoundingWidth: CGFloat = max(textFrameWithoutInsets.width, scamBannerSize.width)
+                let giftCardSize: CGSize
+                if fullGramGiftPayload != nil {
+                    let cardW = min(244.0, max(190.0, textConstrainedSize.width))
+                    let cardH: CGFloat = (fullGramGiftPayload?.comment.isEmpty == false) ? 236.0 : 216.0
+                    giftCardSize = CGSize(width: cardW, height: cardH)
+                } else {
+                    giftCardSize = .zero
+                }
+
+                var suggestedBoundingWidth: CGFloat = max(textFrameWithoutInsets.width, max(scamBannerSize.width, giftCardSize.width))
                 if let statusSuggestedWidthAndContinue = statusSuggestedWidthAndContinue, !hasDraft {
                     suggestedBoundingWidth = max(suggestedBoundingWidth, statusSuggestedWidthAndContinue.0)
                 }
@@ -807,13 +837,17 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                     
                     let statusSizeAndApply = statusSuggestedWidthAndContinue?.1(boundingWidth - sideInsets)
                     
-                    boundingSize = textFrameWithoutInsets.size
+                    if giftCardSize.height > 0.0 {
+                        boundingSize = giftCardSize
+                    } else {
+                        boundingSize = textFrameWithoutInsets.size
+                    }
                     if scamBannerSize.height > 0.0 {
                         boundingSize.width = max(boundingSize.width, scamBannerSize.width)
                         boundingSize.height += scamBannerTopSpacing + scamBannerSize.height
                     }
                     if let statusSizeAndApply = statusSizeAndApply, !hasDraft {
-                        boundingSize.height += statusSizeAndApply.0.height
+                        boundingSize.height += statusSizeAndApply.0.height + (giftCardSize.height > 0.0 ? 4.0 : 0.0)
                     }
 
                     boundingSize.width += layoutConstants.text.bubbleInsets.left + layoutConstants.text.bubbleInsets.right
@@ -948,6 +982,31 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                                 isTranslating = true
                             }
                             strongSelf.updateIsTranslating(isTranslating, showTextAsPlaceholder: showTextAsPlaceholder)
+
+                            if let giftPayload = fullGramGiftPayload, giftCardSize.height > 0.0 {
+                                strongSelf.textNode.textNode.isHidden = true
+                                let cardView: FullGramChatGiftCardView
+                                if let existing = strongSelf.fullGramGiftCardView {
+                                    cardView = existing
+                                } else {
+                                    let created = FullGramChatGiftCardView(frame: .zero)
+                                    strongSelf.fullGramGiftCardView = created
+                                    strongSelf.containerNode.view.addSubview(created)
+                                    cardView = created
+                                }
+                                let cardWidth = max(giftCardSize.width, boundingWidth - sideInsets)
+                                cardView.frame = CGRect(
+                                    x: layoutConstants.text.bubbleInsets.left,
+                                    y: topInset,
+                                    width: cardWidth,
+                                    height: giftCardSize.height
+                                )
+                                cardView.configure(payload: giftPayload, incoming: incoming, peerId: item.message.id.peerId.toInt64())
+                            } else {
+                                strongSelf.textNode.textNode.isHidden = showTextAsPlaceholder
+                                strongSelf.fullGramGiftCardView?.removeFromSuperview()
+                                strongSelf.fullGramGiftCardView = nil
+                            }
                             
                             if let scamBannerAttributed, scamBannerSize.height > 0.0 {
                                 let bannerView: UIView
@@ -996,9 +1055,10 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                             }
 
                             let scamBannerOffsetY = scamBannerSize.height > 0.0 ? (scamBannerTopSpacing + scamBannerSize.height) : 0.0
+                            let contentBottomY = giftCardSize.height > 0.0 ? (topInset + giftCardSize.height + 4.0) : textFrameWithoutInsets.maxY
                             if let statusSizeAndApply {
                                 let statusNode = statusSizeAndApply.1(strongSelf.statusNode == nil ? .None : animation)
-                                let statusFrame = CGRect(origin: CGPoint(x: textFrameWithoutInsets.minX, y: textFrameWithoutInsets.maxY + scamBannerOffsetY), size: statusSizeAndApply.0)
+                                let statusFrame = CGRect(origin: CGPoint(x: textFrameWithoutInsets.minX, y: contentBottomY + scamBannerOffsetY), size: statusSizeAndApply.0)
                                 
                                 if strongSelf.statusNode !== statusNode {
                                     strongSelf.statusNode?.removeFromSupernode()
@@ -1375,6 +1435,12 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
     }
     
     override public func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if let cardView = self.fullGramGiftCardView, !cardView.isHidden {
+            let cardPoint = self.view.convert(point, to: cardView)
+            if cardView.bounds.contains(cardPoint) {
+                return cardView.hitTest(cardPoint, with: event) ?? cardView
+            }
+        }
         if let statusNode = self.statusNode, statusNode.supernode != nil, let result = statusNode.hitTest(self.view.convert(point, to: statusNode.view), with: event) {
             return result
         }
@@ -1963,5 +2029,175 @@ extension ChatMessageTextBubbleContentNode: ChatMessageQuoteSourceContentNode {
             return nil
         }
         return EngineMessageReplyQuote(text: trimmedText.string, offset: textSelection.offset, entities: trimmedText.entities, media: nil)
+    }
+}
+
+private final class FullGramChatGiftCardView: UIView {
+    private let gradientLayer = CAGradientLayer()
+    private let badgePill = UILabel()
+    private let glowCircle = UIView()
+    private let emojiLabel = UILabel()
+    private let headingLabel = UILabel()
+    private let titleLabel = UILabel()
+    private let subtitleLabel = UILabel()
+    private let actionButton = UIButton(type: .system)
+
+    private var payload: FullGramChatGiftPayload?
+    private var targetPeerId: Int64 = 0
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        self.layer.cornerRadius = 16.0
+        self.clipsToBounds = true
+
+        self.gradientLayer.startPoint = CGPoint(x: 0.1, y: 0.0)
+        self.gradientLayer.endPoint = CGPoint(x: 0.9, y: 1.0)
+        self.layer.insertSublayer(self.gradientLayer, at: 0)
+
+        self.badgePill.font = Font.semibold(10.5)
+        self.badgePill.textColor = .white
+        self.badgePill.backgroundColor = UIColor.white.withAlphaComponent(0.20)
+        self.badgePill.layer.cornerRadius = 9.0
+        self.badgePill.layer.masksToBounds = true
+        self.badgePill.textAlignment = .center
+        self.addSubview(self.badgePill)
+
+        self.glowCircle.backgroundColor = UIColor.white.withAlphaComponent(0.16)
+        self.glowCircle.layer.borderColor = UIColor.white.withAlphaComponent(0.32).cgColor
+        self.glowCircle.layer.borderWidth = 1.0
+        self.addSubview(self.glowCircle)
+
+        self.emojiLabel.font = UIFont.systemFont(ofSize: 44.0)
+        self.emojiLabel.textAlignment = .center
+        self.addSubview(self.emojiLabel)
+
+        self.headingLabel.font = Font.semibold(13.0)
+        self.headingLabel.textColor = UIColor.white.withAlphaComponent(0.92)
+        self.headingLabel.textAlignment = .center
+        self.addSubview(self.headingLabel)
+
+        self.titleLabel.font = Font.bold(15.5)
+        self.titleLabel.textColor = .white
+        self.titleLabel.textAlignment = .center
+        self.titleLabel.lineBreakMode = .byTruncatingTail
+        self.addSubview(self.titleLabel)
+
+        self.subtitleLabel.font = Font.regular(11.5)
+        self.subtitleLabel.textColor = UIColor.white.withAlphaComponent(0.84)
+        self.subtitleLabel.textAlignment = .center
+        self.subtitleLabel.numberOfLines = 2
+        self.addSubview(self.subtitleLabel)
+
+        self.actionButton.titleLabel?.font = Font.semibold(13.0)
+        self.actionButton.setTitleColor(.white, for: .normal)
+        self.actionButton.backgroundColor = UIColor.white.withAlphaComponent(0.24)
+        self.actionButton.layer.cornerRadius = 15.0
+        self.actionButton.layer.borderColor = UIColor.white.withAlphaComponent(0.28).cgColor
+        self.actionButton.layer.borderWidth = 0.75
+        self.actionButton.addTarget(self, action: #selector(self.buttonPressed), for: .touchUpInside)
+        self.addSubview(self.actionButton)
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(self.buttonPressed))
+        self.addGestureRecognizer(tap)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func configure(payload: FullGramChatGiftPayload, incoming: Bool, peerId: Int64) {
+        self.payload = payload
+        self.targetPeerId = peerId
+
+        let c1: UIColor
+        let c2: UIColor
+        if let inner = payload.backdropInnerHex, let outer = payload.backdropOuterHex {
+            c1 = UIColor(rgb: inner)
+            c2 = UIColor(rgb: outer)
+        } else if payload.kind == .stars {
+            c1 = UIColor(rgb: 0xF7B733)
+            c2 = UIColor(rgb: 0xBA550B)
+        } else if payload.kind == .gift {
+            c1 = UIColor(rgb: 0x4E8CF7)
+            c2 = UIColor(rgb: 0x28479E)
+        } else {
+            c1 = UIColor(rgb: 0x7A5AF8)
+            c2 = UIColor(rgb: 0x35217B)
+        }
+        self.gradientLayer.colors = [c1.cgColor, c2.cgColor]
+        self.emojiLabel.text = payload.emoji.isEmpty ? "🎁" : payload.emoji
+
+        let displayTitle = FullGramGrantedNFT.decoratedTitle(payload.title)
+        switch payload.kind {
+        case .nft, .upgrade:
+            self.headingLabel.text = incoming ? "Вам подарили NFT" : "Подарок NFT"
+            self.badgePill.text = payload.number.map { "  #\($0)  " } ?? "  NFT  "
+            self.titleLabel.text = displayTitle
+            var details: [String] = []
+            if let model = payload.modelName, !model.isEmpty {
+                details.append(model)
+            }
+            if let bg = payload.backdropName, !bg.isEmpty {
+                details.append(bg)
+            }
+            if !payload.comment.isEmpty {
+                details.append("«\(payload.comment)»")
+            } else if details.isEmpty, let rarity = payload.rarityText {
+                details.append(rarity)
+            }
+            self.subtitleLabel.text = details.joined(separator: " · ")
+            self.actionButton.setTitle("Посмотреть", for: .normal)
+        case .gift:
+            self.headingLabel.text = incoming ? "Вам подарили подарок" : "Отправлен подарок"
+            self.badgePill.text = "  ★ \(payload.starsPrice)  "
+            self.titleLabel.text = displayTitle
+            self.subtitleLabel.text = payload.comment.isEmpty
+                ? (payload.canUpgrade ? "Можно улучшить до NFT" : "Подарок FullGram")
+                : "«\(payload.comment)»"
+            self.actionButton.setTitle(payload.canUpgrade ? "Улучшить до NFT" : "Посмотреть", for: .normal)
+        case .stars:
+            self.headingLabel.text = incoming ? "Вам подарили Звёзды" : "Подарок Звёзд"
+            self.badgePill.text = "  TELEGRAM STARS  "
+            self.titleLabel.text = "★ \(payload.starsPrice) Звёзд"
+            self.subtitleLabel.text = payload.comment.isEmpty ? "Зачислено на баланс FullGram" : "«\(payload.comment)»"
+            self.actionButton.setTitle("Открыть баланс", for: .normal)
+        }
+        self.setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        self.gradientLayer.frame = self.bounds
+        let w = self.bounds.width
+        let h = self.bounds.height
+
+        let pillSize = self.badgePill.sizeThatFits(CGSize(width: w - 20.0, height: 22.0))
+        let pillW = min(w - 20.0, max(52.0, pillSize.width + 10.0))
+        self.badgePill.frame = CGRect(x: w - pillW - 10.0, y: 10.0, width: pillW, height: 18.0)
+
+        let circleSide: CGFloat = 68.0
+        self.glowCircle.frame = CGRect(x: (w - circleSide) * 0.5, y: 24.0, width: circleSide, height: circleSide)
+        self.glowCircle.layer.cornerRadius = circleSide * 0.5
+        self.emojiLabel.frame = self.glowCircle.frame
+
+        self.headingLabel.frame = CGRect(x: 12.0, y: 98.0, width: w - 24.0, height: 16.0)
+        self.titleLabel.frame = CGRect(x: 12.0, y: 116.0, width: w - 24.0, height: 20.0)
+        self.subtitleLabel.frame = CGRect(x: 12.0, y: 138.0, width: w - 24.0, height: max(20.0, h - 186.0))
+        self.actionButton.frame = CGRect(x: 18.0, y: h - 40.0, width: w - 36.0, height: 30.0)
+    }
+
+    @objc private func buttonPressed() {
+        guard let payload = self.payload,
+              let data = try? JSONEncoder().encode(payload) else {
+            return
+        }
+        NotificationCenter.default.post(
+            name: FullGramChatGiftPayload.openCardNotification,
+            object: nil,
+            userInfo: [
+                "payload": data,
+                "peerId": self.targetPeerId
+            ]
+        )
     }
 }

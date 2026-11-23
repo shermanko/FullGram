@@ -645,6 +645,15 @@ extension PeerInfoScreenNode {
                                     self.openPremiumGift()
                                 }
                             })))
+                            let fgGiftTitle = presentationData.strings.baseLanguageCode.hasPrefix("ru") ? "Купить подарок FullGram (★)" : "Buy FullGram Gift (★)"
+                            items.append(.action(ContextMenuActionItem(text: fgGiftTitle, icon: { theme in
+                                generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Gift"), color: theme.contextMenu.primaryColor)
+                            }, action: { [weak self] _, f in
+                                f(.dismissWithoutContent)
+                                guard let self else { return }
+                                let peerName = self.data?.peer.map { $0.compactDisplayTitle } ?? ""
+                                self.controller?.push(fullGramGiftMarketController(context: self.context, targetPeerId: self.peerId, targetPeerName: peerName))
+                            })))
                         }
                     }
 
@@ -927,6 +936,15 @@ extension PeerInfoScreenNode {
                                 f(.dismissWithoutContent)
                                 
                                 self?.openPremiumGift()
+                            })))
+                            let fgGiftTitle = presentationData.strings.baseLanguageCode.hasPrefix("ru") ? "Купить подарок FullGram (★)" : "Buy FullGram Gift (★)"
+                            items.append(.action(ContextMenuActionItem(text: fgGiftTitle, badge: nil, icon: { theme in
+                                generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Gift"), color: theme.contextMenu.primaryColor)
+                            }, action: { [weak self] _, f in
+                                f(.dismissWithoutContent)
+                                guard let self else { return }
+                                let peerName = self.data?.peer.map { $0.compactDisplayTitle } ?? ""
+                                self.controller?.push(fullGramGiftMarketController(context: self.context, targetPeerId: self.peerId, targetPeerName: peerName))
                             })))
                         }
                         
