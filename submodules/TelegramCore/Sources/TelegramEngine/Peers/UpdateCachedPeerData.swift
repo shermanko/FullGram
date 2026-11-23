@@ -292,7 +292,7 @@ func _internal_fetchAndUpdateCachedPeerData(accountPeerId: PeerId, peerId rawPee
                                 updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: parsedPeers)
                                 transaction.updateCurrentPeerNotificationSettings([peerId: TelegramPeerNotificationSettings(apiSettings: userFullNotifySettings)])
                             }
-                            transaction.updatePeerCachedData(peerIds: [peerId], update: { peerId, current in
+                            transaction.updatePeerCachedData(peerIds: [peerId], update: { peerId, current -> CachedPeerData? in
                                 let previous: CachedUserData
                                 if let current = current as? CachedUserData {
                                     previous = current
@@ -476,8 +476,8 @@ func _internal_fetchAndUpdateCachedPeerData(accountPeerId: PeerId, peerId rawPee
                                     
                                         let effectiveBusinessHours: TelegramBusinessHours?
                                         let effectiveBusinessLocation: TelegramBusinessLocation?
-                                        if peerId == account.peerId && FullGramLocalPremium.isLocalOnlyPremium(peerId: account.peerId) {
-                                            let rawAcctId = account.peerId.id._internalGetInt64Value()
+                                        if peerId == accountPeerId && FullGramLocalPremium.isLocalOnlyPremium(peerId: accountPeerId) {
+                                            let rawAcctId = accountPeerId.id._internalGetInt64Value()
                                             effectiveBusinessHours = mappedBusinessHours ?? FullGramLocalBusinessStore.shared.storedHours(accountPeerId: rawAcctId)
                                             effectiveBusinessLocation = mappedBusinessLocation ?? FullGramLocalBusinessStore.shared.storedLocation(accountPeerId: rawAcctId)
                                         } else {
@@ -485,7 +485,7 @@ func _internal_fetchAndUpdateCachedPeerData(accountPeerId: PeerId, peerId rawPee
                                             effectiveBusinessLocation = mappedBusinessLocation
                                         }
 
-                                        return previous.withUpdatedAbout(userFullAbout)
+                                        var updated: CachedUserData = previous.withUpdatedAbout(userFullAbout)
                                             .withUpdatedBotInfo(botInfo)
                                             .withUpdatedEditableBotInfo(editableBotInfo)
                                             .withUpdatedCommonGroupCount(userFullCommonChatsCount)
@@ -496,7 +496,7 @@ func _internal_fetchAndUpdateCachedPeerData(accountPeerId: PeerId, peerId rawPee
                                             .withUpdatedCanPinMessages(canPinMessages)
                                             .withUpdatedPeerStatusSettings(peerStatusSettings)
                                             .withUpdatedPinnedMessageId(pinnedMessageId)
-                                            .withUpdatedHasScheduledMessages(hasScheduledMessages)
+                                        updated = updated.withUpdatedHasScheduledMessages(hasScheduledMessages)
                                             .withUpdatedAutoremoveTimeout(autoremoveTimeout)
                                             .withUpdatedChatTheme(mappedChatTheme)
                                             .withUpdatedPhoto(.known(photo))
@@ -507,7 +507,7 @@ func _internal_fetchAndUpdateCachedPeerData(accountPeerId: PeerId, peerId rawPee
                                             .withUpdatedFlags(flags)
                                             .withUpdatedBusinessHours(effectiveBusinessHours)
                                             .withUpdatedBusinessLocation(effectiveBusinessLocation)
-                                            .withUpdatedGreetingMessage(mappedGreetingMessage)
+                                        updated = updated.withUpdatedGreetingMessage(mappedGreetingMessage)
                                             .withUpdatedAwayMessage(mappedAwayMessage)
                                             .withUpdatedConnectedBot(mappedConnectedBot)
                                             .withUpdatedBusinessIntro(mappedBusinessIntro)
@@ -518,7 +518,7 @@ func _internal_fetchAndUpdateCachedPeerData(accountPeerId: PeerId, peerId rawPee
                                             .withUpdatedStarRefProgram(mappedStarRefProgram)
                                             .withUpdatedVerification(verification)
                                             .withUpdatedSendPaidMessageStars(sendPaidMessageStars)
-                                            .withUpdatedDisallowedGifts(disallowedGifts)
+                                        updated = updated.withUpdatedDisallowedGifts(disallowedGifts)
                                             .withUpdatedBotGroupAdminRights(botGroupAdminRights)
                                             .withUpdatedBotChannelAdminRights(botChannelAdminRights)
                                             .withUpdatedStarRating(mappedStarRating)
@@ -529,6 +529,7 @@ func _internal_fetchAndUpdateCachedPeerData(accountPeerId: PeerId, peerId rawPee
                                             .withUpdatedWalletCard(userFullData.walletCard.map(WalletCard.init(apiCard:)))
                                             .withUpdatedShareTheme(userFullData.shareTheme.flatMap(TelegramShareTheme.init(apiShareTheme:)) ?? .default)
                                             .withUpdatedBotManagerId(botManagerId.flatMap { PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value($0)) })
+                                        return updated
                                 }
                             })
                         }

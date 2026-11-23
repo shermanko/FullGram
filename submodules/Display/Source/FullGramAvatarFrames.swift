@@ -882,13 +882,14 @@ public final class FullGramAnimatedFrameSequence: @unchecked Sendable {
 public final class FullGramAnimatedImageDecoder {
     private static let sequenceCache: NSCache<NSString, FullGramAnimatedFrameSequence> = {
         let c = NSCache<NSString, FullGramAnimatedFrameSequence>()
-        c.countLimit = 48
-        c.totalCostLimit = 96 * 1024 * 1024
+        c.countLimit = 28
+        c.totalCostLimit = 48 * 1024 * 1024
         return c
     }()
     private static let thumbnailCache: NSCache<NSString, CGImage> = {
         let c = NSCache<NSString, CGImage>()
-        c.countLimit = 400
+        c.countLimit = 250
+        c.totalCostLimit = 24 * 1024 * 1024
         return c
     }()
     private static let decodeOpQueue: OperationQueue = {
@@ -909,16 +910,33 @@ public final class FullGramAnimatedImageDecoder {
         cfg.timeoutIntervalForResource = 45.0
         cfg.httpMaximumConnectionsPerHost = 6
         cfg.requestCachePolicy = .returnCacheDataElseLoad
-        cfg.urlCache = URLCache(memoryCapacity: 32 * 1024 * 1024, diskCapacity: 128 * 1024 * 1024)
+        cfg.urlCache = URLCache(memoryCapacity: 12 * 1024 * 1024, diskCapacity: 48 * 1024 * 1024)
         return URLSession(configuration: cfg)
     }()
 
     private static let cachePruneOnce: Void = {
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: nil
+        ) { _ in
+            sequenceCache.removeAllObjects()
+            thumbnailCache.removeAllObjects()
+        }
         DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 12.0) {
             pruneDirectoryIfNeeded(FullGramAvatarFrames.cacheDirectory(), maxBytes: 64 * 1024 * 1024)
             pruneDirectoryIfNeeded(FullGramProfileEffects.cacheDirectory(), maxBytes: 64 * 1024 * 1024)
         }
     }()
+
+    private static func removeCorruptCachedFileIfNeeded(_ url: URL) {
+        let framesPath = FullGramAvatarFrames.cacheDirectory().standardizedFileURL.path
+        let effectsPath = FullGramProfileEffects.cacheDirectory().standardizedFileURL.path
+        let targetPath = url.standardizedFileURL.path
+        if targetPath.hasPrefix(framesPath) || targetPath.hasPrefix(effectsPath) {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
 
     private static func pruneDirectoryIfNeeded(_ dir: URL, maxBytes: Int64) {
         let fm = FileManager.default
@@ -1121,7 +1139,7 @@ public final class FullGramAnimatedImageDecoder {
             return nil
         }
         if let seq = self.cachedSequence(for: preset), let visible = seq.frames.first(where: { self.isImageVisiblyOpaque($0) }) ?? seq.frames.first {
-            self.thumbnailCache.setObject(visible, forKey: ("thumb_" + preset.id) as NSString)
+            self.thumbnailCache.setObject(visible, forKey: ("thumb_" + preset.id) as NSString, cost: max(1024, visible.bytesPerRow * visible.height))
             completion(visible)
             return nil
         }
@@ -1190,7 +1208,7 @@ public final class FullGramAnimatedImageDecoder {
             let layerKey = "pe_\(effectId)_\(idx)" as NSString
             if let seq = self.sequenceCache.object(forKey: layerKey),
                let visible = seq.frames.first(where: { self.isImageVisiblyOpaque($0) }) ?? seq.frames.first {
-                self.thumbnailCache.setObject(visible, forKey: ("thumb_" + cacheKey) as NSString)
+                self.thumbnailCache.setObject(visible, forKey: ("thumb_" + cacheKey) as NSString, cost: max(1024, visible.bytesPerRow * visible.height))
                 completion(visible)
                 return nil
             }
@@ -1342,10 +1360,12 @@ public final class FullGramAnimatedImageDecoder {
         diskCacheURL: URL? = nil
     ) -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            self.removeCorruptCachedFileIfNeeded(url)
             return nil
         }
         let rawCount = CGImageSourceGetCount(source)
         guard rawCount > 0 else {
+            self.removeCorruptCachedFileIfNeeded(url)
             return nil
         }
         let thumbOptions: [CFString: Any] = [
@@ -1379,9 +1399,10 @@ public final class FullGramAnimatedImageDecoder {
             }
         }
         guard let finalImg = chosen ?? firstDecoded else {
+            self.removeCorruptCachedFileIfNeeded(url)
             return nil
         }
-        self.thumbnailCache.setObject(finalImg, forKey: ("thumb_" + cacheKey) as NSString)
+        self.thumbnailCache.setObject(finalImg, forKey: ("thumb_" + cacheKey) as NSString, cost: max(1024, finalImg.bytesPerRow * finalImg.height))
         if rawCount > 1, let diskCacheURL, diskCacheURL != url || !FileManager.default.fileExists(atPath: diskCacheURL.path) {
             self.writeThumbnailPNG(finalImg, to: diskCacheURL)
         }
@@ -1422,7 +1443,7 @@ public final class FullGramAnimatedImageDecoder {
         self.ioQueue.async {
             if let localURL = FullGramAvatarFrames.frameURL(for: preset) {
                 self.decodeOpQueue.addOperation {
-                    finish(self.decodeFile(url: localURL, cacheKey: preset.id, maxPixelSize: maxPixelSize, maxFrames: 60))
+                    finish(self.decodeFile(url: localURL, cacheKey: preset.id, maxPixelSize: maxPixelSize, maxFrames: 36))
                 }
                 return
             }
@@ -1572,7 +1593,7 @@ public final class FullGramAnimatedImageDecoder {
         guard let url = FullGramAvatarFrames.frameURL(for: preset) else {
             return nil
         }
-        return self.decodeFile(url: url, cacheKey: preset.id, maxPixelSize: maxPixelSize, maxFrames: 60)
+        return self.decodeFile(url: url, cacheKey: preset.id, maxPixelSize: maxPixelSize, maxFrames: 36)
     }
 
     private static func decodeFile(
@@ -1582,10 +1603,14 @@ public final class FullGramAnimatedImageDecoder {
         maxFrames: Int
     ) -> FullGramAnimatedFrameSequence? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            self.removeCorruptCachedFileIfNeeded(url)
             return nil
         }
         let rawCount = CGImageSourceGetCount(source)
-        guard rawCount > 0 else { return nil }
+        guard rawCount > 0 else {
+            self.removeCorruptCachedFileIfNeeded(url)
+            return nil
+        }
 
         let strideStep = max(1, (rawCount + maxFrames - 1) / maxFrames)
         var images: [CGImage] = []
@@ -1694,12 +1719,15 @@ public final class FullGramAvatarFrameView: UIView {
         let scale: CGFloat = self.bounds.width < 52.0 ? 1.14 : 1.18
         let w = self.bounds.width * scale
         let h = self.bounds.height * scale
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         self.frameLayer.frame = CGRect(
             x: (self.bounds.width - w) * 0.5,
             y: (self.bounds.height - h) * 0.5,
             width: w,
             height: h
         )
+        CATransaction.commit()
     }
 
     public func cancelPendingLoad() {
@@ -1859,8 +1887,11 @@ public final class FullGramProfileEffectOverlayView: UIView {
 
     public override func layoutSubviews() {
         super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         self.ambientLayer.frame = self.bounds
         self.introLayer.frame = self.bounds
+        CATransaction.commit()
     }
 
     public func cancelPendingLoad() {

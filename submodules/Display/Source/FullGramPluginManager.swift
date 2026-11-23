@@ -133,15 +133,7 @@ public enum FullGramPluginTimeHelper {
         let dateStr = String(format: "%02d.%02d.%04d", day, month, year)
         let formatted = "\(dateStr) \(hms)"
 
-        let df = DateFormatter()
-        df.locale = Locale(identifier: "ru_RU")
-        df.timeZone = tz
-        df.dateFormat = "EEEE"
-        let weekdayName = df.string(from: date).capitalized
-        df.dateFormat = "EEE"
-        let weekdayShort = df.string(from: date).capitalized
-        df.dateFormat = "MMMM"
-        let monthName = df.string(from: date).capitalized
+        let (weekdayName, weekdayShort, monthName, iso) = Self.formatCalendarLabels(date: date, tz: tz)
 
         let offsetSec = tz.secondsFromGMT(for: date)
         let sign = offsetSec >= 0 ? "+" : "-"
@@ -150,7 +142,6 @@ public enum FullGramPluginTimeHelper {
 
         let jFmt = DateFormatter.dateFormat(fromTemplate: "j", options: 0, locale: Locale.current) ?? "HH"
         let is24h = !jFmt.contains("a")
-        let iso = ISO8601DateFormatter().string(from: date)
 
         return [
             "timestamp": .double(date.timeIntervalSince1970),
@@ -184,13 +175,56 @@ public enum FullGramPluginTimeHelper {
         ]
     }
 
-    public static func formatTime(format: String?, timestamp: Double?, style: String?) -> String {
-        let date = timestamp.map { Date(timeIntervalSince1970: $0) } ?? Date()
+    private static let formatterLock = NSLock()
+    private static let ruLocale = Locale(identifier: "ru_RU")
+    private static let weekdayNameFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.locale = ruLocale
+        df.dateFormat = "EEEE"
+        return df
+    }()
+    private static let weekdayShortFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.locale = ruLocale
+        df.dateFormat = "EEE"
+        return df
+    }()
+    private static let monthNameFormatter: DateFormatter = {
+        let df = DateFormatter()
+        df.locale = ruLocale
+        df.dateFormat = "MMMM"
+        return df
+    }()
+    private static let isoFormatter = ISO8601DateFormatter()
+    private static let customTimeFormatter: DateFormatter = {
         let df = DateFormatter()
         df.locale = Locale.current
         df.timeZone = TimeZone.current
-        df.dateFormat = (format?.isEmpty == false) ? format! : "dd.MM.yyyy HH:mm:ss"
-        let rendered = df.string(from: date)
+        return df
+    }()
+
+    private static func formatCalendarLabels(date: Date, tz: TimeZone) -> (String, String, String, String) {
+        self.formatterLock.lock()
+        defer { self.formatterLock.unlock() }
+        self.weekdayNameFormatter.timeZone = tz
+        self.weekdayShortFormatter.timeZone = tz
+        self.monthNameFormatter.timeZone = tz
+        return (
+            self.weekdayNameFormatter.string(from: date).capitalized,
+            self.weekdayShortFormatter.string(from: date).capitalized,
+            self.monthNameFormatter.string(from: date).capitalized,
+            self.isoFormatter.string(from: date)
+        )
+    }
+
+    public static func formatTime(format: String?, timestamp: Double?, style: String?) -> String {
+        let date = timestamp.map { Date(timeIntervalSince1970: $0) } ?? Date()
+        self.formatterLock.lock()
+        self.customTimeFormatter.locale = Locale.current
+        self.customTimeFormatter.timeZone = TimeZone.current
+        self.customTimeFormatter.dateFormat = (format?.isEmpty == false) ? format! : "dd.MM.yyyy HH:mm:ss"
+        let rendered = self.customTimeFormatter.string(from: date)
+        self.formatterLock.unlock()
         if let style, !style.isEmpty {
             return Self.stylizeDigits(rendered, style: style)
         }

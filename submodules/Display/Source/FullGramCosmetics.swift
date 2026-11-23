@@ -77,6 +77,8 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
         cfg.timeoutIntervalForRequest = 10.0
         cfg.timeoutIntervalForResource = 15.0
         cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
+        cfg.urlCache = nil
+        cfg.httpMaximumConnectionsPerHost = 2
         return URLSession(configuration: cfg)
     }()
 
