@@ -56,4 +56,4 @@
 
 - Канал: [@fullgram_mod](https://t.me/fullgram_mod)
 - Официальная группа: [@fullgramgroup](https://t.me/fullgramgroup)
-- Создатель мода: [@shermanko](https://t.me/shermanko)
+- Создатель мода: [@shermanko](https://t.me/nuqru)
