@@ -595,17 +595,20 @@ public func fullGramBetaActivationController(context: AccountContext) -> ViewCon
     let observer = NotificationCenter.default.addObserver(forName: FullGramBetaAccess.didChangeNotification, object: nil, queue: .main) { _ in
         bump()
     }
+    FullGramBetaAccess.shared.syncWithServer(peerId: context.account.peerId.id._internalGetInt64Value(), force: true)
 
     enum BetaEntry: ItemListNodeEntry {
         case header(String)
         case versionRow(String, String)
+        case accountIdRow(String, String)
+        case checkAccess(String)
         case enterCode(String)
         case openSettings(String)
         case info(String)
 
         var section: ItemListSectionId {
             switch self {
-            case .header, .versionRow, .enterCode, .openSettings, .info: return 0
+            case .header, .versionRow, .accountIdRow, .checkAccess, .enterCode, .openSettings, .info: return 0
             }
         }
 
@@ -613,9 +616,11 @@ public func fullGramBetaActivationController(context: AccountContext) -> ViewCon
             switch self {
             case .header: return 0
             case .versionRow: return 1
-            case .enterCode: return 2
-            case .openSettings: return 3
-            case .info: return 4
+            case .accountIdRow: return 2
+            case .checkAccess: return 3
+            case .enterCode: return 4
+            case .openSettings: return 5
+            case .info: return 6
             }
         }
 
@@ -624,7 +629,7 @@ public func fullGramBetaActivationController(context: AccountContext) -> ViewCon
         }
 
         func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
-            let args = arguments as! (() -> Void, () -> Void)
+            let args = arguments as! (() -> Void, () -> Void, () -> Void, () -> Void)
             switch self {
             case let .header(text):
                 return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
@@ -638,6 +643,28 @@ public func fullGramBetaActivationController(context: AccountContext) -> ViewCon
                     style: .blocks,
                     disclosureStyle: .none,
                     action: {}
+                )
+            case let .accountIdRow(title, value):
+                return ItemListDisclosureItem(
+                    presentationData: presentationData,
+                    systemStyle: .glass,
+                    title: title,
+                    label: value,
+                    sectionId: self.section,
+                    style: .blocks,
+                    disclosureStyle: .none,
+                    action: args.2
+                )
+            case let .checkAccess(title):
+                return ItemListActionItem(
+                    presentationData: presentationData,
+                    systemStyle: .glass,
+                    title: title,
+                    kind: .generic,
+                    alignment: .center,
+                    sectionId: self.section,
+                    style: .blocks,
+                    action: args.3
                 )
             case let .enterCode(title):
                 return ItemListActionItem(
@@ -673,24 +700,20 @@ public func fullGramBetaActivationController(context: AccountContext) -> ViewCon
         let alert = UIAlertController(
             title: ru ? "Активация бета-теста" : "Activate Beta Test",
             message: ru
-                ? "Вставьте ссылку-приглашение (https://.../beta/..., fullgram://beta?code=...) или код fgb1_..."
-                : "Paste your invite link or beta code (fgb1_...):",
+                ? "Вставьте любую ссылку (t.me/...?start=beta_..., https://.../beta/..., fullgram://beta?code=...) или код fgb1_..."
+                : "Paste any invite link or beta code (fgb1_...):",
             preferredStyle: .alert
         )
         alert.addTextField { tf in
-            tf.placeholder = "fgb1_... или https://.../beta/..."
+            tf.placeholder = "fgb1_... или ссылка"
             tf.autocorrectionType = .no
             tf.autocapitalizationType = .none
         }
         alert.addAction(UIAlertAction(title: ru ? "Активировать" : "Activate", style: .default, handler: { _ in
             let raw = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let code: String
-            if let url = URL(string: raw), let extracted = FullGramBetaAccess.extractBetaCode(from: url) {
-                code = extracted
-            } else {
-                code = raw
+            guard let code = FullGramBetaAccess.extractBetaCode(fromRawInput: raw), !code.isEmpty else {
+                return
             }
-            guard !code.isEmpty else { return }
             let peerRawId = context.account.peerId.id._internalGetInt64Value()
             FullGramBetaAccess.shared.activate(code: code, peerId: peerRawId) { result in
                 switch result {
@@ -723,24 +746,62 @@ public func fullGramBetaActivationController(context: AccountContext) -> ViewCon
         replaceWithSettingsImpl?()
     }
 
-    let args = (promptForCode, openFullGram)
+    let copyAccountId: () -> Void = {
+        let normId = FullGramCloudCosmetics.normalizedPeerId(context.account.peerId.id._internalGetInt64Value())
+        UIPasteboard.general.string = String(normId)
+        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+        let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+        let alert = textAlertController(
+            context: context,
+            title: "Telegram ID",
+            text: ru ? "ID \(normId) скопирован в буфер обмена." : "ID \(normId) copied to clipboard.",
+            actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]
+        )
+        presentControllerImpl?(alert)
+    }
+
+    let checkAccessNow: () -> Void = {
+        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+        let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+        let peerRawId = context.account.peerId.id._internalGetInt64Value()
+        FullGramBetaAccess.shared.syncWithServer(peerId: peerRawId, force: true) { active in
+            if active {
+                replaceWithSettingsImpl?()
+            } else {
+                let alert = textAlertController(
+                    context: context,
+                    title: "FullGram Beta",
+                    text: ru
+                        ? "Доступ для этого аккаунта пока не найден. Перейдите по ссылке приглашения через Telegram-бота или введите код вручную."
+                        : "Beta access not found for this account yet. Redeem your invite link via the Telegram bot or enter the code manually.",
+                    actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]
+                )
+                presentControllerImpl?(alert)
+            }
+        }
+    }
+
+    let args = (promptForCode, openFullGram, copyAccountId, checkAccessNow)
     let signal = combineLatest(context.sharedContext.presentationData, changed.get())
     |> deliverOnMainQueue
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
-        let unlocked = FullGramBetaAccess.shared.isUnlocked(forPeerId: context.account.peerId.id._internalGetInt64Value())
+        let normId = FullGramCloudCosmetics.normalizedPeerId(context.account.peerId.id._internalGetInt64Value())
+        let unlocked = FullGramBetaAccess.shared.isUnlocked(forPeerId: normId)
         var entries: [BetaEntry] = [
             .header(ru ? "ЗАКРЫТЫЙ БЕТА-ТЕСТ FULLGRAM" : "FULLGRAM CLOSED BETA TEST"),
-            .versionRow(ru ? "Версия" : "Version", FullGramVersion.displayString(russian: ru))
+            .versionRow(ru ? "Версия" : "Version", FullGramVersion.displayString(russian: ru)),
+            .accountIdRow(ru ? "Ваш Telegram ID" : "Your Telegram ID", String(normId))
         ]
         if unlocked {
             entries.append(.openSettings(ru ? "Открыть функции FullGram" : "Open FullGram Features"))
         } else {
+            entries.append(.checkAccess(ru ? "🔄 Проверить доступ" : "🔄 Check Access"))
             entries.append(.enterCode(ru ? "Ввести ссылку или код приглашения" : "Enter Invite Link or Code"))
         }
         entries.append(.info(ru
-            ? "Функции FullGram доступны участникам закрытого бета-теста. Вы можете активировать доступ, нажав на выданную ботом ссылку-приглашение в любом чате или вставив её сюда."
-            : "FullGram features require a beta invite link. Tap your invite link in any chat or paste it here to unlock."))
+            ? "Чтобы активировать бета-тест, просто нажмите на ссылку-приглашение в боте Telegram или вставьте код сюда. После активации в боте нажмите «Проверить доступ»."
+            : "Tap your invite link in the Telegram bot or paste the code here. If you already activated via the bot, tap Check Access."))
 
         let data = ItemListPresentationData(presentationData)
         let state = ItemListControllerState(

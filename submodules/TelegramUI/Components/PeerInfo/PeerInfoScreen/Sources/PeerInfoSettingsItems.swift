@@ -238,15 +238,20 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
     
     let betaActive = FullGramBetaAccess.shared.isUnlocked(forPeerId: context.account.peerId.id._internalGetInt64Value())
     let fgBetaRu = presentationData.strings.baseLanguageCode.hasPrefix("ru")
-    if betaActive {
-        items[.shortcuts]!.append(PeerInfoScreenDisclosureItem(id: 0, label: .text("Beta"), text: "FullGram", icon: fullGramSettingsMenuIcon(), action: {
+    let openFullGramAction: () -> Void = {
+        if FullGramBetaAccess.shared.isUnlocked(forPeerId: context.account.peerId.id._internalGetInt64Value()) {
             interaction.openSettings(.fullgram)
-        }))
-    } else {
-        items[.shortcuts]!.append(PeerInfoScreenDisclosureItem(id: 0, label: .text(fgBetaRu ? "🔒 Бета" : "🔒 Beta"), text: "FullGram", icon: fullGramSettingsMenuIcon(), action: {
+        } else {
             interaction.getController()?.push(fullGramBetaActivationController(context: context))
-        }))
+        }
     }
+    items[.shortcuts]!.append(PeerInfoScreenDisclosureItem(
+        id: 0,
+        label: .text(betaActive ? "Beta" : (fgBetaRu ? "🔒 Бета" : "🔒 Beta")),
+        text: "FullGram",
+        icon: fullGramSettingsMenuIcon(),
+        action: openFullGramAction
+    ))
     items[.shortcuts]!.append(PeerInfoScreenDisclosureItem(id: 1, text: presentationData.strings.Settings_SavedMessages, icon: PresentationResourcesSettings.savedMessages, action: {
         interaction.openSettings(.savedMessages)
     }))

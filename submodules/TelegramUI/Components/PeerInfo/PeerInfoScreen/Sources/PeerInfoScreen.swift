@@ -2601,12 +2601,16 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
             let nickObserver = NotificationCenter.default.addObserver(forName: FullGramNicknameStyle.didChangeNotification, object: nil, queue: .main) { _ in
                 bump()
             }
+            let betaObserver = NotificationCenter.default.addObserver(forName: FullGramBetaAccess.didChangeNotification, object: nil, queue: .main) { _ in
+                bump()
+            }
             return ActionDisposable {
                 NotificationCenter.default.removeObserver(extrasObserver)
                 NotificationCenter.default.removeObserver(badgesObserver)
                 NotificationCenter.default.removeObserver(cosmeticsObserver)
                 NotificationCenter.default.removeObserver(effectsObserver)
                 NotificationCenter.default.removeObserver(nickObserver)
+                NotificationCenter.default.removeObserver(betaObserver)
             }
         }
         self.dataDisposable = combineLatest(

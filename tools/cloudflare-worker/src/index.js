@@ -762,13 +762,103 @@ async function verifyBetaReceipt(receipt, env) {
   }
 }
 
-function renderBetaLandingHtml(code, origin, inviteStatus = null) {
+let cachedBotUsername = null;
+
+async function resolveBotUsername(env) {
+  const fromEnv = String(env.BOT_USERNAME || "").trim().replace(/^@/, "");
+  if (fromEnv) return fromEnv;
+  if (cachedBotUsername) return cachedBotUsername;
+  if (env.FULLGRAM_KV) {
+    try {
+      const fromKv = String((await env.FULLGRAM_KV.get("beta_bot_username_v1")) || "").trim().replace(/^@/, "");
+      if (fromKv) {
+        cachedBotUsername = fromKv;
+        return fromKv;
+      }
+    } catch {}
+  }
+  const token = String(env.TG_BOT_TOKEN || "").trim();
+  if (!token) return "";
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+    const data = await res.json();
+    const uname = String(data?.result?.username || "").trim().replace(/^@/, "");
+    if (uname) {
+      cachedBotUsername = uname;
+      if (env.FULLGRAM_KV) {
+        await env.FULLGRAM_KV.put("beta_bot_username_v1", uname);
+      }
+      return uname;
+    }
+  } catch {}
+  return "";
+}
+
+async function redeemBetaInvite(env, rawCode, rawPeerId, opts = {}) {
+  const code = String(rawCode || "").trim();
+  const peerId = normalizePeerId(rawPeerId != null ? String(rawPeerId).trim() : "");
+  if (!code || !peerId || !/^-?\d{1,20}$/.test(peerId)) {
+    return { ok: false, status: 400, error: "Требуется корректный код приглашения и ID аккаунта." };
+  }
+  const [inv, usersData] = await Promise.all([loadBetaInvites(env), loadBetaUsers(env)]);
+  let matchedCode = inv.invites[code] ? code : null;
+  if (!matchedCode) {
+    const lower = code.toLowerCase();
+    matchedCode = Object.keys(inv.invites || {}).find((k) => k.toLowerCase() === lower) || null;
+  }
+  const entry = matchedCode ? inv.invites[matchedCode] : null;
+  const now = Math.floor(Date.now() / 1000);
+  if (!entry || entry.revoked) {
+    return { ok: false, status: 403, error: "Ссылка приглашения недействительна или отозвана." };
+  }
+  if (entry.expiresAt && now > entry.expiresAt) {
+    return { ok: false, status: 403, error: "Срок действия ссылки приглашения истёк." };
+  }
+  const existingUser = usersData.users[peerId];
+  if (existingUser && existingUser.revoked) {
+    return { ok: false, status: 403, error: "Ваш доступ был отозван администратором." };
+  }
+  const alreadyUsingThisCode = Boolean(existingUser && existingUser.code === matchedCode && existingUser.activatedAt);
+  if (!alreadyUsingThisCode) {
+    if ((entry.uses || 0) >= (entry.maxUses || 1)) {
+      return { ok: false, status: 403, error: "Лимит активаций этой ссылки исчерпан." };
+    }
+    entry.uses = (entry.uses || 0) + 1;
+    inv.invites[matchedCode] = entry;
+    await saveBetaInvites(env, inv);
+  }
+  usersData.users[peerId] = {
+    ...(existingUser || {}),
+    code: matchedCode,
+    deviceHash: opts.deviceHash || existingUser?.deviceHash || "",
+    via: opts.via || existingUser?.via || "app",
+    username: opts.username || existingUser?.username || "",
+    activatedAt: existingUser?.activatedAt || now,
+    updatedAt: now,
+    revoked: false
+  };
+  await saveBetaUsers(env, usersData);
+  return {
+    ok: true,
+    code: matchedCode,
+    peerId,
+    alreadyActive: Boolean(existingUser && !existingUser.revoked),
+    remaining: Math.max(0, (entry.maxUses || 1) - (entry.uses || 0))
+  };
+}
+
+function renderBetaLandingHtml(code, origin, inviteStatus = null, options = {}) {
   const safeCode = escapeHtml(code);
+  const botUsername = String(options.botUsername || "").trim().replace(/^@/, "");
+  const done = Boolean(options.done);
   const deepLink = `fullgram://beta?code=${encodeURIComponent(code)}`;
-  const tgDeepLink = `tg://fullgram/beta?code=${encodeURIComponent(code)}`;
+  const botLink = botUsername ? `https://t.me/${encodeURIComponent(botUsername)}?start=beta_${encodeURIComponent(code)}` : "";
   let statusBadge = "Готово к активации";
   let statusColor = "#34d399";
-  if (inviteStatus) {
+  if (done) {
+    statusBadge = "Доступ активирован! Вернитесь в FullGram";
+    statusColor = "#34d399";
+  } else if (inviteStatus) {
     if (inviteStatus.revoked) {
       statusBadge = "Ссылка отозвана";
       statusColor = "#f87171";
@@ -785,6 +875,10 @@ function renderBetaLandingHtml(code, origin, inviteStatus = null) {
       statusBadge = `Активна · осталось ${inviteStatus.remaining} из ${inviteStatus.maxUses}`;
     }
   }
+  const botButton = botLink && !done
+    ? `<a class="btn" href="${escapeHtml(botLink)}">🤖 Активировать в Telegram (1 клик)</a>`
+    : "";
+  const appButtonClass = (!botLink || done) ? "btn" : "btn-sec";
   return `<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -793,26 +887,56 @@ function renderBetaLandingHtml(code, origin, inviteStatus = null) {
   <title>FullGram · Закрытый бета-тест</title>
   <style>
     body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0a0b10;color:#fff;font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:24px;}
-    .card{max-width:410px;width:100%;background:#151822;border:1px solid rgba(255,255,255,.08);border-radius:22px;padding:28px;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.45);}
-    .pill{display:inline-block;padding:5px 12px;border-radius:999px;font-size:12px;font-weight:700;background:rgba(255,255,255,.06);margin-bottom:14px;}
+    .card{max-width:420px;width:100%;background:#151822;border:1px solid rgba(255,255,255,.08);border-radius:22px;padding:28px;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.45);}
+    .pill{display:inline-block;padding:6px 12px;border-radius:999px;font-size:12px;font-weight:700;background:rgba(255,255,255,.06);margin-bottom:14px;}
     h1{font-size:22px;margin:0 0 10px;}
-    p{font-size:14px;line-height:1.5;color:#a4abc0;margin:0 0 20px;}
+    p{font-size:14px;line-height:1.5;color:#a4abc0;margin:0 0 18px;}
     .btn{display:block;padding:14px 18px;border-radius:14px;background:linear-gradient(135deg,#3390ec,#6c5ce7);color:#fff;text-decoration:none;font-weight:700;font-size:15px;margin-bottom:10px;}
-    .btn-sec{display:block;padding:12px 16px;border-radius:12px;background:rgba(255,255,255,.07);color:#e2e8f0;text-decoration:none;font-weight:600;font-size:13.5px;border:none;width:100%;cursor:pointer;margin-bottom:8px;}
-    .code{margin-top:14px;font-size:12px;color:#737b94;word-break:break-all;}
+    .btn-sec{display:block;padding:12px 16px;border-radius:12px;background:rgba(255,255,255,.07);color:#e2e8f0;text-decoration:none;font-weight:600;font-size:13.5px;border:none;width:100%;box-sizing:border-box;cursor:pointer;margin-bottom:8px;}
+    .hint{margin-top:12px;font-size:12.5px;line-height:1.45;color:#8e96ad;}
+    .code{margin-top:10px;font-size:12px;color:#737b94;word-break:break-all;}
   </style>
 </head>
 <body>
   <div class="card">
     <div class="pill" style="color:${statusColor};">${escapeHtml(statusBadge)}</div>
     <h1>🔐 Закрытый бета-тест FullGram</h1>
-    <p>Нажмите кнопку ниже, чтобы открыть FullGram и активировать бета-функции. Если откроется меню Настройки → FullGram, можно также вставить код вручную.</p>
-    <a class="btn" href="${deepLink}">Открыть FullGram и активировать</a>
-    <a class="btn-sec" href="${tgDeepLink}">Альтернативная ссылка (tg://)</a>
-    <button class="btn-sec" type="button" onclick="navigator.clipboard?.writeText(${JSON.stringify(code)});this.textContent='✅ Код скопирован';">📋 Скопировать код приглашения</button>
+    <p>${done ? "Ваш Telegram-аккаунт уже добавлен в белый список беты. Нажмите кнопку ниже или просто откройте FullGram." : "Нажмите «Активировать в Telegram» — бот мгновенно привяжет ваш аккаунт. Или откройте ссылку напрямую в FullGram."}</p>
+    ${botButton}
+    <a class="${appButtonClass}" href="${escapeHtml(deepLink)}">🚀 Открыть в FullGram</a>
+    <button class="btn-sec" id="copyCodeBtn" type="button" data-code="${safeCode}">📋 Скопировать код приглашения</button>
+    <div class="hint">После активации через бота просто откройте FullGram — доступ откроется автоматически.</div>
     <div class="code">Код: ${safeCode}</div>
   </div>
-  <script>setTimeout(function(){ window.location.href = ${JSON.stringify(deepLink)}; }, 150);</script>
+  <script>
+    (function(){
+      var btn = document.getElementById("copyCodeBtn");
+      if (!btn) return;
+      btn.addEventListener("click", function(){
+        var code = btn.getAttribute("data-code") || "";
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(code).then(function(){
+            btn.textContent = "✅ Код скопирован";
+          }).catch(function(){ fallbackCopy(code); });
+        } else {
+          fallbackCopy(code);
+        }
+      });
+      function fallbackCopy(text){
+        try {
+          var ta = document.createElement("textarea");
+          ta.value = text;
+          ta.style.position = "fixed";
+          ta.style.opacity = "0";
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+          btn.textContent = "✅ Код скопирован";
+        } catch (e) {}
+      }
+    })();
+  </script>
 </body>
 </html>`;
 }
@@ -1353,22 +1477,35 @@ async function handleTelegramWebhook(request, env, origin) {
       const rand = new Uint8Array(12);
       crypto.getRandomValues(rand);
       const code = `fgb1_${bytesToHex(rand)}`;
+      const botUsername = await resolveBotUsername(env);
       const inv = await loadBetaInvites(env);
-      inv.invites[code] = { maxUses, uses: 0, note: "button", createdAt: Math.floor(Date.now() / 1000), revoked: false };
+      inv.invites[code] = {
+        maxUses,
+        uses: 0,
+        note: "button",
+        botUsername: botUsername || undefined,
+        createdAt: Math.floor(Date.now() / 1000),
+        revoked: false
+      };
       await saveBetaInvites(env, inv);
       await answerTelegramCallback(env, cq.id, `✅ Бета-ссылка (${maxUses}) создана`);
+      const botLinkLine = botUsername
+        ? `🤖 <b>Ссылка в 1 клик (работает везде):</b>\nhttps://t.me/${botUsername}?start=beta_${code}\n\n`
+        : "";
       await sendTelegramMessage(
         env,
         cq.from.id,
         `🎟 <b>Ссылка для закрытого бета-теста FullGram</b>\n` +
         `Лимит активаций: <b>${maxUses}</b>\n\n` +
-        `🔗 Веб-ссылка:\n<code>${origin}/beta/${code}</code>\n\n` +
-        `📲 FullGram:\n<code>fullgram://beta?code=${code}</code>\n` +
-        `📲 Telegram:\n<code>tg://fullgram/beta?code=${code}</code>`,
+        botLinkLine +
+        `🌐 <b>Веб-ссылка:</b>\n${origin}/beta/${code}\n\n` +
+        `🔑 <b>Код для ручного ввода:</b>\n<code>${code}</code>`,
         {
           parse_mode: "HTML",
+          disable_web_page_preview: true,
           reply_markup: {
             inline_keyboard: [
+              [{ text: "🌐 Открыть веб-страницу", url: `${origin}/beta/${code}` }],
               [
                 { text: "🔄 Ещё (1)", callback_data: "gen_beta_1" },
                 { text: "👥 Ещё (5)", callback_data: "gen_beta_5" }
@@ -1440,6 +1577,39 @@ async function handleTelegramWebhook(request, env, origin) {
   const senderId = String(msg.from.id);
   const chatId = msg.chat?.id ?? msg.from.id;
   const isPrivateChat = msg.chat?.type === "private";
+  const rawTextPre = (msg.text || "").trim();
+
+  // Allow any user to redeem a beta invite via /start beta_<CODE> in private chat
+  if (isPrivateChat) {
+    const betaStartMatch = rawTextPre.match(/^\/start(?:@\S+)?\s+(?:beta[_-])?([A-Za-z0-9_.-]+)$/i);
+    if (betaStartMatch && (rawTextPre.toLowerCase().includes("beta") || betaStartMatch[1].startsWith("fgb1_"))) {
+      const code = betaStartMatch[1].trim();
+      const result = await redeemBetaInvite(env, code, senderId, {
+        via: "bot",
+        username: msg.from?.username || ""
+      });
+      if (result.ok) {
+        await sendTelegramMessage(
+          env,
+          chatId,
+          `✅ <b>Бета-доступ FullGram активирован!</b>\n\n` +
+          `Ваш Telegram ID: <code>${escapeHtml(senderId)}</code>\n` +
+          `Теперь просто откройте приложение FullGram — все функции откроются автоматически.\n\n` +
+          `Если FullGram уже открыт, зайдите в <b>Настройки → FullGram → Проверить доступ</b>.`,
+          {
+            parse_mode: "HTML",
+            reply_markup: {
+              inline_keyboard: [[{ text: "🚀 Открыть FullGram", url: `${origin}/beta/${encodeURIComponent(result.code)}?done=1` }]]
+            }
+          }
+        );
+      } else {
+        await sendTelegramMessage(env, chatId, `❌ ${result.error}`);
+      }
+      return jsonResponse({ ok: true });
+    }
+  }
+
   const senderIsAdmin = isAdminUserId(senderId, env);
 
   // Strict owner-only & private-chat access: nobody except the owner in DM can use this bot
@@ -1543,6 +1713,7 @@ async function handleTelegramWebhook(request, env, origin) {
       "Команды:\n" +
       "/token [дни] или /gen — автогенерация админ-токена (по умолчанию 30 дн., копируется в 1 тап)\n" +
       "/beta [кол-во] [заметка] — создать ссылку для бета-теста\n" +
+      "/beta_add <peerId> — выдать бета-доступ напрямую по ID\n" +
       "/beta_list — список инвайтов и тестеров\n" +
       "/beta_revoke <код_или_id> — отозвать ссылку или доступ тестера\n" +
       "/list — список плагинов в маркете\n" +
@@ -1585,6 +1756,26 @@ async function handleTelegramWebhook(request, env, origin) {
   if (text.startsWith("/beta")) {
     const parts = text.split(/\s+/);
     const betaCmd = parts[0].toLowerCase().replace(/@[^@\s]+$/, "");
+    if (betaCmd === "/beta_add") {
+      const targetId = normalizePeerId((parts[1] || "").trim());
+      if (!targetId || !/^-?\d{1,20}$/.test(targetId)) {
+        await sendTelegramMessage(env, chatId, "Формат: /beta_add <peerId>");
+        return jsonResponse({ ok: true });
+      }
+      const usersData = await loadBetaUsers(env);
+      const now = Math.floor(Date.now() / 1000);
+      usersData.users[targetId] = {
+        ...(usersData.users[targetId] || {}),
+        code: "owner_grant",
+        via: "owner",
+        activatedAt: usersData.users[targetId]?.activatedAt || now,
+        updatedAt: now,
+        revoked: false
+      };
+      await saveBetaUsers(env, usersData);
+      await sendTelegramMessage(env, chatId, `✅ Бета-доступ выдан аккаунту <code>${escapeHtml(targetId)}</code>.`, { parse_mode: "HTML" });
+      return jsonResponse({ ok: true });
+    }
     if (betaCmd === "/beta_list") {
       const [inv, usr] = await Promise.all([loadBetaInvites(env), loadBetaUsers(env)]);
       const invLines = Object.entries(inv.invites || {}).slice(-15).map(([c, info]) =>
@@ -1623,26 +1814,42 @@ async function handleTelegramWebhook(request, env, origin) {
       return jsonResponse({ ok: true });
     }
     const maxUsesRaw = Number(parts[1]);
-    const maxUses = Number.isFinite(maxUsesRaw) && maxUsesRaw >= 1 ? Math.min(500, Math.floor(maxUsesRaw)) : 1;
-    const note = (Number.isFinite(maxUsesRaw) ? parts.slice(2) : parts.slice(1)).join(" ").trim().slice(0, 80);
+    const hasCount = parts.length > 1 && Number.isFinite(maxUsesRaw) && maxUsesRaw >= 1;
+    const maxUses = hasCount ? Math.min(500, Math.floor(maxUsesRaw)) : 1;
+    const note = (hasCount ? parts.slice(2) : parts.slice(1)).join(" ").trim().slice(0, 80);
     const rand = new Uint8Array(12);
     crypto.getRandomValues(rand);
     const code = `fgb1_${bytesToHex(rand)}`;
+    const botUsername = await resolveBotUsername(env);
     const inv = await loadBetaInvites(env);
-    inv.invites[code] = { maxUses, uses: 0, note, createdAt: Math.floor(Date.now() / 1000), revoked: false };
+    inv.invites[code] = {
+      maxUses,
+      uses: 0,
+      note,
+      botUsername: botUsername || undefined,
+      createdAt: Math.floor(Date.now() / 1000),
+      revoked: false
+    };
     await saveBetaInvites(env, inv);
+    const botLinkLine = botUsername
+      ? `🤖 <b>Ссылка в 1 клик (работает везде):</b>\nhttps://t.me/${botUsername}?start=beta_${code}\n\n`
+      : "";
     await sendTelegramMessage(
       env,
       chatId,
       `🎟 <b>Ссылка для закрытого бета-теста FullGram</b>\n` +
       `Лимит активаций: <b>${maxUses}</b>${note ? `\nЗаметка: ${escapeHtml(note)}` : ""}\n\n` +
-      `🔗 Веб-ссылка:\n<code>${origin}/beta/${code}</code>\n\n` +
-      `📲 FullGram:\n<code>fullgram://beta?code=${code}</code>\n` +
-      `📲 Telegram:\n<code>tg://fullgram/beta?code=${code}</code>`,
+      botLinkLine +
+      `🌐 <b>Веб-ссылка:</b>\n${origin}/beta/${code}\n\n` +
+      `🔑 <b>Код для ручного ввода:</b>\n<code>${code}</code>`,
       {
         parse_mode: "HTML",
+        disable_web_page_preview: true,
         reply_markup: {
-          inline_keyboard: [[{ text: "🗑 Отозвать эту ссылку", callback_data: `beta_revoke:${code}` }]]
+          inline_keyboard: [
+            [{ text: "🌐 Открыть веб-страницу", url: `${origin}/beta/${code}` }],
+            [{ text: "🗑 Отозвать эту ссылку", callback_data: `beta_revoke:${code}` }]
+          ]
         }
       }
     );
@@ -1949,11 +2156,13 @@ export default {
       return jsonResponse({ version: 2, frames: [], profileEffects: [] });
     }
 
-    if (request.method === "GET" && path.startsWith("/beta/")) {
-      const code = path.slice("/beta/".length).trim().replace(/[^a-zA-Z0-9_.-]/g, "");
+    if (request.method === "GET" && (path.startsWith("/beta/") || path === "/beta")) {
+      const rawCode = path.startsWith("/beta/") ? path.slice("/beta/".length) : (url.searchParams.get("code") || "");
+      const code = rawCode.trim().replace(/[^a-zA-Z0-9_.-]/g, "");
       if (!code) {
         return new Response("Invalid beta invite code", { status: 400 });
       }
+      const done = url.searchParams.get("done") === "1";
       const inv = await loadBetaInvites(env);
       const entry = inv.invites && inv.invites[code] ? inv.invites[code] : null;
       const now = Math.floor(Date.now() / 1000);
@@ -1967,7 +2176,11 @@ export default {
         maxUses,
         remaining: Math.max(0, maxUses - uses)
       };
-      return new Response(renderBetaLandingHtml(code, origin, statusInfo), {
+      let botUsername = String(entry?.botUsername || "").trim().replace(/^@/, "");
+      if (!botUsername) {
+        botUsername = await resolveBotUsername(env);
+      }
+      return new Response(renderBetaLandingHtml(code, origin, statusInfo, { botUsername, done }), {
         status: 200,
         headers: {
           "Content-Type": "text/html; charset=utf-8",
@@ -1985,66 +2198,50 @@ export default {
         if (!code || !peerId || !/^-?\d{1,20}$/.test(peerId) || deviceSecret.length < 16) {
           return jsonResponse({ ok: false, error: "Требуется корректный код приглашения и устройство." }, 400);
         }
-        const inv = await loadBetaInvites(env);
-        const entry = inv.invites[code];
-        const now = Math.floor(Date.now() / 1000);
-        if (!entry || entry.revoked) {
-          return jsonResponse({ ok: false, error: "Ссылка приглашения недействительна или отозвана." }, 403);
-        }
-        if (entry.expiresAt && now > entry.expiresAt) {
-          return jsonResponse({ ok: false, error: "Срок действия ссылки приглашения истёк." }, 403);
-        }
         const deviceHash = await sha256Hex(deviceSecret);
-        const usersData = await loadBetaUsers(env);
-        const existingUser = usersData.users[peerId];
-        if (existingUser && existingUser.revoked && existingUser.code === code) {
-          return jsonResponse({ ok: false, error: "Ваш доступ по этому приглашению был отозван." }, 403);
+        const result = await redeemBetaInvite(env, code, peerId, { deviceHash, via: "app" });
+        if (!result.ok) {
+          return jsonResponse({ ok: false, error: result.error }, result.status || 403);
         }
-        if (!existingUser || existingUser.code !== code) {
-          if ((entry.uses || 0) >= (entry.maxUses || 1)) {
-            return jsonResponse({ ok: false, error: "Лимит активаций этой ссылки исчерпан." }, 403);
-          }
-          entry.uses = (entry.uses || 0) + 1;
-          inv.invites[code] = entry;
-          await saveBetaInvites(env, inv);
-        }
-        usersData.users[peerId] = {
-          deviceHash,
-          code,
-          activatedAt: now,
-          revoked: false
-        };
-        await saveBetaUsers(env, usersData);
-        const receipt = await issueBetaReceipt(peerId, deviceHash, code, env);
+        const receipt = await issueBetaReceipt(peerId, deviceHash, result.code, env);
         return jsonResponse({ ok: true, active: true, peerId, receipt });
       } catch (err) {
         return jsonResponse({ ok: false, error: err.message }, 400);
       }
     }
 
-    if (request.method === "POST" && path === "/beta/status") {
+    if (request.method === "POST" && (path === "/beta/check" || path === "/beta/status")) {
       try {
         const body = await request.json();
-        const receipt = String(body.receipt || "").trim();
         const peerId = normalizePeerId(body.peerId != null ? String(body.peerId).trim() : "");
         const deviceSecret = String(body.deviceSecret || "").trim();
-        if (!receipt || !peerId || deviceSecret.length < 16) {
-          return jsonResponse({ ok: true, active: false });
-        }
-        const verified = await verifyBetaReceipt(receipt, env);
-        if (!verified || verified.uid !== peerId) {
+        if (!peerId || !/^-?\d{1,20}$/.test(peerId) || deviceSecret.length < 16) {
           return jsonResponse({ ok: true, active: false });
         }
         const deviceHash = await sha256Hex(deviceSecret);
-        if (!timingSafeEqual(verified.dh, deviceHash)) {
-          return jsonResponse({ ok: true, active: false });
+        if (isAdminUserId(peerId, env)) {
+          let receipt = "";
+          try {
+            receipt = await issueBetaReceipt(peerId, deviceHash, "owner", env);
+          } catch {}
+          return jsonResponse({ ok: true, active: true, peerId, isOwner: true, receipt });
         }
         const usersData = await loadBetaUsers(env);
         const userRec = usersData.users[peerId];
         if (!userRec || userRec.revoked) {
           return jsonResponse({ ok: true, active: false });
         }
-        return jsonResponse({ ok: true, active: true, peerId });
+        if (!userRec.deviceHash) {
+          userRec.deviceHash = deviceHash;
+          usersData.users[peerId] = userRec;
+          await saveBetaUsers(env, usersData);
+        }
+        let receipt = typeof body.receipt === "string" ? body.receipt.trim() : "";
+        const existingVerified = receipt ? await verifyBetaReceipt(receipt, env) : null;
+        if (!existingVerified || existingVerified.uid !== peerId || !timingSafeEqual(existingVerified.dh, deviceHash)) {
+          receipt = await issueBetaReceipt(peerId, deviceHash, userRec.code || "beta", env);
+        }
+        return jsonResponse({ ok: true, active: true, peerId, receipt });
       } catch {
         return jsonResponse({ ok: true, active: false });
       }

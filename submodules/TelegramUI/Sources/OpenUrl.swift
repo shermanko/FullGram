@@ -358,6 +358,7 @@ private func makeTelegramUrl(_ path: String, queryItems: [URLQueryItem] = []) ->
 
 func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, url: String, forceExternal: Bool, presentationData: PresentationData, navigationController: NavigationController?, dismissInput: @escaping () -> Void) {
     if let parsedUrl = URL(string: url), let betaCode = FullGramBetaAccess.extractBetaCode(from: parsedUrl) {
+        dismissInput()
         let peerRawId = context.account.peerId.id._internalGetInt64Value()
         FullGramBetaAccess.shared.activate(code: betaCode, peerId: peerRawId) { result in
             let text: String
@@ -367,6 +368,23 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
             case let .failure(err):
                 text = err.localizedDescription
             }
+            let alert = textAlertController(
+                context: context,
+                title: "FullGram Beta",
+                text: text,
+                actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]
+            )
+            context.sharedContext.presentGlobalController(alert, nil)
+        }
+        return
+    }
+    if let parsedUrl = URL(string: url), FullGramBetaAccess.isBetaSyncURL(parsedUrl) {
+        dismissInput()
+        let peerRawId = context.account.peerId.id._internalGetInt64Value()
+        FullGramBetaAccess.shared.syncWithServer(peerId: peerRawId, force: true) { active in
+            let text = active
+                ? "Закрытый бета-тест FullGram активен для вашего аккаунта!"
+                : "Доступ для этого аккаунта пока не активирован."
             let alert = textAlertController(
                 context: context,
                 title: "FullGram Beta",

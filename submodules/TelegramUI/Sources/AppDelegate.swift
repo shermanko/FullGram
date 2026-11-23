@@ -1503,8 +1503,8 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
                         })
                     }
                     let peerRawId = context.context.account.peerId.id._internalGetInt64Value()
-                    FullGramBetaAccess.shared.verifyWithServerIfNeeded(peerId: peerRawId)
-                    if let pendingCode = self.fullGramPendingBetaCode {
+                    FullGramBetaAccess.shared.syncWithServer(peerId: peerRawId, force: false)
+                    if let pendingCode = self.fullGramPendingBetaCode ?? FullGramBetaAccess.shared.consumePendingCode() {
                         self.fullGramPendingBetaCode = nil
                         self.activateFullGramBeta(code: pendingCode, peerId: peerRawId)
                     }
@@ -1694,10 +1694,10 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         })
         
         if let url = launchOptions?[.url] {
-            if let url = url as? URL, url.scheme == "tg" || url.scheme == "ton" || url.scheme == buildConfig.appSpecificUrlScheme || WalletContext.isTonConnectUrl(url.absoluteString) {
+            if let url = url as? URL, url.scheme == "tg" || url.scheme == "ton" || url.scheme?.lowercased() == "fullgram" || url.scheme == buildConfig.appSpecificUrlScheme || WalletContext.isTonConnectUrl(url.absoluteString) || FullGramBetaAccess.extractBetaCode(from: url) != nil {
                 self.openUrlWhenReady(url: url, external: true)
-            } else if let urlString = url as? String, urlString.lowercased().hasPrefix("tg:") || urlString.lowercased().hasPrefix("ton:") || urlString.lowercased().hasPrefix("\(buildConfig.appSpecificUrlScheme):") || WalletContext.isTonConnectUrl(urlString), let url = URL(string: urlString) {
-                self.openUrlWhenReady(url: url, external: true)
+            } else if let urlString = url as? String, let parsed = URL(string: urlString), (urlString.lowercased().hasPrefix("tg:") || urlString.lowercased().hasPrefix("ton:") || urlString.lowercased().hasPrefix("fullgram:") || urlString.lowercased().hasPrefix("\(buildConfig.appSpecificUrlScheme):") || WalletContext.isTonConnectUrl(urlString) || FullGramBetaAccess.extractBetaCode(from: parsed) != nil) {
+                self.openUrlWhenReady(url: parsed, external: true)
             }
         }
         
@@ -1905,7 +1905,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
 
         for context in connectionOptions.urlContexts {
             let url = context.url
-            if let buildConfig = self.buildConfig, url.scheme == "tg" || url.scheme == "ton" || url.scheme == buildConfig.appSpecificUrlScheme || WalletContext.isTonConnectUrl(url.absoluteString) {
+            if let buildConfig = self.buildConfig, url.scheme == "tg" || url.scheme == "ton" || url.scheme?.lowercased() == "fullgram" || url.scheme == buildConfig.appSpecificUrlScheme || WalletContext.isTonConnectUrl(url.absoluteString) || FullGramBetaAccess.extractBetaCode(from: url) != nil {
                 self.openUrlWhenReady(url: url, external: true)
             } else {
                 self.handleOpenURL(url)
@@ -2289,6 +2289,10 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         }
         
         self.runForegroundTasks()
+
+        if let peerId = self.contextValue?.context.account.peerId.id._internalGetInt64Value(), peerId != 0 {
+            FullGramBetaAccess.shared.syncWithServer(peerId: peerId, force: false)
+        }
         
         SharedDisplayLinkDriver.shared.updateForegroundState(self.isActiveValue)
     }
@@ -2840,15 +2844,34 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
     #endif
     
     private func handleFullGramBetaURLIfNeeded(_ url: URL) -> Bool {
-        guard let code = FullGramBetaAccess.extractBetaCode(from: url) else {
-            return false
+        if let code = FullGramBetaAccess.extractBetaCode(from: url) {
+            if let peerId = self.contextValue?.context.account.peerId.id._internalGetInt64Value(), peerId != 0 {
+                self.activateFullGramBeta(code: code, peerId: peerId)
+            } else {
+                self.fullGramPendingBetaCode = code
+                FullGramBetaAccess.shared.storePendingCode(code)
+            }
+            return true
         }
-        if let peerId = self.contextValue?.context.account.peerId.id._internalGetInt64Value(), peerId != 0 {
-            self.activateFullGramBeta(code: code, peerId: peerId)
-        } else {
-            self.fullGramPendingBetaCode = code
+        if FullGramBetaAccess.isBetaSyncURL(url) {
+            if let peerId = self.contextValue?.context.account.peerId.id._internalGetInt64Value(), peerId != 0 {
+                FullGramBetaAccess.shared.syncWithServer(peerId: peerId, force: true) { [weak self] active in
+                    MainActor.assumeIsolated {
+                        guard let self else { return }
+                        self.updateFullGramBetaGate()
+                        let title = active ? "Доступ активирован" : "Доступ не найден"
+                        let message = active
+                            ? "Закрытый бета-тест FullGram активен для вашего аккаунта!"
+                            : "Для этого аккаунта пока нет бета-доступа. Активируйте ссылку через бота или введите код в Настройки → FullGram."
+                        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+                        alert.addAction(UIAlertAction(title: "OK", style: .default))
+                        self.mainWindow?.presentNative(alert)
+                    }
+                }
+            }
+            return true
         }
-        return true
+        return false
     }
 
     private func activateFullGramBeta(code: String, peerId: Int64) {

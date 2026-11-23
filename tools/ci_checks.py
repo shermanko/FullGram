@@ -609,6 +609,7 @@ def check_plists_and_patches(require_submodules: bool) -> None:
     """Validate XML Info.plist files and unsigned CI patch readiness."""
     plist_targets = [
         ROOT / "Telegram/Telegram-iOS/Info.plist",
+        ROOT / "Telegram/Telegram-iOS/InfoBazel.plist",
         ROOT / "Telegram/WatchApp/tgwatch Watch App/Info.plist",
     ]
     for path in plist_targets:
@@ -618,6 +619,10 @@ def check_plists_and_patches(require_submodules: bool) -> None:
             plistlib.loads(path.read_bytes())
         except Exception as exc:
             raise AssertionError(f"Invalid plist XML in {path.relative_to(ROOT)}: {exc}") from exc
+
+    for rel in ("Telegram/BUILD", "Telegram/Telegram-iOS/InfoBazel.plist", "Telegram/Telegram-iOS/Info.plist"):
+        if "<string>fullgram</string>" not in (ROOT / rel).read_text(encoding="utf-8"):
+            raise AssertionError(f"{rel} missing <string>fullgram</string> URL scheme")
 
     patch_path = ROOT / "tools/ci/unsigned-build-rules.patch"
     if not patch_path.is_file() or patch_path.stat().st_size == 0:

@@ -1168,8 +1168,10 @@ public final class FullGramBetaAccess: @unchecked Sendable {
     private let keychainService = "FullGram.Beta.Access"
     private let receiptAccount = "beta_receipt_v1"
     private let peerIdAccount = "beta_peer_v1"
+    private let pendingCodeDefaultsKey = "FullGram.Beta.PendingCode"
     private let lock = NSLock()
     private var cachedActivated: Bool?
+    private var cachedPeerId: String?
     private var lastServerCheck: TimeInterval = 0
 
     private init() {}
@@ -1214,6 +1216,21 @@ public final class FullGramBetaAccess: @unchecked Sendable {
         SecItemDelete(query as CFDictionary)
     }
 
+    public func storePendingCode(_ code: String) {
+        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        UserDefaults.standard.set(trimmed, forKey: self.pendingCodeDefaultsKey)
+    }
+
+    public func consumePendingCode() -> String? {
+        guard let raw = UserDefaults.standard.string(forKey: self.pendingCodeDefaultsKey) else {
+            return nil
+        }
+        UserDefaults.standard.removeObject(forKey: self.pendingCodeDefaultsKey)
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     public var isActivated: Bool {
         self.lock.lock()
         if let cached = self.cachedActivated {
@@ -1221,17 +1238,27 @@ public final class FullGramBetaAccess: @unchecked Sendable {
             return cached
         }
         let receipt = self.readKeychain(self.receiptAccount)
+        let peerId = self.readKeychain(self.peerIdAccount)
         let valid = Self.isStructurallyValidReceipt(receipt)
         self.cachedActivated = valid
+        self.cachedPeerId = peerId
         self.lock.unlock()
         return valid
     }
 
     public func isUnlocked(forPeerId peerId: Int64?) -> Bool {
-        if self.isActivated {
+        let normId = peerId.map { FullGramCloudCosmetics.normalizedPeerId($0) } ?? 0
+        if normId == FullGramAdmin.ownerUserId {
             return true
         }
-        if let peerId, FullGramCloudCosmetics.normalizedPeerId(peerId) == FullGramAdmin.ownerUserId {
+        if self.isActivated {
+            self.lock.lock()
+            let storedPeer = self.cachedPeerId ?? self.readKeychain(self.peerIdAccount)
+            self.cachedPeerId = storedPeer
+            self.lock.unlock()
+            if let storedPeer, !storedPeer.isEmpty, normId > 0 {
+                return storedPeer == String(normId)
+            }
             return true
         }
         return false
@@ -1245,27 +1272,31 @@ public final class FullGramBetaAccess: @unchecked Sendable {
 
     public func clearActivation() {
         self.lock.lock()
+        let wasActive = self.cachedActivated == true || self.readKeychain(self.receiptAccount) != nil
         self.cachedActivated = false
+        self.cachedPeerId = nil
         self.lastServerCheck = 0
         self.lock.unlock()
         self.deleteKeychain(self.receiptAccount)
         self.deleteKeychain(self.peerIdAccount)
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        if wasActive {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+            }
         }
     }
 
     public static func extractBetaCode(from url: URL) -> String? {
         let scheme = url.scheme?.lowercased() ?? ""
         let host = url.host?.lowercased() ?? ""
-        if scheme == "fullgram" && (host == "beta" || url.path.lowercased().hasPrefix("/beta")) {
+        if scheme == "fullgram" && (host == "beta" || host == "activate" || url.path.lowercased().hasPrefix("/beta")) {
             if let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
                let code = comps.queryItems?.first(where: { $0.name.lowercased() == "code" })?.value?.trimmingCharacters(in: .whitespacesAndNewlines),
                !code.isEmpty {
                 return code
             }
             let parts = url.pathComponents.filter { $0 != "/" }
-            if host == "beta", let first = parts.first, !first.isEmpty {
+            if (host == "beta" || host == "activate"), let first = parts.first, !first.isEmpty {
                 return first.trimmingCharacters(in: .whitespacesAndNewlines)
             }
             if parts.count >= 2 && parts[0].lowercased() == "beta" {
@@ -1274,12 +1305,16 @@ public final class FullGramBetaAccess: @unchecked Sendable {
             }
         }
         if scheme == "tg" && host == "fullgram" {
-            let path = url.path.lowercased()
-            if path == "/beta" || path == "beta" || path.isEmpty {
+            let parts = url.pathComponents.filter { $0 != "/" }
+            if parts.isEmpty || parts[0].lowercased() == "beta" {
                 if let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
                    let code = comps.queryItems?.first(where: { $0.name.lowercased() == "code" })?.value?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   code.hasPrefix("fgb1_") || code.hasPrefix("fgb1.") {
+                   !code.isEmpty {
                     return code
+                }
+                if parts.count >= 2 && parts[0].lowercased() == "beta" {
+                    let code = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !code.isEmpty { return code }
                 }
             }
         }
@@ -1291,8 +1326,53 @@ public final class FullGramBetaAccess: @unchecked Sendable {
                     return code
                 }
             }
+            if parts.first?.lowercased() == "beta",
+               let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+               let code = comps.queryItems?.first(where: { $0.name.lowercased() == "code" })?.value?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !code.isEmpty {
+                return code
+            }
         }
         return nil
+    }
+
+    public static func extractBetaCode(fromRawInput raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let url = URL(string: trimmed) {
+            if let extracted = self.extractBetaCode(from: url) {
+                return extracted
+            }
+            let host = url.host?.lowercased() ?? ""
+            if (host == "t.me" || host == "telegram.me" || host == "telegram.dog"),
+               let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+               let start = comps.queryItems?.first(where: { $0.name.lowercased() == "start" })?.value?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !start.isEmpty {
+                if start.lowercased().hasPrefix("beta_") || start.lowercased().hasPrefix("beta-") {
+                    let code = String(start.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !code.isEmpty { return code }
+                }
+                return start
+            }
+        }
+        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) == nil {
+            return trimmed
+        }
+        return nil
+    }
+
+    public static func isBetaSyncURL(_ url: URL) -> Bool {
+        guard self.extractBetaCode(from: url) == nil else { return false }
+        let scheme = url.scheme?.lowercased() ?? ""
+        let host = url.host?.lowercased() ?? ""
+        if scheme == "fullgram" && (host == "beta" || url.path.lowercased().hasPrefix("/beta")) {
+            return true
+        }
+        if scheme == "tg" && host == "fullgram" {
+            let path = url.path.lowercased()
+            return path == "/beta" || path == "beta"
+        }
+        return false
     }
 
     public func activate(
@@ -1341,6 +1421,7 @@ public final class FullGramBetaAccess: @unchecked Sendable {
             self?.writeKeychain(String(normId), account: self?.peerIdAccount ?? "beta_peer_v1")
             self?.lock.lock()
             self?.cachedActivated = true
+            self?.cachedPeerId = String(normId)
             self?.lastServerCheck = Date().timeIntervalSince1970
             self?.lock.unlock()
             DispatchQueue.main.async {
@@ -1350,46 +1431,103 @@ public final class FullGramBetaAccess: @unchecked Sendable {
         }.resume()
     }
 
-    public func verifyWithServerIfNeeded(peerId: Int64) {
+    public func syncWithServer(
+        peerId: Int64,
+        force: Bool = false,
+        completion: (@Sendable (Bool) -> Void)? = nil
+    ) {
         let normId = FullGramCloudCosmetics.normalizedPeerId(peerId)
-        guard normId > 0, normId != FullGramAdmin.ownerUserId else { return }
+        guard normId > 0 else {
+            if let completion {
+                DispatchQueue.main.async { completion(false) }
+            }
+            return
+        }
+        if normId == FullGramAdmin.ownerUserId {
+            if let completion {
+                DispatchQueue.main.async { completion(true) }
+            }
+            return
+        }
+
         self.lock.lock()
         let now = Date().timeIntervalSince1970
-        let shouldCheck = (now - self.lastServerCheck) >= 120.0
-        let receipt = self.readKeychain(self.receiptAccount)
-        let storedPeerId = self.readKeychain(self.peerIdAccount)
+        let existingReceipt = self.readKeychain(self.receiptAccount)
+        let existingPeer = self.readKeychain(self.peerIdAccount)
+        let currentlyActivated = Self.isStructurallyValidReceipt(existingReceipt) && existingPeer == String(normId)
+        let minInterval: TimeInterval = currentlyActivated ? 120.0 : 15.0
+        let shouldCheck = force || (now - self.lastServerCheck) >= minInterval
         if shouldCheck {
             self.lastServerCheck = now
         }
         self.lock.unlock()
-        guard shouldCheck, let receipt, Self.isStructurallyValidReceipt(receipt),
-              storedPeerId == String(normId),
-              let url = URL(string: FullGramAdmin.workerBaseURL + "/beta/status") else {
+
+        guard shouldCheck, let url = URL(string: FullGramAdmin.workerBaseURL + "/beta/check") else {
+            if let completion {
+                let unlocked = self.isUnlocked(forPeerId: normId)
+                DispatchQueue.main.async { completion(unlocked) }
+            }
             return
         }
+
+        var payload: [String: Any] = [
+            "peerId": String(normId),
+            "deviceSecret": FullGramAdmin.shared.deviceSecretValue()
+        ]
+        if let existingReceipt, !existingReceipt.isEmpty {
+            payload["receipt"] = existingReceipt
+        }
+
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.timeoutInterval = 12.0
         req.cachePolicy = .reloadIgnoringLocalCacheData
         req.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "receipt": receipt,
-            "peerId": String(normId),
-            "deviceSecret": FullGramAdmin.shared.deviceSecretValue()
-        ], options: [])
+        req.httpBody = try? JSONSerialization.data(withJSONObject: payload, options: [])
 
         URLSession.shared.dataTask(with: req) { [weak self] data, response, _ in
+            guard let self else { return }
             guard let http = response as? HTTPURLResponse,
                   (200 ..< 300).contains(http.statusCode),
                   let data,
                   let parsed = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
                   (parsed["ok"] as? Bool) == true,
                   let active = parsed["active"] as? Bool else {
+                if let completion {
+                    let unlocked = self.isUnlocked(forPeerId: normId)
+                    DispatchQueue.main.async { completion(unlocked) }
+                }
                 return
             }
-            if !active {
-                self?.clearActivation()
+
+            if active {
+                if let receipt = parsed["receipt"] as? String, Self.isStructurallyValidReceipt(receipt) {
+                    self.writeKeychain(receipt, account: self.receiptAccount)
+                    self.writeKeychain(String(normId), account: self.peerIdAccount)
+                    self.lock.lock()
+                    let changed = self.cachedActivated != true || self.cachedPeerId != String(normId)
+                    self.cachedActivated = true
+                    self.cachedPeerId = String(normId)
+                    self.lock.unlock()
+                    if changed {
+                        DispatchQueue.main.async {
+                            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+                        }
+                    }
+                }
+                if let completion {
+                    DispatchQueue.main.async { completion(true) }
+                }
+            } else {
+                self.clearActivation()
+                if let completion {
+                    DispatchQueue.main.async { completion(false) }
+                }
             }
         }.resume()
+    }
+
+    public func verifyWithServerIfNeeded(peerId: Int64) {
+        self.syncWithServer(peerId: peerId, force: false, completion: nil)
     }
 }
