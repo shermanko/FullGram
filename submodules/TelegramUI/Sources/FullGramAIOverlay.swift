@@ -1812,12 +1812,6 @@ final class FullGramAIOverlayCoordinator {
                 autoSend: true
             )
         })
-        sheet.addAction(UIAlertAction(title: "⏰ Открыть Дедлайны (Графический UI)", style: .default) { [weak self] _ in
-            self?.presentPluginGUI(spec: ["kind": "deadlines", "pluginId": "fg_deadlines"])
-        })
-        sheet.addAction(UIAlertAction(title: "⌚ Живой Ник и Часы (.nick)", style: .default) { [weak self] _ in
-            self?.presentPluginGUI(spec: ["kind": "nick_clock", "pluginId": "fg_nick_clock"])
-        })
         if FullGramPluginManager.shared.isSystemEnabled {
             let commands = FullGramPluginManager.shared.availableCommands()
             for item in commands {

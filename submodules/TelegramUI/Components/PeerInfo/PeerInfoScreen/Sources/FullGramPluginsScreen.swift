@@ -14,9 +14,6 @@ import AccountContext
 private final class FullGramPluginsArguments {
     let toggleSystem: (Bool) -> Void
     let toggleBackground: (Bool) -> Void
-    let chooseLayoutFixerMode: () -> Void
-    let openNickClockGUI: () -> Void
-    let openDeadlinesGUI: () -> Void
     let createPlugin: (FullGramPluginLanguage) -> Void
     let importFromFile: () -> Void
     let openPlugin: (FullGramPluginDescriptor) -> Void
@@ -25,9 +22,6 @@ private final class FullGramPluginsArguments {
     init(
         toggleSystem: @escaping (Bool) -> Void,
         toggleBackground: @escaping (Bool) -> Void,
-        chooseLayoutFixerMode: @escaping () -> Void,
-        openNickClockGUI: @escaping () -> Void,
-        openDeadlinesGUI: @escaping () -> Void,
         createPlugin: @escaping (FullGramPluginLanguage) -> Void,
         importFromFile: @escaping () -> Void,
         openPlugin: @escaping (FullGramPluginDescriptor) -> Void,
@@ -35,9 +29,6 @@ private final class FullGramPluginsArguments {
     ) {
         self.toggleSystem = toggleSystem
         self.toggleBackground = toggleBackground
-        self.chooseLayoutFixerMode = chooseLayoutFixerMode
-        self.openNickClockGUI = openNickClockGUI
-        self.openDeadlinesGUI = openDeadlinesGUI
         self.createPlugin = createPlugin
         self.importFromFile = importFromFile
         self.openPlugin = openPlugin
@@ -54,9 +45,6 @@ private enum FullGramPluginsSection: Int32 {
 private enum FullGramPluginsEntry: ItemListNodeEntry {
     case systemSwitch(Bool)
     case backgroundSwitch(Bool)
-    case openNickClock(String)
-    case layoutFixerMode(String)
-    case openDeadlines
     case systemInfo(String)
     case createLua
     case createPython
@@ -64,13 +52,14 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
     case importFile
     case apiDocs
     case listHeader(String)
+    case emptyListInfo(String)
     case pluginItem(Int32, FullGramPluginDescriptor, String?)
 
     var section: ItemListSectionId {
         switch self {
-        case .systemSwitch, .backgroundSwitch, .openNickClock, .layoutFixerMode, .openDeadlines, .systemInfo: return FullGramPluginsSection.system.rawValue
+        case .systemSwitch, .backgroundSwitch, .systemInfo: return FullGramPluginsSection.system.rawValue
         case .createLua, .createPython, .createRust, .importFile, .apiDocs: return FullGramPluginsSection.actions.rawValue
-        case .listHeader, .pluginItem: return FullGramPluginsSection.list.rawValue
+        case .listHeader, .emptyListInfo, .pluginItem: return FullGramPluginsSection.list.rawValue
         }
     }
 
@@ -78,17 +67,15 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
         switch self {
         case .systemSwitch: return 0
         case .backgroundSwitch: return 1
-        case .openNickClock: return 2
-        case .layoutFixerMode: return 3
-        case .openDeadlines: return 4
-        case .systemInfo: return 5
+        case .systemInfo: return 2
         case .createLua: return 10
         case .createPython: return 11
         case .createRust: return 12
         case .importFile: return 13
         case .apiDocs: return 14
         case .listHeader: return 100
-        case let .pluginItem(idx, _, _): return 101 + idx
+        case .emptyListInfo: return 101
+        case let .pluginItem(idx, _, _): return 102 + idx
         }
     }
 
@@ -103,12 +90,6 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Включить систему плагинов", value: value, sectionId: self.section, style: .blocks, updated: args.toggleSystem)
         case let .backgroundSwitch(value):
             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Фоновый режим плагинов", value: value, sectionId: self.section, style: .blocks, updated: args.toggleBackground)
-        case let .openNickClock(label):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: "⌚ Живой Ник и Часы (.nick)", label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openNickClockGUI)
-        case let .layoutFixerMode(label):
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: "⌨️ Исправление раскладки (.fix)", label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.chooseLayoutFixerMode)
-        case .openDeadlines:
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: "⏰ Дедлайны и Задачи (.dl)", label: "Открыть", sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openDeadlinesGUI)
         case let .systemInfo(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         case .createLua:
@@ -129,6 +110,8 @@ private enum FullGramPluginsEntry: ItemListNodeEntry {
             return ItemListDisclosureItem(presentationData: presentationData, title: "Справка по Plugin API v2.0 (Lua, Python, Rust)", label: "", sectionId: self.section, style: .blocks, action: args.openApiDocs)
         case let .listHeader(text):
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+        case let .emptyListInfo(text):
+            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         case let .pluginItem(_, descriptor, error):
             let status = error != nil ? "Ошибка" : (descriptor.isEnabled ? "Вкл" : "Выкл")
             let bgTag = (descriptor.isEnabled && descriptor.backgroundEnabled) ? " • Фон" : ""
@@ -156,10 +139,9 @@ func fullGramPluginsController(context: AccountContext) -> ViewController {
     var presentNativeImpl: ((UIViewController) -> Void)?
 
     let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
-    var version = 0
+    let version = Atomic<Int>(value: 0)
     let bump: () -> Void = {
-        version += 1
-        refresh.set(version)
+        refresh.set(version.modify { $0 + 1 })
     }
 
     let observer = NotificationCenter.default.addObserver(forName: FullGramPluginNotifications.pluginsDidChange, object: nil, queue: .main) { _ in
@@ -174,41 +156,6 @@ func fullGramPluginsController(context: AccountContext) -> ViewController {
         toggleBackground: { enabled in
             FullGramPluginManager.shared.isBackgroundExecutionEnabled = enabled
             bump()
-        },
-        chooseLayoutFixerMode: {
-            let sheet = UIAlertController(
-                title: "Направление раскладки (.fix)",
-                message: "По умолчанию команда .fix переводит с русского на английский. Выберите направление:",
-                preferredStyle: .actionSheet
-            )
-            sheet.addAction(UIAlertAction(title: "Русский → Английский (по умолчанию)", style: .default) { _ in
-                FullGramPluginManager.shared.layoutFixerMode = "ru2en"
-                bump()
-            })
-            sheet.addAction(UIAlertAction(title: "Английский → Русский", style: .default) { _ in
-                FullGramPluginManager.shared.layoutFixerMode = "en2ru"
-                bump()
-            })
-            sheet.addAction(UIAlertAction(title: "Авто (Рус ↔ Англ)", style: .default) { _ in
-                FullGramPluginManager.shared.layoutFixerMode = "auto"
-                bump()
-            })
-            sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            presentNativeImpl?(sheet)
-        },
-        openNickClockGUI: {
-            NotificationCenter.default.post(
-                name: FullGramPluginNotifications.openUIRequested,
-                object: nil,
-                userInfo: ["kind": "nick_clock", "pluginId": "fg_nick_clock"]
-            )
-        },
-        openDeadlinesGUI: {
-            NotificationCenter.default.post(
-                name: FullGramPluginNotifications.openUIRequested,
-                object: nil,
-                userInfo: ["kind": "deadlines", "pluginId": "fg_deadlines"]
-            )
         },
         createPlugin: { language in
             let template: String
@@ -323,15 +270,11 @@ fn on_outgoing_message(ctx: Context) -> Option<String> {
         let manager = FullGramPluginManager.shared
         let plugins = manager.allPlugins()
         let bgSummary = manager.backgroundStatusSummary()
-        let nickClockLabel = manager.nickClockEnabled ? "Вкл" : "Выкл"
 
         var entries: [FullGramPluginsEntry] = [
             .systemSwitch(manager.isSystemEnabled),
             .backgroundSwitch(manager.isBackgroundExecutionEnabled),
-            .openNickClock(nickClockLabel),
-            .layoutFixerMode(manager.layoutFixerModeTitle),
-            .openDeadlines,
-            .systemInfo("FullGram Plugin System v2.0 (Lua, Python, Rust):\n• В чате введите «.» или нажмите «⚡ Плагины» над полем ввода.\n• Команды .nick и .time управляют живым ником Telegram и показывают время телефона.\n• Фоновый движок (\(bgSummary.running ? "активен" : "на паузе"), активных: \(bgSummary.activeCount), тиков: \(bgSummary.totalTicks)) выполняет on_background_tick в фоне и при сворачивании приложения."),
+            .systemInfo("FullGram Plugin System v2.0 (Lua, Python, Rust):\n• Создавайте собственные плагины или импортируйте готовые скрипты (.lua, .py, .rs).\n• В чате введите «.» или нажмите «⚡ Плагины» над полем ввода.\n• Фоновый движок (\(bgSummary.running ? "активен" : "на паузе"), активных: \(bgSummary.activeCount), тиков: \(bgSummary.totalTicks)) выполняет on_background_tick в фоне и при сворачивании приложения."),
             .createLua,
             .createPython,
             .createRust,
@@ -340,8 +283,12 @@ fn on_outgoing_message(ctx: Context) -> Option<String> {
         ]
 
         entries.append(.listHeader("УСТАНОВЛЕННЫЕ ПЛАГИНЫ (\(plugins.count))"))
-        for (idx, item) in plugins.enumerated() {
-            entries.append(.pluginItem(Int32(idx), item, manager.error(forPluginId: item.id)))
+        if plugins.isEmpty {
+            entries.append(.emptyListInfo("Установленных плагинов пока нет. Создайте новый плагин или импортируйте .lua / .py / .rs файл."))
+        } else {
+            for (idx, item) in plugins.enumerated() {
+                entries.append(.pluginItem(Int32(idx), item, manager.error(forPluginId: item.id)))
+            }
         }
 
         let data = ItemListPresentationData(presentationData)
@@ -518,25 +465,8 @@ private final class FullGramPluginEditorViewController: UIViewController {
         let testBar = UIStackView()
         testBar.axis = .horizontal
         testBar.spacing = 8.0
-        self.testInputField.placeholder = "Ввод (напр. .shrug тест или .calc 6*7)"
-        switch self.descriptor.id {
-        case "fg_chat_info":
-            self.testInputField.text = ".plug info-chat"
-        case "fg_inline_calc":
-            self.testInputField.text = ".calc 6*7"
-        case "fg_python_formatter":
-            self.testInputField.text = ".upper fullgram"
-        case "fg_message_counter":
-            self.testInputField.text = ".stats"
-        case "fg_snippets":
-            self.testInputField.text = ".tpl list"
-        case "fg_notes":
-            self.testInputField.text = ".note list"
-        case "fg_nick_clock":
-            self.testInputField.text = ".time"
-        default:
-            self.testInputField.text = ".shrug тест"
-        }
+        self.testInputField.placeholder = "Ввод (напр. .hi тест)"
+        self.testInputField.text = ".hi тест"
         self.testInputField.font = .systemFont(ofSize: 14.0)
         self.testInputField.textColor = self.theme.list.itemPrimaryTextColor
         self.testInputField.backgroundColor = self.theme.list.itemBlocksBackgroundColor
