@@ -1428,6 +1428,41 @@ async function handleTelegramWebhook(request, env, origin) {
     null;
   const actorId = actor && actor.id != null ? String(actor.id).trim() : "";
   const ownerId = String(env.OWNER_USER_ID || DEFAULT_OWNER_ID).trim();
+
+  // Allow any user to redeem a beta invite via /start beta_<CODE> in private chat ONLY
+  const preMsg = update.message;
+  if (preMsg?.from?.id != null && preMsg.chat?.type === "private" && typeof preMsg.text === "string") {
+    const preText = preMsg.text.trim();
+    const betaStartMatch = preText.match(/^\/start(?:@\S+)?\s+(?:beta[_-])?([A-Za-z0-9_.-]+)$/i);
+    if (betaStartMatch && (preText.toLowerCase().includes("beta") || betaStartMatch[1].startsWith("fgb1_"))) {
+      const code = betaStartMatch[1].trim();
+      const preSenderId = String(preMsg.from.id).trim();
+      const result = await redeemBetaInvite(env, code, preSenderId, {
+        via: "bot",
+        username: preMsg.from?.username || ""
+      });
+      if (result.ok) {
+        await sendTelegramMessage(
+          env,
+          preMsg.chat.id,
+          `✅ <b>Бета-доступ FullGram активирован!</b>\n\n` +
+          `Ваш Telegram ID: <code>${escapeHtml(preSenderId)}</code>\n` +
+          `Теперь просто откройте приложение FullGram — все функции откроются автоматически.\n\n` +
+          `Если FullGram уже открыт, зайдите в <b>Настройки → FullGram → Проверить доступ</b>.`,
+          {
+            parse_mode: "HTML",
+            reply_markup: {
+              inline_keyboard: [[{ text: "🚀 Открыть FullGram", url: `${origin}/beta/${encodeURIComponent(result.code)}?done=1` }]]
+            }
+          }
+        );
+      } else {
+        await sendTelegramMessage(env, preMsg.chat.id, `❌ ${result.error}`);
+      }
+      return jsonResponse({ ok: true });
+    }
+  }
+
   if (!actorId || actorId !== ownerId || !isAdminUserId(actorId, env)) {
     if (update.callback_query?.id) {
       await answerTelegramCallback(env, update.callback_query.id, "⛔ Доступ запрещён: бот только для владельца.");
@@ -1577,39 +1612,6 @@ async function handleTelegramWebhook(request, env, origin) {
   const senderId = String(msg.from.id);
   const chatId = msg.chat?.id ?? msg.from.id;
   const isPrivateChat = msg.chat?.type === "private";
-  const rawTextPre = (msg.text || "").trim();
-
-  // Allow any user to redeem a beta invite via /start beta_<CODE> in private chat
-  if (isPrivateChat) {
-    const betaStartMatch = rawTextPre.match(/^\/start(?:@\S+)?\s+(?:beta[_-])?([A-Za-z0-9_.-]+)$/i);
-    if (betaStartMatch && (rawTextPre.toLowerCase().includes("beta") || betaStartMatch[1].startsWith("fgb1_"))) {
-      const code = betaStartMatch[1].trim();
-      const result = await redeemBetaInvite(env, code, senderId, {
-        via: "bot",
-        username: msg.from?.username || ""
-      });
-      if (result.ok) {
-        await sendTelegramMessage(
-          env,
-          chatId,
-          `✅ <b>Бета-доступ FullGram активирован!</b>\n\n` +
-          `Ваш Telegram ID: <code>${escapeHtml(senderId)}</code>\n` +
-          `Теперь просто откройте приложение FullGram — все функции откроются автоматически.\n\n` +
-          `Если FullGram уже открыт, зайдите в <b>Настройки → FullGram → Проверить доступ</b>.`,
-          {
-            parse_mode: "HTML",
-            reply_markup: {
-              inline_keyboard: [[{ text: "🚀 Открыть FullGram", url: `${origin}/beta/${encodeURIComponent(result.code)}?done=1` }]]
-            }
-          }
-        );
-      } else {
-        await sendTelegramMessage(env, chatId, `❌ ${result.error}`);
-      }
-      return jsonResponse({ ok: true });
-    }
-  }
-
   const senderIsAdmin = isAdminUserId(senderId, env);
 
   // Strict owner-only & private-chat access: nobody except the owner in DM can use this bot
