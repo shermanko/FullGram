@@ -28,6 +28,10 @@ import InteractiveTextComponent
 import ShimmeringMask
 import StreamingTextReveal
 import WalletContext
+import ComponentFlow
+import GiftItemComponent
+import PeerInfoCoverComponent
+import AppBundle
 
 private final class CachedChatMessageText {
     let text: String
@@ -201,12 +205,49 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
         let previousGlyphCount = self.textNode.textNode.cachedLayout?.attributedString?.length ?? 0
         
         return { [weak self] item, layoutConstants, _, _, _, _ in
-            let contentProperties = ChatMessageBubbleContentProperties(hidesSimpleAuthorHeader: false, headerSpacing: 0.0, hidesBackground: .never, forceFullCorners: false, forceAlignment: .none)
+            let earlyRawText: String
+            var earlyEntities: [MessageTextEntity]?
+            if let updatingMedia = item.attributes.updatingMedia {
+                earlyRawText = updatingMedia.text
+                earlyEntities = updatingMedia.entities?.entities
+            } else {
+                earlyRawText = item.message.text
+                for attribute in item.message.attributes {
+                    if let attribute = attribute as? TextEntitiesMessageAttribute {
+                        earlyEntities = attribute.entities
+                        break
+                    }
+                }
+            }
+            let earlyGiftPayload = FullGramChatGiftPayload.parse(from: earlyRawText, entities: earlyEntities)
+            let isGiftPlaque = earlyGiftPayload != nil
+
+            let contentProperties: ChatMessageBubbleContentProperties
+            if isGiftPlaque {
+                contentProperties = ChatMessageBubbleContentProperties(
+                    hidesSimpleAuthorHeader: true,
+                    headerSpacing: 0.0,
+                    hidesBackground: .always,
+                    forceFullCorners: false,
+                    forceAlignment: .center
+                )
+            } else {
+                contentProperties = ChatMessageBubbleContentProperties(
+                    hidesSimpleAuthorHeader: false,
+                    headerSpacing: 0.0,
+                    hidesBackground: .never,
+                    forceFullCorners: false,
+                    forceAlignment: .none
+                )
+            }
             
             return (contentProperties, nil, CGFloat.greatestFiniteMagnitude, { [weak self] constrainedSize, position in
                 var topInset: CGFloat = 0.0
                 var bottomInset: CGFloat = 0.0
-                if case let .linear(top, bottom) = position {
+                if isGiftPlaque {
+                    topInset = 3.0
+                    bottomInset = 3.0
+                } else if case let .linear(top, bottom) = position {
                     switch top {
                     case .None:
                         topInset = layoutConstants.text.bubbleInsets.top
@@ -326,6 +367,9 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                     // Without bubbles the time is in the author header.
                     displayStatus = false
                 }
+                if isGiftPlaque {
+                    displayStatus = false
+                }
                 if displayStatus {
                     if incoming {
                         statusType = .BubbleIncoming
@@ -368,7 +412,6 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                     }
                 }
                 
-                var fullGramScamWarningText: String?
                 var fullGramGiftPayload: FullGramChatGiftPayload?
                 var isSummaryApplied = false
                 var isTranslating = false
@@ -383,7 +426,7 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                     } else {
                         rawText = item.message.text
                     }
-                    if let parsedGift = FullGramChatGiftPayload.parse(from: rawText) {
+                    if let parsedGift = earlyGiftPayload ?? FullGramChatGiftPayload.parse(from: rawText, entities: earlyEntities) {
                         fullGramGiftPayload = parsedGift
                         rawText = " "
                         messageEntities = nil
@@ -817,32 +860,33 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                 }
 
                 let giftCardSize: CGSize
-                if fullGramGiftPayload != nil {
-                    let cardW = min(244.0, max(190.0, textConstrainedSize.width))
-                    let cardH: CGFloat = (fullGramGiftPayload?.comment.isEmpty == false) ? 236.0 : 216.0
-                    giftCardSize = CGSize(width: cardW, height: cardH)
+                if let giftPayload = fullGramGiftPayload {
+                    giftCardSize = FullGramChatGiftCardView.preferredSize(for: giftPayload, maxWidth: max(220.0, constrainedSize.width - 24.0))
                 } else {
                     giftCardSize = .zero
                 }
 
-                var suggestedBoundingWidth: CGFloat = max(textFrameWithoutInsets.width, max(scamBannerSize.width, giftCardSize.width))
-                if let statusSuggestedWidthAndContinue = statusSuggestedWidthAndContinue, !hasDraft {
+                let horizontalBubbleInsets: CGFloat = isGiftPlaque ? 0.0 : (layoutConstants.text.bubbleInsets.left + layoutConstants.text.bubbleInsets.right)
+                var suggestedBoundingWidth: CGFloat = isGiftPlaque
+                    ? giftCardSize.width
+                    : max(textFrameWithoutInsets.width, max(scamBannerSize.width, giftCardSize.width))
+                if !isGiftPlaque, let statusSuggestedWidthAndContinue = statusSuggestedWidthAndContinue, !hasDraft {
                     suggestedBoundingWidth = max(suggestedBoundingWidth, statusSuggestedWidthAndContinue.0)
                 }
-                let sideInsets = layoutConstants.text.bubbleInsets.left + layoutConstants.text.bubbleInsets.right
+                let sideInsets = horizontalBubbleInsets
                 suggestedBoundingWidth += sideInsets
                 
                 return (suggestedBoundingWidth, { [weak self] boundingWidth in
                     var boundingSize: CGSize
                     
-                    let statusSizeAndApply = statusSuggestedWidthAndContinue?.1(boundingWidth - sideInsets)
+                    let statusSizeAndApply = isGiftPlaque ? nil : statusSuggestedWidthAndContinue?.1(boundingWidth - sideInsets)
                     
                     if giftCardSize.height > 0.0 {
                         boundingSize = giftCardSize
                     } else {
                         boundingSize = textFrameWithoutInsets.size
                     }
-                    if scamBannerSize.height > 0.0 {
+                    if scamBannerSize.height > 0.0 && !isGiftPlaque {
                         boundingSize.width = max(boundingSize.width, scamBannerSize.width)
                         boundingSize.height += scamBannerTopSpacing + scamBannerSize.height
                     }
@@ -850,7 +894,7 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                         boundingSize.height += statusSizeAndApply.0.height + (giftCardSize.height > 0.0 ? 4.0 : 0.0)
                     }
 
-                    boundingSize.width += layoutConstants.text.bubbleInsets.left + layoutConstants.text.bubbleInsets.right
+                    boundingSize.width += sideInsets
                     
                     boundingSize.height += topInset + bottomInset
                     
@@ -994,14 +1038,38 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                                     strongSelf.containerNode.view.addSubview(created)
                                     cardView = created
                                 }
-                                let cardWidth = max(giftCardSize.width, boundingWidth - sideInsets)
+                                let availableWidth = max(giftCardSize.width, boundingWidth - sideInsets)
+                                let originX = isGiftPlaque
+                                    ? floorToScreenPixels((availableWidth - giftCardSize.width) * 0.5)
+                                    : layoutConstants.text.bubbleInsets.left
                                 cardView.frame = CGRect(
-                                    x: layoutConstants.text.bubbleInsets.left,
+                                    x: originX,
                                     y: topInset,
-                                    width: cardWidth,
+                                    width: giftCardSize.width,
                                     height: giftCardSize.height
                                 )
-                                cardView.configure(payload: giftPayload, incoming: incoming, peerId: item.message.id.peerId.toInt64())
+                                let authorDisplayName: String = {
+                                    if !giftPayload.senderName.isEmpty {
+                                        return giftPayload.senderName
+                                    }
+                                    if let author = item.message.author {
+                                        return EnginePeer(author).compactDisplayTitle
+                                    }
+                                    if let peer = item.message.peers[item.message.id.peerId] {
+                                        return EnginePeer(peer).compactDisplayTitle
+                                    }
+                                    return "FullGram"
+                                }()
+                                let isSelfChat = (item.message.id.peerId == item.context.account.peerId && item.message.forwardInfo == nil)
+                                cardView.configure(
+                                    context: item.context,
+                                    presentationData: item.presentationData,
+                                    payload: giftPayload,
+                                    incoming: incoming || isSelfChat,
+                                    isSelfChat: isSelfChat,
+                                    peerId: item.message.id.peerId.toInt64(),
+                                    authorName: authorDisplayName
+                                )
                             } else {
                                 strongSelf.textNode.textNode.isHidden = showTextAsPlaceholder
                                 strongSelf.fullGramGiftCardView?.removeFromSuperview()
@@ -2033,157 +2101,713 @@ extension ChatMessageTextBubbleContentNode: ChatMessageQuoteSourceContentNode {
 }
 
 private final class FullGramChatGiftCardView: UIView {
-    private let gradientLayer = CAGradientLayer()
-    private let badgePill = UILabel()
-    private let glowCircle = UIView()
-    private let emojiLabel = UILabel()
-    private let headingLabel = UILabel()
+    private let servicePillBlurView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+    private let servicePillTintView = UIView()
+    private let servicePillLabel = UILabel()
+
+    private let plaqueView = UIView()
+    private let plaqueBlurView = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterialDark))
+    private let radialGradientLayer = CAGradientLayer()
+    private let patternHostView = ComponentView<Empty>()
+    private let giftIconHostView = ComponentView<Empty>()
+
+    private let fallbackGlowView = UIView()
+    private let fallbackEmojiLabel = UILabel()
+
+    private let ribbonImageView = UIImageView()
+    private let ribbonLabel = UILabel()
+
     private let titleLabel = UILabel()
     private let subtitleLabel = UILabel()
+
+    private let attributesContainer = UIView()
+    private let modelKeyLabel = UILabel()
+    private let modelValueLabel = UILabel()
+    private let backdropKeyLabel = UILabel()
+    private let backdropValueLabel = UILabel()
+    private let symbolKeyLabel = UILabel()
+    private let symbolValueLabel = UILabel()
+
+    private let commentPillView = UIView()
+    private let commentLabel = UILabel()
+
     private let actionButton = UIButton(type: .system)
 
     private var payload: FullGramChatGiftPayload?
     private var targetPeerId: Int64 = 0
+    private var resolvedSlugKey: String?
+    private var resolvedUniqueGift: StarGift.UniqueGift?
+    private var resolvedStarGift: StarGift.Gift?
+    private let giftResolveDisposable = MetaDisposable()
+
+    static func preferredSize(for payload: FullGramChatGiftPayload, maxWidth: CGFloat) -> CGSize {
+        let plaqueWidth: CGFloat = 224.0
+        let servicePillHeight: CGFloat = 22.0
+        let serviceGap: CGFloat = 9.0
+        let hasComment = !payload.comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasAttributes: Bool = {
+            if hasComment {
+                return false
+            }
+            switch payload.kind {
+            case .nft, .upgrade:
+                return (payload.modelName?.isEmpty == false)
+                    || (payload.backdropName?.isEmpty == false)
+                    || (payload.patternName?.isEmpty == false)
+            default:
+                return false
+            }
+        }()
+
+        var plaqueHeight: CGFloat = 248.0
+        if hasComment {
+            plaqueHeight = 294.0
+        } else if hasAttributes {
+            plaqueHeight = 314.0
+        }
+        let width = min(max(plaqueWidth, 248.0), maxWidth)
+        return CGSize(width: width, height: servicePillHeight + serviceGap + plaqueHeight)
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        self.layer.cornerRadius = 16.0
-        self.clipsToBounds = true
+        self.backgroundColor = .clear
+        self.clipsToBounds = false
 
-        self.gradientLayer.startPoint = CGPoint(x: 0.1, y: 0.0)
-        self.gradientLayer.endPoint = CGPoint(x: 0.9, y: 1.0)
-        self.layer.insertSublayer(self.gradientLayer, at: 0)
+        self.servicePillBlurView.layer.cornerRadius = 11.0
+        self.servicePillBlurView.clipsToBounds = true
+        self.servicePillBlurView.isUserInteractionEnabled = false
+        self.addSubview(self.servicePillBlurView)
 
-        self.badgePill.font = Font.semibold(10.5)
-        self.badgePill.textColor = .white
-        self.badgePill.backgroundColor = UIColor.white.withAlphaComponent(0.20)
-        self.badgePill.layer.cornerRadius = 9.0
-        self.badgePill.layer.masksToBounds = true
-        self.badgePill.textAlignment = .center
-        self.addSubview(self.badgePill)
+        self.servicePillTintView.backgroundColor = UIColor.black.withAlphaComponent(0.24)
+        self.servicePillTintView.isUserInteractionEnabled = false
+        self.servicePillBlurView.contentView.addSubview(self.servicePillTintView)
 
-        self.glowCircle.backgroundColor = UIColor.white.withAlphaComponent(0.16)
-        self.glowCircle.layer.borderColor = UIColor.white.withAlphaComponent(0.32).cgColor
-        self.glowCircle.layer.borderWidth = 1.0
-        self.addSubview(self.glowCircle)
+        self.servicePillLabel.font = Font.regular(13.0)
+        self.servicePillLabel.textColor = .white
+        self.servicePillLabel.textAlignment = .center
+        self.servicePillLabel.lineBreakMode = .byTruncatingMiddle
+        self.servicePillBlurView.contentView.addSubview(self.servicePillLabel)
 
-        self.emojiLabel.font = UIFont.systemFont(ofSize: 44.0)
-        self.emojiLabel.textAlignment = .center
-        self.addSubview(self.emojiLabel)
+        self.plaqueView.layer.cornerRadius = 24.0
+        if #available(iOS 13.0, *) {
+            self.plaqueView.layer.cornerCurve = .continuous
+        }
+        self.plaqueView.clipsToBounds = true
+        self.plaqueView.layer.borderWidth = 0.5
+        self.plaqueView.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
+        self.addSubview(self.plaqueView)
 
-        self.headingLabel.font = Font.semibold(13.0)
-        self.headingLabel.textColor = UIColor.white.withAlphaComponent(0.92)
-        self.headingLabel.textAlignment = .center
-        self.addSubview(self.headingLabel)
+        self.plaqueBlurView.isUserInteractionEnabled = false
+        self.plaqueView.addSubview(self.plaqueBlurView)
 
-        self.titleLabel.font = Font.bold(15.5)
+        self.radialGradientLayer.type = .radial
+        self.radialGradientLayer.startPoint = CGPoint(x: 0.5, y: 0.34)
+        self.radialGradientLayer.endPoint = CGPoint(x: 1.05, y: 1.05)
+        self.plaqueView.layer.addSublayer(self.radialGradientLayer)
+
+        self.fallbackGlowView.backgroundColor = UIColor.white.withAlphaComponent(0.14)
+        self.fallbackGlowView.layer.borderColor = UIColor.white.withAlphaComponent(0.24).cgColor
+        self.fallbackGlowView.layer.borderWidth = 1.0
+        self.fallbackGlowView.isUserInteractionEnabled = false
+        self.plaqueView.addSubview(self.fallbackGlowView)
+
+        self.fallbackEmojiLabel.font = UIFont.systemFont(ofSize: 54.0)
+        self.fallbackEmojiLabel.textAlignment = .center
+        self.fallbackEmojiLabel.isUserInteractionEnabled = false
+        self.plaqueView.addSubview(self.fallbackEmojiLabel)
+
+        self.titleLabel.font = Font.semibold(15.5)
         self.titleLabel.textColor = .white
         self.titleLabel.textAlignment = .center
         self.titleLabel.lineBreakMode = .byTruncatingTail
-        self.addSubview(self.titleLabel)
+        self.plaqueView.addSubview(self.titleLabel)
 
-        self.subtitleLabel.font = Font.regular(11.5)
-        self.subtitleLabel.textColor = UIColor.white.withAlphaComponent(0.84)
+        self.subtitleLabel.font = Font.regular(13.0)
+        self.subtitleLabel.textColor = UIColor.white.withAlphaComponent(0.78)
         self.subtitleLabel.textAlignment = .center
         self.subtitleLabel.numberOfLines = 2
-        self.addSubview(self.subtitleLabel)
+        self.plaqueView.addSubview(self.subtitleLabel)
 
-        self.actionButton.titleLabel?.font = Font.semibold(13.0)
+        self.attributesContainer.isUserInteractionEnabled = false
+        self.plaqueView.addSubview(self.attributesContainer)
+
+        for keyLabel in [self.modelKeyLabel, self.backdropKeyLabel, self.symbolKeyLabel] {
+            keyLabel.font = Font.regular(13.0)
+            keyLabel.textColor = UIColor.white.withAlphaComponent(0.72)
+            keyLabel.textAlignment = .right
+            keyLabel.lineBreakMode = .byTruncatingTail
+            self.attributesContainer.addSubview(keyLabel)
+        }
+        for valLabel in [self.modelValueLabel, self.backdropValueLabel, self.symbolValueLabel] {
+            valLabel.font = Font.semibold(13.0)
+            valLabel.textColor = .white
+            valLabel.textAlignment = .left
+            valLabel.lineBreakMode = .byTruncatingTail
+            self.attributesContainer.addSubview(valLabel)
+        }
+
+        self.commentPillView.backgroundColor = UIColor.black.withAlphaComponent(0.22)
+        self.commentPillView.layer.cornerRadius = 12.0
+        if #available(iOS 13.0, *) {
+            self.commentPillView.layer.cornerCurve = .continuous
+        }
+        self.commentPillView.clipsToBounds = true
+        self.commentPillView.isUserInteractionEnabled = false
+        self.plaqueView.addSubview(self.commentPillView)
+
+        self.commentLabel.font = Font.regular(13.0)
+        self.commentLabel.textColor = .white
+        self.commentLabel.textAlignment = .center
+        self.commentLabel.numberOfLines = 2
+        self.commentPillView.addSubview(self.commentLabel)
+
+        self.actionButton.titleLabel?.font = Font.semibold(15.0)
         self.actionButton.setTitleColor(.white, for: .normal)
-        self.actionButton.backgroundColor = UIColor.white.withAlphaComponent(0.24)
-        self.actionButton.layer.cornerRadius = 15.0
-        self.actionButton.layer.borderColor = UIColor.white.withAlphaComponent(0.28).cgColor
-        self.actionButton.layer.borderWidth = 0.75
+        self.actionButton.backgroundColor = UIColor.white.withAlphaComponent(0.18)
+        self.actionButton.layer.cornerRadius = 17.0
+        if #available(iOS 13.0, *) {
+            self.actionButton.layer.cornerCurve = .continuous
+        }
         self.actionButton.addTarget(self, action: #selector(self.buttonPressed), for: .touchUpInside)
-        self.addSubview(self.actionButton)
+        self.plaqueView.addSubview(self.actionButton)
+
+        self.ribbonImageView.isUserInteractionEnabled = false
+        self.plaqueView.addSubview(self.ribbonImageView)
+
+        self.ribbonLabel.font = Font.semibold(10.5)
+        self.ribbonLabel.textColor = .white
+        self.ribbonLabel.textAlignment = .center
+        self.ribbonLabel.isUserInteractionEnabled = false
+        self.plaqueView.addSubview(self.ribbonLabel)
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(self.buttonPressed))
-        self.addGestureRecognizer(tap)
+        self.plaqueView.addGestureRecognizer(tap)
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func configure(payload: FullGramChatGiftPayload, incoming: Bool, peerId: Int64) {
+    deinit {
+        self.giftResolveDisposable.dispose()
+    }
+
+    override func removeFromSuperview() {
+        super.removeFromSuperview()
+        self.giftResolveDisposable.set(nil)
+    }
+
+    func configure(
+        context: AccountContext,
+        presentationData: ChatPresentationData,
+        payload: FullGramChatGiftPayload,
+        incoming: Bool,
+        isSelfChat: Bool,
+        peerId: Int64,
+        authorName: String
+    ) {
         self.payload = payload
         self.targetPeerId = peerId
 
-        let c1: UIColor
-        let c2: UIColor
-        if let inner = payload.backdropInnerHex, let outer = payload.backdropOuterHex {
-            c1 = UIColor(rgb: inner)
-            c2 = UIColor(rgb: outer)
-        } else if payload.kind == .stars {
-            c1 = UIColor(rgb: 0xF7B733)
-            c2 = UIColor(rgb: 0xBA550B)
-        } else if payload.kind == .gift {
-            c1 = UIColor(rgb: 0x4E8CF7)
-            c2 = UIColor(rgb: 0x28479E)
-        } else {
-            c1 = UIColor(rgb: 0x7A5AF8)
-            c2 = UIColor(rgb: 0x35217B)
-        }
-        self.gradientLayer.colors = [c1.cgColor, c2.cgColor]
-        self.emojiLabel.text = payload.emoji.isEmpty ? "🎁" : payload.emoji
+        let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+        let sender = authorName.isEmpty ? "FullGram" : authorName
 
-        let displayTitle = FullGramGrantedNFT.decoratedTitle(payload.title)
+        let serviceText: String
         switch payload.kind {
         case .nft, .upgrade:
-            self.headingLabel.text = incoming ? "Вам подарили NFT" : "Подарок NFT"
-            self.badgePill.text = payload.number.map { "  #\($0)  " } ?? "  NFT  "
-            self.titleLabel.text = displayTitle
-            var details: [String] = []
-            if let model = payload.modelName, !model.isEmpty {
-                details.append(model)
+            if isSelfChat {
+                serviceText = ru ? "Коллекционный подарок в Избранном" : "Saved Collectible Gift"
+            } else if incoming {
+                serviceText = ru ? "\(sender) отправил(а) вам подарок" : "\(sender) sent you a gift"
+            } else {
+                serviceText = ru ? "Вы отправили коллекционный подарок" : "You sent a collectible gift"
             }
-            if let bg = payload.backdropName, !bg.isEmpty {
-                details.append(bg)
-            }
-            if !payload.comment.isEmpty {
-                details.append("«\(payload.comment)»")
-            } else if details.isEmpty, let rarity = payload.rarityText {
-                details.append(rarity)
-            }
-            self.subtitleLabel.text = details.joined(separator: " · ")
-            self.actionButton.setTitle("Посмотреть", for: .normal)
         case .gift:
-            self.headingLabel.text = incoming ? "Вам подарили подарок" : "Отправлен подарок"
-            self.badgePill.text = "  ★ \(payload.starsPrice)  "
-            self.titleLabel.text = displayTitle
-            self.subtitleLabel.text = payload.comment.isEmpty
-                ? (payload.canUpgrade ? "Можно улучшить до NFT" : "Подарок FullGram")
-                : "«\(payload.comment)»"
-            self.actionButton.setTitle(payload.canUpgrade ? "Улучшить до NFT" : "Посмотреть", for: .normal)
+            if incoming && !isSelfChat {
+                serviceText = ru ? "\(sender) отправил(а) вам подарок" : "\(sender) sent you a gift"
+            } else {
+                serviceText = ru ? "Вы отправили подарок" : "You sent a gift"
+            }
         case .stars:
-            self.headingLabel.text = incoming ? "Вам подарили Звёзды" : "Подарок Звёзд"
-            self.badgePill.text = "  TELEGRAM STARS  "
-            self.titleLabel.text = "★ \(payload.starsPrice) Звёзд"
-            self.subtitleLabel.text = payload.comment.isEmpty ? "Зачислено на баланс FullGram" : "«\(payload.comment)»"
-            self.actionButton.setTitle("Открыть баланс", for: .normal)
+            serviceText = incoming && !isSelfChat
+                ? (ru ? "\(sender) подарил(а) вам Звёзды" : "\(sender) gifted you Stars")
+                : (ru ? "Вы отправили Звёзды Telegram" : "You gifted Telegram Stars")
+        case .ton:
+            serviceText = incoming && !isSelfChat
+                ? (ru ? "\(sender) перевёл(а) вам TON" : "\(sender) sent you TON")
+                : (ru ? "Вы отправили TON" : "You sent TON")
+        case .number:
+            serviceText = incoming && !isSelfChat
+                ? (ru ? "\(sender) передал(а) вам анонимный номер" : "\(sender) transferred an anonymous number")
+                : (ru ? "Вы передали анонимный номер" : "You transferred an anonymous number")
+        case .username:
+            serviceText = incoming && !isSelfChat
+                ? (ru ? "\(sender) передал(а) вам юзернейм" : "\(sender) transferred a collectible username")
+                : (ru ? "Вы передали коллекционный юзернейм" : "You transferred a collectible username")
         }
+        self.servicePillLabel.text = serviceText
+
+        var innerColor: UIColor
+        var outerColor: UIColor
+        if let unique = self.resolvedUniqueGift {
+            var resolvedInner: UIColor?
+            var resolvedOuter: UIColor?
+            for attr in unique.attributes {
+                if case let .backdrop(_, _, innerVal, outerVal, _, _, _) = attr {
+                    resolvedInner = UIColor(rgb: UInt32(bitPattern: innerVal))
+                    resolvedOuter = UIColor(rgb: UInt32(bitPattern: outerVal))
+                    break
+                }
+            }
+            innerColor = resolvedInner ?? payload.backdropInnerHex.map { UIColor(rgb: $0) } ?? UIColor(rgb: 0x4E8CF7)
+            outerColor = resolvedOuter ?? payload.backdropOuterHex.map { UIColor(rgb: $0) } ?? UIColor(rgb: 0x223B82)
+        } else if let innerHex = payload.backdropInnerHex, let outerHex = payload.backdropOuterHex {
+            innerColor = UIColor(rgb: innerHex)
+            outerColor = UIColor(rgb: outerHex)
+        } else {
+            switch payload.kind {
+            case .nft, .upgrade:
+                innerColor = UIColor(rgb: 0x4E79F5)
+                outerColor = UIColor(rgb: 0x1E2F6F)
+            case .gift:
+                innerColor = UIColor(rgb: 0x2A3550).withAlphaComponent(0.92)
+                outerColor = UIColor(rgb: 0x171E30).withAlphaComponent(0.95)
+            case .stars:
+                innerColor = UIColor(rgb: 0xE59A1A)
+                outerColor = UIColor(rgb: 0x7E4208)
+            case .ton:
+                innerColor = UIColor(rgb: 0x2897FF)
+                outerColor = UIColor(rgb: 0x10448A)
+            case .number, .username:
+                innerColor = UIColor(rgb: 0x3D4C6E)
+                outerColor = UIColor(rgb: 0x1A2236)
+            }
+        }
+        self.radialGradientLayer.colors = [innerColor.cgColor, outerColor.cgColor]
+
+        let displayTitle = FullGramGrantedNFT.decoratedTitle(payload.title)
+        let trimmedComment = payload.comment.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var ribbonText = ""
+        switch payload.kind {
+        case .nft, .upgrade:
+            self.titleLabel.text = displayTitle
+            if let num = payload.number {
+                let nf = NumberFormatter()
+                nf.numberStyle = .decimal
+                nf.groupingSeparator = " "
+                let formatted = nf.string(from: NSNumber(value: num)) ?? "\(num)"
+                self.subtitleLabel.text = ru ? "Коллекционный #\(formatted)" : "Collectible #\(formatted)"
+                ribbonText = num <= 9999 ? "#\(num)" : (ru ? "Подарок" : "Gift")
+            } else {
+                self.subtitleLabel.text = ru ? "Коллекционный подарок" : "Collectible Gift"
+                ribbonText = ru ? "Подарок" : "Gift"
+            }
+            self.actionButton.setTitle(ru ? "Просмотреть" : "View", for: .normal)
+        case .gift:
+            self.titleLabel.text = displayTitle
+            self.subtitleLabel.text = payload.canUpgrade
+                ? (ru ? "★ \(payload.starsPrice) · Можно улучшить" : "★ \(payload.starsPrice) · Upgradable")
+                : "★ \(payload.starsPrice)"
+            ribbonText = ru ? "Подарок" : "Gift"
+            self.actionButton.setTitle(
+                payload.canUpgrade ? (ru ? "Улучшить" : "Upgrade") : (ru ? "Просмотреть" : "View"),
+                for: .normal
+            )
+        case .stars:
+            self.titleLabel.text = ru ? "\(payload.starsPrice) Звёзд" : "\(payload.starsPrice) Stars"
+            self.subtitleLabel.text = ru ? "Подарочные Звёзды Telegram" : "Telegram Gift Stars"
+            ribbonText = "STARS"
+            self.actionButton.setTitle(ru ? "Просмотреть" : "View", for: .normal)
+        case .ton:
+            let amt = String(format: "%.2f", payload.tonAmount ?? 0.0)
+            self.titleLabel.text = "\(amt) TON"
+            self.subtitleLabel.text = ru ? "Перевод в кошелёк FullGram" : "FullGram Wallet Transfer"
+            ribbonText = "TON"
+            self.actionButton.setTitle(ru ? "Открыть кошелёк" : "Open Wallet", for: .normal)
+        case .number:
+            self.titleLabel.text = payload.title
+            let tonStr = payload.tonAmount.map { String(format: " · %.0f TON", $0) } ?? ""
+            self.subtitleLabel.text = (ru ? "Анонимный номер" : "Anonymous Number") + tonStr
+            ribbonText = "+888"
+            self.actionButton.setTitle(ru ? "Просмотреть" : "View", for: .normal)
+        case .username:
+            self.titleLabel.text = payload.title
+            let tonStr = payload.tonAmount.map { String(format: " · %.0f TON", $0) } ?? ""
+            self.subtitleLabel.text = (ru ? "Коллекционный юзернейм" : "Collectible Username") + tonStr
+            ribbonText = "FRAGMENT"
+            self.actionButton.setTitle(ru ? "Просмотреть" : "View", for: .normal)
+        }
+
+        self.ribbonLabel.text = ribbonText
+        if !ribbonText.isEmpty {
+            let ribbonBase = UIImage(bundleImageName: "Premium/GiftRibbon") ?? UIImage(bundleImageName: "Chat/Message/GiftRibbon")
+            let ribbonColors = [
+                outerColor.withMultiplied(hue: 0.98, saturation: 1.35, brightness: 0.92),
+                innerColor.withMultiplied(hue: 1.01, saturation: 1.18, brightness: 1.08)
+            ]
+            self.ribbonImageView.image = generateGradientTintedImage(image: ribbonBase, colors: ribbonColors, direction: .mirroredDiagonal)
+            self.ribbonImageView.isHidden = false
+            self.ribbonLabel.isHidden = false
+        } else {
+            self.ribbonImageView.isHidden = true
+            self.ribbonLabel.isHidden = true
+        }
+
+        if !trimmedComment.isEmpty {
+            self.commentPillView.isHidden = false
+            self.commentLabel.text = trimmedComment
+            self.attributesContainer.isHidden = true
+        } else if payload.kind == .nft || payload.kind == .upgrade {
+            var resolvedModel = payload.modelName
+            var resolvedBackdrop = payload.backdropName
+            var resolvedSymbol = payload.patternName
+            if let unique = self.resolvedUniqueGift {
+                for attr in unique.attributes {
+                    switch attr {
+                    case let .model(name, _, _, _):
+                        if resolvedModel?.isEmpty != false { resolvedModel = name }
+                    case let .backdrop(name, _, _, _, _, _, _):
+                        if resolvedBackdrop?.isEmpty != false { resolvedBackdrop = name }
+                    case let .pattern(name, _, _):
+                        if resolvedSymbol?.isEmpty != false { resolvedSymbol = name }
+                    default:
+                        break
+                    }
+                }
+            }
+            let hasAnyAttr = (resolvedModel?.isEmpty == false) || (resolvedBackdrop?.isEmpty == false) || (resolvedSymbol?.isEmpty == false)
+            self.commentPillView.isHidden = true
+            self.attributesContainer.isHidden = !hasAnyAttr
+            if hasAnyAttr {
+                self.modelKeyLabel.text = ru ? "Модель" : "Model"
+                self.modelValueLabel.text = resolvedModel ?? "Original"
+                self.backdropKeyLabel.text = ru ? "Фон" : "Backdrop"
+                self.backdropValueLabel.text = resolvedBackdrop ?? "Classic"
+                self.symbolKeyLabel.text = ru ? "Узор" : "Symbol"
+                self.symbolValueLabel.text = resolvedSymbol ?? "Sparkle"
+            }
+        } else {
+            self.commentPillView.isHidden = true
+            self.attributesContainer.isHidden = true
+        }
+
+        self.fallbackEmojiLabel.text = payload.emoji.isEmpty ? "🎁" : payload.emoji
+
+        // Resolve real animated 3D GiftItemComponent / pattern cover!
+        let candidateSlug: String? = {
+            if let s = payload.slug, s.lowercased().hasPrefix("fullgram-") {
+                return s
+            }
+            if let gid = payload.realGiftId {
+                return "FullGram-\(gid)-\(payload.number ?? 1)"
+            }
+            return nil
+        }()
+        let resolveKey = "\(payload.kind.rawValue)|\(candidateSlug ?? "")|\(payload.realGiftId ?? 0)"
+        if self.resolvedSlugKey != resolveKey {
+            self.resolvedSlugKey = resolveKey
+            self.resolvedUniqueGift = nil
+            self.resolvedStarGift = nil
+            self.giftResolveDisposable.set(nil)
+
+            if (payload.kind == .nft || payload.kind == .upgrade), let slug = candidateSlug {
+                self.giftResolveDisposable.set((context.engine.payments.getUniqueStarGift(slug: slug)
+                |> deliverOnMainQueue).start(next: { [weak self] uniqueGift in
+                    guard let self, self.resolvedSlugKey == resolveKey else { return }
+                    self.resolvedUniqueGift = uniqueGift
+                    self.configure(
+                        context: context,
+                        presentationData: presentationData,
+                        payload: payload,
+                        incoming: incoming,
+                        isSelfChat: isSelfChat,
+                        peerId: peerId,
+                        authorName: authorName
+                    )
+                }))
+            } else if payload.kind == .gift, let realGiftId = payload.realGiftId {
+                self.giftResolveDisposable.set((context.engine.payments.cachedStarGifts()
+                |> take(1)
+                |> deliverOnMainQueue).start(next: { [weak self] gifts in
+                    guard let self, self.resolvedSlugKey == resolveKey else { return }
+                    if let items = gifts {
+                        for entry in items {
+                            if case let .generic(g) = entry, g.id == realGiftId {
+                                self.resolvedStarGift = g
+                                break
+                            }
+                        }
+                    }
+                    if self.resolvedStarGift != nil {
+                        self.configure(
+                            context: context,
+                            presentationData: presentationData,
+                            payload: payload,
+                            incoming: incoming,
+                            isSelfChat: isSelfChat,
+                            peerId: peerId,
+                            authorName: authorName
+                        )
+                    }
+                }))
+            }
+        }
+
+        self.updateMediaComponents(context: context, presentationData: presentationData)
         self.setNeedsLayout()
+    }
+
+    private func updateMediaComponents(context: AccountContext, presentationData: ChatPresentationData) {
+        let plaqueBoundsSize = self.plaqueView.bounds.size.width > 0.0
+            ? self.plaqueView.bounds.size
+            : CGSize(width: 224.0, height: 280.0)
+
+        if let uniqueGift = self.resolvedUniqueGift {
+            self.fallbackGlowView.isHidden = true
+            self.fallbackEmojiLabel.isHidden = true
+
+            var bgOuter: UIColor?
+            var bgInner: UIColor?
+            var patColor: UIColor?
+            var patFile: TelegramMediaFile?
+            for attr in uniqueGift.attributes {
+                switch attr {
+                case let .backdrop(_, _, innerVal, outerVal, patVal, _, _):
+                    bgInner = UIColor(rgb: UInt32(bitPattern: innerVal))
+                    bgOuter = UIColor(rgb: UInt32(bitPattern: outerVal))
+                    patColor = UIColor(rgb: UInt32(bitPattern: patVal))
+                case let .pattern(_, file, _):
+                    patFile = file
+                default:
+                    break
+                }
+            }
+            if let bgOuter, let bgInner, let patColor, let patFile {
+                let files: [Int64: TelegramMediaFile] = [patFile.fileId.id: patFile]
+                let _ = self.patternHostView.update(
+                    transition: .immediate,
+                    component: AnyComponent(PeerInfoCoverComponent(
+                        context: context,
+                        subject: .custom(bgOuter, bgInner, patColor, patFile.fileId.id),
+                        files: files,
+                        isDark: false,
+                        avatarCenter: CGPoint(x: plaqueBoundsSize.width * 0.5, y: 66.0),
+                        avatarScale: 1.0,
+                        defaultHeight: plaqueBoundsSize.height,
+                        avatarTransitionFraction: 0.0,
+                        patternTransitionFraction: 0.0
+                    )),
+                    environment: {},
+                    containerSize: plaqueBoundsSize
+                )
+                if let patternView = self.patternHostView.view {
+                    if patternView.superview == nil {
+                        patternView.isUserInteractionEnabled = false
+                        self.plaqueView.insertSubview(patternView, belowSubview: self.titleLabel)
+                    }
+                    patternView.isHidden = false
+                    patternView.frame = CGRect(origin: .zero, size: plaqueBoundsSize)
+                }
+            } else {
+                self.patternHostView.view?.isHidden = true
+            }
+
+            // Use model-only attributes for the centered 96x96 sticker so it floats cleanly without a nested square box!
+            let modelOnlyAttrs = uniqueGift.attributes.filter {
+                if case .model = $0 { return true }
+                return false
+            }
+            let iconSize = CGSize(width: 98.0, height: 98.0)
+            let subject: GiftItemComponent.Subject = modelOnlyAttrs.isEmpty
+                ? .uniqueGift(gift: uniqueGift, price: nil)
+                : .preview(attributes: modelOnlyAttrs, rarity: nil)
+            let _ = self.giftIconHostView.update(
+                transition: .immediate,
+                component: AnyComponent(GiftItemComponent(
+                    context: context,
+                    theme: presentationData.theme.theme,
+                    strings: presentationData.strings,
+                    peer: nil,
+                    subject: subject,
+                    mode: .preview,
+                    cornerRadius: 0.0,
+                    allowAnimations: true
+                )),
+                environment: {},
+                containerSize: iconSize
+            )
+            if let iconView = self.giftIconHostView.view {
+                if iconView.superview == nil {
+                    iconView.isUserInteractionEnabled = false
+                    iconView.backgroundColor = .clear
+                    self.plaqueView.insertSubview(iconView, belowSubview: self.ribbonImageView)
+                }
+                iconView.isHidden = false
+                iconView.frame = CGRect(
+                    x: floorToScreenPixels((plaqueBoundsSize.width - iconSize.width) * 0.5),
+                    y: 16.0,
+                    width: iconSize.width,
+                    height: iconSize.height
+                )
+            }
+        } else if let starGift = self.resolvedStarGift {
+            self.fallbackGlowView.isHidden = true
+            self.fallbackEmojiLabel.isHidden = true
+            self.patternHostView.view?.isHidden = true
+
+            let iconSize = CGSize(width: 96.0, height: 96.0)
+            let _ = self.giftIconHostView.update(
+                transition: .immediate,
+                component: AnyComponent(GiftItemComponent(
+                    context: context,
+                    theme: presentationData.theme.theme,
+                    strings: presentationData.strings,
+                    peer: nil,
+                    subject: .starGift(gift: starGift, price: ""),
+                    mode: .preview,
+                    cornerRadius: 0.0,
+                    allowAnimations: true
+                )),
+                environment: {},
+                containerSize: iconSize
+            )
+            if let iconView = self.giftIconHostView.view {
+                if iconView.superview == nil {
+                    iconView.isUserInteractionEnabled = false
+                    iconView.backgroundColor = .clear
+                    self.plaqueView.insertSubview(iconView, belowSubview: self.ribbonImageView)
+                }
+                iconView.isHidden = false
+                iconView.frame = CGRect(
+                    x: floorToScreenPixels((plaqueBoundsSize.width - iconSize.width) * 0.5),
+                    y: 18.0,
+                    width: iconSize.width,
+                    height: iconSize.height
+                )
+            }
+        } else {
+            self.patternHostView.view?.isHidden = true
+            self.giftIconHostView.view?.isHidden = true
+            self.fallbackGlowView.isHidden = false
+            self.fallbackEmojiLabel.isHidden = false
+        }
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        self.gradientLayer.frame = self.bounds
-        let w = self.bounds.width
-        let h = self.bounds.height
+        let totalW = self.bounds.width
+        let totalH = self.bounds.height
+        guard totalW > 0.0, totalH > 0.0 else { return }
 
-        let pillSize = self.badgePill.sizeThatFits(CGSize(width: w - 20.0, height: 22.0))
-        let pillW = min(w - 20.0, max(52.0, pillSize.width + 10.0))
-        self.badgePill.frame = CGRect(x: w - pillW - 10.0, y: 10.0, width: pillW, height: 18.0)
+        let pillTextSize = self.servicePillLabel.sizeThatFits(CGSize(width: totalW - 16.0, height: 22.0))
+        let pillW = min(totalW, max(96.0, ceil(pillTextSize.width) + 22.0))
+        let pillH: CGFloat = 22.0
+        self.servicePillBlurView.frame = CGRect(
+            x: floorToScreenPixels((totalW - pillW) * 0.5),
+            y: 0.0,
+            width: pillW,
+            height: pillH
+        )
+        self.servicePillTintView.frame = self.servicePillBlurView.bounds
+        self.servicePillLabel.frame = self.servicePillBlurView.bounds.insetBy(dx: 10.0, dy: 0.0)
 
-        let circleSide: CGFloat = 68.0
-        self.glowCircle.frame = CGRect(x: (w - circleSide) * 0.5, y: 24.0, width: circleSide, height: circleSide)
-        self.glowCircle.layer.cornerRadius = circleSide * 0.5
-        self.emojiLabel.frame = self.glowCircle.frame
+        let plaqueW: CGFloat = min(224.0, totalW)
+        let plaqueY: CGFloat = pillH + 9.0
+        let plaqueH: CGFloat = max(200.0, totalH - plaqueY)
+        self.plaqueView.frame = CGRect(
+            x: floorToScreenPixels((totalW - plaqueW) * 0.5),
+            y: plaqueY,
+            width: plaqueW,
+            height: plaqueH
+        )
+        self.plaqueBlurView.frame = self.plaqueView.bounds
+        self.radialGradientLayer.frame = self.plaqueView.bounds
 
-        self.headingLabel.frame = CGRect(x: 12.0, y: 98.0, width: w - 24.0, height: 16.0)
-        self.titleLabel.frame = CGRect(x: 12.0, y: 116.0, width: w - 24.0, height: 20.0)
-        self.subtitleLabel.frame = CGRect(x: 12.0, y: 138.0, width: w - 24.0, height: max(20.0, h - 186.0))
-        self.actionButton.frame = CGRect(x: 18.0, y: h - 40.0, width: w - 36.0, height: 30.0)
+        if let patternView = self.patternHostView.view, !patternView.isHidden {
+            patternView.frame = self.plaqueView.bounds
+        }
+        if let iconView = self.giftIconHostView.view, !iconView.isHidden {
+            let iconW = iconView.bounds.width > 0.0 ? iconView.bounds.width : 98.0
+            let iconH = iconView.bounds.height > 0.0 ? iconView.bounds.height : 98.0
+            iconView.frame = CGRect(
+                x: floorToScreenPixels((plaqueW - iconW) * 0.5),
+                y: 16.0,
+                width: iconW,
+                height: iconH
+            )
+        }
+
+        let circleSide: CGFloat = 84.0
+        self.fallbackGlowView.frame = CGRect(
+            x: floorToScreenPixels((plaqueW - circleSide) * 0.5),
+            y: 22.0,
+            width: circleSide,
+            height: circleSide
+        )
+        self.fallbackGlowView.layer.cornerRadius = circleSide * 0.5
+        self.fallbackEmojiLabel.frame = self.fallbackGlowView.frame
+
+        if let ribbonImage = self.ribbonImageView.image, !self.ribbonImageView.isHidden {
+            let ribbonFrame = CGRect(
+                x: plaqueW - ribbonImage.size.width + 1.0,
+                y: -1.0,
+                width: ribbonImage.size.width,
+                height: ribbonImage.size.height
+            )
+            self.ribbonImageView.frame = ribbonFrame
+            let rSize = self.ribbonLabel.sizeThatFits(CGSize(width: 90.0, height: 20.0))
+            self.ribbonLabel.transform = .identity
+            self.ribbonLabel.bounds = CGRect(origin: .zero, size: CGSize(width: ceil(rSize.width), height: ceil(rSize.height)))
+            self.ribbonLabel.center = CGPoint(x: ribbonFrame.midX + 7.0, y: ribbonFrame.midY - 6.0)
+            self.ribbonLabel.transform = CGAffineTransform(rotationAngle: .pi / 4.0)
+        }
+
+        self.titleLabel.frame = CGRect(x: 14.0, y: 120.0, width: plaqueW - 28.0, height: 21.0)
+        let subSize = self.subtitleLabel.sizeThatFits(CGSize(width: plaqueW - 28.0, height: 36.0))
+        let subH = min(36.0, max(17.0, ceil(subSize.height)))
+        self.subtitleLabel.frame = CGRect(x: 14.0, y: 143.0, width: plaqueW - 28.0, height: subH)
+
+        let contentTopY = self.subtitleLabel.frame.maxY + 10.0
+        if !self.commentPillView.isHidden {
+            let cTextSize = self.commentLabel.sizeThatFits(CGSize(width: plaqueW - 48.0, height: 40.0))
+            let pillBoxW = min(plaqueW - 28.0, max(96.0, ceil(cTextSize.width) + 24.0))
+            let pillBoxH = min(46.0, max(28.0, ceil(cTextSize.height) + 10.0))
+            self.commentPillView.frame = CGRect(
+                x: floorToScreenPixels((plaqueW - pillBoxW) * 0.5),
+                y: contentTopY,
+                width: pillBoxW,
+                height: pillBoxH
+            )
+            self.commentLabel.frame = self.commentPillView.bounds.insetBy(dx: 10.0, dy: 4.0)
+        } else if !self.attributesContainer.isHidden {
+            let attrH: CGFloat = 66.0
+            self.attributesContainer.frame = CGRect(x: 12.0, y: contentTopY, width: plaqueW - 24.0, height: attrH)
+            let rowH: CGFloat = 20.0
+            let gap: CGFloat = 7.0
+            let containerW = plaqueW - 24.0
+            let splitX = floorToScreenPixels(containerW * 0.44)
+            let rows: [(UILabel, UILabel, CGFloat)] = [
+                (self.modelKeyLabel, self.modelValueLabel, 0.0),
+                (self.backdropKeyLabel, self.backdropValueLabel, 22.0),
+                (self.symbolKeyLabel, self.symbolValueLabel, 44.0)
+            ]
+            for (kLabel, vLabel, yOff) in rows {
+                kLabel.frame = CGRect(x: 0.0, y: yOff, width: splitX - gap * 0.5, height: rowH)
+                vLabel.frame = CGRect(x: splitX + gap * 0.5, y: yOff, width: containerW - splitX - gap * 0.5, height: rowH)
+            }
+        }
+
+        let btnTitleSize = self.actionButton.titleLabel?.sizeThatFits(CGSize(width: plaqueW - 36.0, height: 34.0)) ?? CGSize(width: 100.0, height: 20.0)
+        let btnW = min(plaqueW - 32.0, max(132.0, ceil(btnTitleSize.width) + 38.0))
+        let btnH: CGFloat = 34.0
+        self.actionButton.frame = CGRect(
+            x: floorToScreenPixels((plaqueW - btnW) * 0.5),
+            y: plaqueH - btnH - 14.0,
+            width: btnW,
+            height: btnH
+        )
     }
 
     @objc private func buttonPressed() {

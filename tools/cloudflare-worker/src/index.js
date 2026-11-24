@@ -693,7 +693,112 @@ async function applyEconomyChange(env, body, grantedBy) {
     userEntry.numbers = userEntry.numbers.slice(0, 30);
   } else if (action === "revoke_number") {
     const targetId = String(body.id || "").trim();
-    userEntry.numbers = userEntry.numbers.filter((n) => n.id !== targetId);
+    const rawNumber = String(body.number || "").trim();
+    userEntry.numbers = userEntry.numbers.filter((n) => n.id !== targetId && (!rawNumber || String(n.number || "").trim() !== rawNumber));
+  } else if (action === "toggle_username") {
+    const clean = String(body.username || "").trim().replace(/^@+/, "").toLowerCase();
+    const targetId = String(body.id || "").trim();
+    const makeActive = body.isActive !== undefined ? Boolean(body.isActive) : null;
+    const makePrimary = body.isPrimary !== undefined ? Boolean(body.isPrimary) : null;
+    userEntry.usernames = userEntry.usernames.map((u) => {
+      const match = (targetId && u.id === targetId) || (clean && String(u.username || "").toLowerCase() === clean);
+      if (!match) {
+        return makePrimary === true ? { ...u, isPrimary: false } : u;
+      }
+      const nextActive = makeActive !== null ? makeActive : !u.isActive;
+      const nextPrimary = makePrimary !== null ? makePrimary : (nextActive ? u.isPrimary : false);
+      return { ...u, isActive: nextActive, isPrimary: nextActive ? nextPrimary : false };
+    });
+  } else if (action === "toggle_number") {
+    const targetId = String(body.id || "").trim();
+    const rawNumber = String(body.number || "").trim();
+    const makeActive = body.isActive !== undefined ? Boolean(body.isActive) : null;
+    userEntry.numbers = userEntry.numbers.map((n) => {
+      const match = (targetId && n.id === targetId) || (rawNumber && String(n.number || "").trim() === rawNumber);
+      if (!match) {
+        return makeActive === true ? { ...n, isActive: false } : n;
+      }
+      const nextActive = makeActive !== null ? makeActive : !n.isActive;
+      return { ...n, isActive: nextActive };
+    });
+  } else if (action === "transfer_username") {
+    const toPeerId = normalizePeerId(body.toPeerId != null ? String(body.toPeerId).trim() : "");
+    if (!toPeerId || !/^-?\d{1,20}$/.test(toPeerId) || toPeerId === peerId) {
+      throw new Error("Invalid recipient peerId");
+    }
+    const clean = String(body.username || "").trim().replace(/^@+/, "").toLowerCase();
+    const targetId = String(body.id || "").trim();
+    const idx = userEntry.usernames.findIndex((u) => (targetId && u.id === targetId) || (clean && String(u.username || "").toLowerCase() === clean));
+    if (idx < 0) throw new Error("Username not found");
+    const [moved] = userEntry.usernames.splice(idx, 1);
+    const dst = eco.users[toPeerId] && typeof eco.users[toPeerId] === "object"
+      ? {
+          gramBalance: Number(eco.users[toPeerId].gramBalance || 0),
+          starsBalance: Number(eco.users[toPeerId].starsBalance || 0),
+          usernames: Array.isArray(eco.users[toPeerId].usernames) ? [...eco.users[toPeerId].usernames] : [],
+          numbers: Array.isArray(eco.users[toPeerId].numbers) ? [...eco.users[toPeerId].numbers] : []
+        }
+      : { gramBalance: 0, starsBalance: 0, usernames: [], numbers: [] };
+    dst.usernames = dst.usernames.filter((u) => String(u.username || "").toLowerCase() !== String(moved.username || "").toLowerCase());
+    dst.usernames.unshift({ ...moved, isActive: true, isPrimary: dst.usernames.length === 0, purchasedAt: nowSec });
+    dst.usernames = dst.usernames.slice(0, 30);
+    eco.users[toPeerId] = dst;
+  } else if (action === "transfer_number") {
+    const toPeerId = normalizePeerId(body.toPeerId != null ? String(body.toPeerId).trim() : "");
+    if (!toPeerId || !/^-?\d{1,20}$/.test(toPeerId) || toPeerId === peerId) {
+      throw new Error("Invalid recipient peerId");
+    }
+    const targetId = String(body.id || "").trim();
+    const rawNumber = String(body.number || "").trim();
+    const idx = userEntry.numbers.findIndex((n) => (targetId && n.id === targetId) || (rawNumber && String(n.number || "").trim() === rawNumber));
+    if (idx < 0) throw new Error("Number not found");
+    const [moved] = userEntry.numbers.splice(idx, 1);
+    const dst = eco.users[toPeerId] && typeof eco.users[toPeerId] === "object"
+      ? {
+          gramBalance: Number(eco.users[toPeerId].gramBalance || 0),
+          starsBalance: Number(eco.users[toPeerId].starsBalance || 0),
+          usernames: Array.isArray(eco.users[toPeerId].usernames) ? [...eco.users[toPeerId].usernames] : [],
+          numbers: Array.isArray(eco.users[toPeerId].numbers) ? [...eco.users[toPeerId].numbers] : []
+        }
+      : { gramBalance: 0, starsBalance: 0, usernames: [], numbers: [] };
+    dst.numbers = dst.numbers.filter((n) => String(n.number || "") !== String(moved.number || ""));
+    dst.numbers.unshift({ ...moved, isActive: dst.numbers.every((n) => !n.isActive), purchasedAt: nowSec });
+    dst.numbers = dst.numbers.slice(0, 30);
+    eco.users[toPeerId] = dst;
+  } else if (action === "transfer_gram") {
+    const toPeerId = normalizePeerId(body.toPeerId != null ? String(body.toPeerId).trim() : "");
+    const amount = Number(body.amount);
+    if (!toPeerId || !/^-?\d{1,20}$/.test(toPeerId) || toPeerId === peerId || !Number.isFinite(amount) || amount <= 0) {
+      throw new Error("Invalid transfer parameters");
+    }
+    userEntry.gramBalance = Math.max(0, Math.round((userEntry.gramBalance - amount) * 100) / 100);
+    const dst = eco.users[toPeerId] && typeof eco.users[toPeerId] === "object"
+      ? {
+          gramBalance: Number(eco.users[toPeerId].gramBalance || 0),
+          starsBalance: Number(eco.users[toPeerId].starsBalance || 0),
+          usernames: Array.isArray(eco.users[toPeerId].usernames) ? [...eco.users[toPeerId].usernames] : [],
+          numbers: Array.isArray(eco.users[toPeerId].numbers) ? [...eco.users[toPeerId].numbers] : []
+        }
+      : { gramBalance: 0, starsBalance: 0, usernames: [], numbers: [] };
+    dst.gramBalance = Math.round((dst.gramBalance + amount) * 100) / 100;
+    eco.users[toPeerId] = dst;
+  } else if (action === "transfer_stars") {
+    const toPeerId = normalizePeerId(body.toPeerId != null ? String(body.toPeerId).trim() : "");
+    const amount = Math.floor(Number(body.amount));
+    if (!toPeerId || !/^-?\d{1,20}$/.test(toPeerId) || toPeerId === peerId || !Number.isFinite(amount) || amount <= 0) {
+      throw new Error("Invalid transfer parameters");
+    }
+    userEntry.starsBalance = Math.max(0, Math.floor(userEntry.starsBalance - amount));
+    const dst = eco.users[toPeerId] && typeof eco.users[toPeerId] === "object"
+      ? {
+          gramBalance: Number(eco.users[toPeerId].gramBalance || 0),
+          starsBalance: Number(eco.users[toPeerId].starsBalance || 0),
+          usernames: Array.isArray(eco.users[toPeerId].usernames) ? [...eco.users[toPeerId].usernames] : [],
+          numbers: Array.isArray(eco.users[toPeerId].numbers) ? [...eco.users[toPeerId].numbers] : []
+        }
+      : { gramBalance: 0, starsBalance: 0, usernames: [], numbers: [] };
+    dst.starsBalance = Math.floor(dst.starsBalance + amount);
+    eco.users[toPeerId] = dst;
   } else {
     throw new Error("Unknown economy action");
   }
@@ -847,93 +952,560 @@ async function redeemBetaInvite(env, rawCode, rawPeerId, opts = {}) {
   };
 }
 
+function extractBetaInviteCodeFromText(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  const urlMatch = s.match(/\/beta\/([A-Za-z0-9_.-]{6,80})/i);
+  if (urlMatch) return urlMatch[1];
+  const startParamMatch = s.match(/[?&]start=(?:beta[_-])?([A-Za-z0-9_.-]{6,80})/i);
+  if (startParamMatch) return startParamMatch[1];
+  const codeParamMatch = s.match(/[?&]code=([A-Za-z0-9_.-]{6,80})/i);
+  if (codeParamMatch) return codeParamMatch[1];
+  const cmdMatch = s.match(/^\/(?:start|activate)(?:@\S+)?\s+(?:beta[_-])?([A-Za-z0-9_.-]{6,80})$/i);
+  if (cmdMatch) return cmdMatch[1];
+  const fgbMatch = s.match(/\b(fgb1_[A-Za-z0-9_.-]{6,80})\b/i);
+  if (fgbMatch) return fgbMatch[1];
+  if (/^[A-Za-z0-9_.-]{10,80}$/.test(s) && !s.startsWith("/")) {
+    return s;
+  }
+  return "";
+}
+
 function renderBetaLandingHtml(code, origin, inviteStatus = null, options = {}) {
-  const safeCode = escapeHtml(code);
+  const safeCode = escapeHtml(code || "");
   const botUsername = String(options.botUsername || "").trim().replace(/^@/, "");
   const done = Boolean(options.done);
-  const deepLink = `fullgram://beta?code=${encodeURIComponent(code)}`;
-  const botLink = botUsername ? `https://t.me/${encodeURIComponent(botUsername)}?start=beta_${encodeURIComponent(code)}` : "";
-  let statusBadge = "Готово к активации";
-  let statusColor = "#34d399";
+  const hasCode = Boolean(code);
+  const deepLink = hasCode ? `fullgram://beta?code=${encodeURIComponent(code)}` : "fullgram://beta";
+  const syncLink = "fullgram://beta";
+  const botLink = botUsername
+    ? (hasCode
+      ? `https://t.me/${encodeURIComponent(botUsername)}?start=beta_${encodeURIComponent(code)}`
+      : `https://t.me/${encodeURIComponent(botUsername)}`)
+    : "";
+
+  let statusBadge = "Портал закрытого бета-теста";
+  let statusClass = "info";
   if (done) {
-    statusBadge = "Доступ активирован! Вернитесь в FullGram";
-    statusColor = "#34d399";
-  } else if (inviteStatus) {
+    statusBadge = "Бета-доступ активирован";
+    statusClass = "ok";
+  } else if (hasCode && inviteStatus) {
     if (inviteStatus.revoked) {
-      statusBadge = "Ссылка отозвана";
-      statusColor = "#f87171";
+      statusBadge = "Инвайт отозван";
+      statusClass = "err";
     } else if (inviteStatus.expired) {
       statusBadge = "Срок действия истёк";
-      statusColor = "#f87171";
+      statusClass = "err";
     } else if (inviteStatus.exhausted) {
       statusBadge = "Лимит активаций исчерпан";
-      statusColor = "#fbbf24";
+      statusClass = "warn";
     } else if (!inviteStatus.exists) {
-      statusBadge = "Код не найден";
-      statusColor = "#f87171";
+      statusBadge = "Инвайт-код не найден";
+      statusClass = "err";
     } else {
-      statusBadge = `Активна · осталось ${inviteStatus.remaining} из ${inviteStatus.maxUses}`;
+      statusBadge = `Инвайт активен · свободно ${inviteStatus.remaining} из ${inviteStatus.maxUses}`;
+      statusClass = "ok";
     }
   }
-  const botButton = botLink && !done
-    ? `<a class="btn" href="${escapeHtml(botLink)}">🤖 Активировать в Telegram (1 клик)</a>`
+
+  const botPrimaryBlock = botLink
+    ? `<a class="btn btn-primary" id="tgBotBtn" href="${escapeHtml(botLink)}">
+        <span class="btn-ico">🤖</span>
+        <span>${hasCode ? "Активировать через Telegram в 1 клик" : "Открыть бота активации в Telegram"}</span>
+      </a>`
     : "";
-  const appButtonClass = (!botLink || done) ? "btn" : "btn-sec";
+
   return `<!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>FullGram · Закрытый бета-тест</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>FullGram Beta · Активация доступа</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
-    body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0a0b10;color:#fff;font-family:-apple-system,BlinkMacSystemFont,sans-serif;padding:24px;}
-    .card{max-width:420px;width:100%;background:#151822;border:1px solid rgba(255,255,255,.08);border-radius:22px;padding:28px;text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.45);}
-    .pill{display:inline-block;padding:6px 12px;border-radius:999px;font-size:12px;font-weight:700;background:rgba(255,255,255,.06);margin-bottom:14px;}
-    h1{font-size:22px;margin:0 0 10px;}
-    p{font-size:14px;line-height:1.5;color:#a4abc0;margin:0 0 18px;}
-    .btn{display:block;padding:14px 18px;border-radius:14px;background:linear-gradient(135deg,#3390ec,#6c5ce7);color:#fff;text-decoration:none;font-weight:700;font-size:15px;margin-bottom:10px;}
-    .btn-sec{display:block;padding:12px 16px;border-radius:12px;background:rgba(255,255,255,.07);color:#e2e8f0;text-decoration:none;font-weight:600;font-size:13.5px;border:none;width:100%;box-sizing:border-box;cursor:pointer;margin-bottom:8px;}
-    .hint{margin-top:12px;font-size:12.5px;line-height:1.45;color:#8e96ad;}
-    .code{margin-top:10px;font-size:12px;color:#737b94;word-break:break-all;}
+    :root {
+      --bg: #07090f;
+      --card: rgba(19, 23, 35, 0.86);
+      --card-2: rgba(255, 255, 255, 0.045);
+      --border: rgba(255, 255, 255, 0.09);
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #3b82f6;
+      --accent-2: #8b5cf6;
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --err: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 18% 12%, rgba(59,130,246,0.22), transparent 42%),
+        radial-gradient(circle at 82% 18%, rgba(139,92,246,0.20), transparent 44%),
+        radial-gradient(circle at 50% 92%, rgba(16,185,129,0.12), transparent 48%),
+        var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+      padding: 24px 16px 42px;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+    }
+    .wrap {
+      width: 100%;
+      max-width: 500px;
+      margin-top: 8px;
+    }
+    .hero {
+      background: var(--card);
+      backdrop-filter: blur(22px);
+      -webkit-backdrop-filter: blur(22px);
+      border: 1px solid var(--border);
+      border-radius: 26px;
+      padding: 26px 22px 22px;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+    }
+    .top-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 800;
+      font-size: 16px;
+      letter-spacing: -0.2px;
+    }
+    .brand-logo {
+      width: 34px;
+      height: 34px;
+      border-radius: 11px;
+      background: linear-gradient(135deg, #38bdf8, #6366f1 55%, #a855f7);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 17px;
+      box-shadow: 0 8px 20px rgba(99, 102, 241, 0.38);
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .pill.ok { color: var(--ok); border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.10); }
+    .pill.warn { color: var(--warn); border-color: rgba(251, 191, 36, 0.3); background: rgba(251, 191, 36, 0.10); }
+    .pill.err { color: var(--err); border-color: rgba(248, 113, 113, 0.3); background: rgba(248, 113, 113, 0.10); }
+    .pill.info { color: #93c5fd; border-color: rgba(147, 197, 253, 0.25); background: rgba(59, 130, 246, 0.10); }
+    h1 {
+      font-size: 24px;
+      line-height: 1.2;
+      margin: 0 0 8px;
+      letter-spacing: -0.4px;
+    }
+    .lead {
+      font-size: 14px;
+      line-height: 1.55;
+      color: var(--muted);
+      margin: 0 0 18px;
+    }
+    .tabs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      background: rgba(0, 0, 0, 0.32);
+      padding: 5px;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,0.06);
+      margin-bottom: 16px;
+    }
+    .tab {
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 700;
+      font-size: 13px;
+      padding: 10px 8px;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all .16s ease;
+    }
+    .tab.active {
+      background: rgba(255, 255, 255, 0.10);
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    }
+    .pane { display: none; }
+    .pane.active { display: block; }
+    .field { margin-bottom: 12px; }
+    .label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      font-weight: 600;
+      color: #cbd5e1;
+      margin-bottom: 6px;
+    }
+    .label span.sub { color: var(--muted); font-weight: 500; }
+    .input {
+      width: 100%;
+      padding: 13px 14px;
+      border-radius: 13px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(8, 11, 19, 0.72);
+      color: #fff;
+      font-size: 14.5px;
+      outline: none;
+      transition: border-color .15s ease, box-shadow .15s ease;
+    }
+    .input:focus {
+      border-color: #60a5fa;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+    }
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      width: 100%;
+      padding: 14px 16px;
+      border-radius: 14px;
+      font-weight: 700;
+      font-size: 14.5px;
+      text-decoration: none;
+      border: none;
+      cursor: pointer;
+      transition: transform .12s ease, opacity .15s ease;
+      margin-bottom: 10px;
+    }
+    .btn:active { transform: scale(0.985); }
+    .btn:disabled { opacity: 0.55; cursor: wait; }
+    .btn-primary {
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      color: #fff;
+      box-shadow: 0 10px 26px rgba(99, 102, 241, 0.35);
+    }
+    .btn-green {
+      background: linear-gradient(135deg, #059669, #10b981);
+      color: #fff;
+      box-shadow: 0 10px 24px rgba(16, 185, 129, 0.28);
+    }
+    .btn-sec {
+      background: rgba(255, 255, 255, 0.065);
+      border: 1px solid rgba(255, 255, 255, 0.09);
+      color: #e2e8f0;
+      font-size: 13.5px;
+      padding: 12px 14px;
+    }
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 14px 0;
+      color: #64748b;
+      font-size: 11.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      font-weight: 700;
+    }
+    .divider::before, .divider::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .alert {
+      display: none;
+      padding: 12px 14px;
+      border-radius: 13px;
+      font-size: 13.5px;
+      line-height: 1.45;
+      margin-bottom: 12px;
+      border: 1px solid transparent;
+    }
+    .alert.show { display: block; }
+    .alert.ok { background: rgba(16, 185, 129, 0.13); border-color: rgba(52, 211, 153, 0.35); color: #a7f3d0; }
+    .alert.err { background: rgba(239, 68, 68, 0.13); border-color: rgba(248, 113, 113, 0.35); color: #fecaca; }
+    .steps {
+      margin-top: 16px;
+      background: var(--card-2);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 16px;
+      padding: 14px 16px;
+    }
+    .steps-title {
+      font-size: 12.5px;
+      font-weight: 700;
+      color: #cbd5e1;
+      margin-bottom: 8px;
+    }
+    .step-item {
+      font-size: 12.5px;
+      color: var(--muted);
+      line-height: 1.5;
+      margin-bottom: 6px;
+    }
+    .step-item:last-child { margin-bottom: 0; }
+    .step-item b { color: #e2e8f0; }
+    code.inline {
+      background: rgba(255,255,255,0.08);
+      padding: 2px 6px;
+      border-radius: 6px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      color: #bae6fd;
+    }
   </style>
 </head>
 <body>
-  <div class="card">
-    <div class="pill" style="color:${statusColor};">${escapeHtml(statusBadge)}</div>
-    <h1>🔐 Закрытый бета-тест FullGram</h1>
-    <p>${done ? "Ваш Telegram-аккаунт уже добавлен в белый список беты. Нажмите кнопку ниже или просто откройте FullGram." : "Нажмите «Активировать в Telegram» — бот мгновенно привяжет ваш аккаунт. Или откройте ссылку напрямую в FullGram."}</p>
-    ${botButton}
-    <a class="${appButtonClass}" href="${escapeHtml(deepLink)}">🚀 Открыть в FullGram</a>
-    <button class="btn-sec" id="copyCodeBtn" type="button" data-code="${safeCode}">📋 Скопировать код приглашения</button>
-    <div class="hint">После активации через бота просто откройте FullGram — доступ откроется автоматически.</div>
-    <div class="code">Код: ${safeCode}</div>
+  <div class="wrap">
+    <div class="hero">
+      <div class="top-row">
+        <div class="brand">
+          <span class="brand-logo">⚡</span>
+          <span>FullGram Beta</span>
+        </div>
+        <div class="pill ${statusClass}" id="statusPill">${escapeHtml(statusBadge)}</div>
+      </div>
+
+      <h1>${done ? "✅ Доступ успешно активирован!" : "Активация закрытого бета-теста"}</h1>
+      <p class="lead">
+        ${done
+          ? "Ваш Telegram-аккаунт уже добавлен в белый список тестеров FullGram. Откройте приложение — доступ разблокируется автоматически."
+          : "Активируйте бета-доступ для любого своего аккаунта прямо на сайте по коду и Telegram ID или в 1 клик через бота."}
+      </p>
+
+      <div class="tabs">
+        <button class="tab active" type="button" data-pane="activatePane">🎟 Активация по коду</button>
+        <button class="tab" type="button" data-pane="checkPane">🔍 Проверить доступ</button>
+      </div>
+
+      <div id="resultBox" class="alert ${done ? "ok show" : ""}">${done ? "✅ Аккаунт активирован! Нажмите «Открыть FullGram и синхронизировать» ниже." : ""}</div>
+
+      <div class="pane active" id="activatePane">
+        ${botPrimaryBlock}
+        ${botPrimaryBlock ? '<div class="divider">или активировать прямо на сайте</div>' : ""}
+
+        <form id="redeemForm">
+          <div class="field">
+            <div class="label">
+              <span>Код приглашения</span>
+              <span class="sub">формат fgb1_...</span>
+            </div>
+            <input class="input" id="codeInput" name="code" type="text" placeholder="Например: fgb1_a1b2c3d4..." value="${safeCode}" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="field">
+            <div class="label">
+              <span>Ваш Telegram ID</span>
+              <span class="sub" id="tgIdHint">узнать можно в боте (/start)</span>
+            </div>
+            <input class="input" id="peerIdInput" name="peerId" type="text" inputmode="numeric" placeholder="Например: 1234567890" autocomplete="off" />
+          </div>
+          <button class="btn btn-green" id="redeemSubmitBtn" type="submit">✨ Активировать бета-доступ на сайте</button>
+        </form>
+
+        <a class="btn btn-sec" id="openAppLink" href="${escapeHtml(done ? syncLink : deepLink)}">🚀 Открыть FullGram ${hasCode && !done ? "с этим кодом" : "и синхронизировать"}</a>
+        ${hasCode ? `<button class="btn btn-sec" id="copyCodeBtn" type="button" data-code="${safeCode}">📋 Скопировать код приглашения</button>` : ""}
+      </div>
+
+      <div class="pane" id="checkPane">
+        <form id="checkForm">
+          <div class="field">
+            <div class="label">
+              <span>Telegram ID аккаунта</span>
+              <span class="sub">числовой ID</span>
+            </div>
+            <input class="input" id="checkPeerInput" type="text" inputmode="numeric" placeholder="Введите ваш Telegram ID" autocomplete="off" />
+          </div>
+          <button class="btn btn-primary" id="checkSubmitBtn" type="submit">🔍 Проверить статус бета-доступа</button>
+        </form>
+        <div id="checkResultBox" class="alert"></div>
+        <a class="btn btn-sec" href="fullgram://beta">🔄 Синхронизировать доступ в FullGram</a>
+      </div>
+
+      <div class="steps">
+        <div class="steps-title">Как это работает на втором или любом другом аккаунте:</div>
+        <div class="step-item">1. Нажмите <b>Активировать через Telegram</b> (или отправьте боту <code class="inline">fgb1_...</code> в ЛС) — либо введите свой <b>Telegram ID</b> и код прямо здесь на сайте.</div>
+        <div class="step-item">2. Узнать свой числовой ID можно, просто написав <code class="inline">/start</code> нашему боту с нужного аккаунта.</div>
+        <div class="step-item">3. Откройте <b>FullGram</b> под этим аккаунтом (или нажмите <b>Настройки → FullGram → Проверить доступ</b>).</div>
+      </div>
+    </div>
   </div>
+
   <script>
-    (function(){
-      var btn = document.getElementById("copyCodeBtn");
-      if (!btn) return;
-      btn.addEventListener("click", function(){
-        var code = btn.getAttribute("data-code") || "";
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(code).then(function(){
-            btn.textContent = "✅ Код скопирован";
-          }).catch(function(){ fallbackCopy(code); });
-        } else {
-          fallbackCopy(code);
-        }
+    (function() {
+      var botUsername = ${JSON.stringify(botUsername)};
+      var tabs = document.querySelectorAll(".tab");
+      var panes = document.querySelectorAll(".pane");
+      tabs.forEach(function(tab) {
+        tab.addEventListener("click", function() {
+          var target = tab.getAttribute("data-pane");
+          tabs.forEach(function(t) { t.classList.toggle("active", t === tab); });
+          panes.forEach(function(p) { p.classList.toggle("active", p.id === target); });
+        });
       });
-      function fallbackCopy(text){
-        try {
-          var ta = document.createElement("textarea");
-          ta.value = text;
-          ta.style.position = "fixed";
-          ta.style.opacity = "0";
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand("copy");
-          document.body.removeChild(ta);
-          btn.textContent = "✅ Код скопирован";
-        } catch (e) {}
+
+      var codeInput = document.getElementById("codeInput");
+      var peerIdInput = document.getElementById("peerIdInput");
+      var checkPeerInput = document.getElementById("checkPeerInput");
+      var tgBotBtn = document.getElementById("tgBotBtn");
+      var openAppLink = document.getElementById("openAppLink");
+      var resultBox = document.getElementById("resultBox");
+      var checkResultBox = document.getElementById("checkResultBox");
+      var statusPill = document.getElementById("statusPill");
+
+      try {
+        var tg = window.Telegram && window.Telegram.WebApp;
+        if (tg) {
+          tg.ready();
+          var u = tg.initDataUnsafe && tg.initDataUnsafe.user;
+          if (u && u.id) {
+            peerIdInput.value = String(u.id);
+            checkPeerInput.value = String(u.id);
+            var hint = document.getElementById("tgIdHint");
+            if (hint) hint.textContent = "определён автоматически ✓";
+          }
+        }
+      } catch (e) {}
+
+      function extractCleanCode(raw) {
+        var s = String(raw || "").trim();
+        var mUrl = s.match(/\\/beta\\/([A-Za-z0-9_.-]+)/i);
+        if (mUrl) return mUrl[1];
+        var mStart = s.match(/[?&]start=(?:beta[_-])?([A-Za-z0-9_.-]+)/i);
+        if (mStart) return mStart[1];
+        if (s.toLowerCase().indexOf("beta_") === 0 || s.toLowerCase().indexOf("beta-") === 0) {
+          return s.slice(5);
+        }
+        return s;
+      }
+
+      if (codeInput) {
+        codeInput.addEventListener("input", function() {
+          var c = extractCleanCode(codeInput.value);
+          if (tgBotBtn && botUsername) {
+            tgBotBtn.href = c
+              ? ("https://t.me/" + encodeURIComponent(botUsername) + "?start=beta_" + encodeURIComponent(c))
+              : ("https://t.me/" + encodeURIComponent(botUsername));
+          }
+          if (openAppLink) {
+            openAppLink.href = c ? ("fullgram://beta?code=" + encodeURIComponent(c)) : "fullgram://beta";
+          }
+        });
+      }
+
+      function showAlert(el, ok, html) {
+        if (!el) return;
+        el.className = "alert show " + (ok ? "ok" : "err");
+        el.innerHTML = html;
+      }
+
+      var redeemForm = document.getElementById("redeemForm");
+      var redeemBtn = document.getElementById("redeemSubmitBtn");
+      if (redeemForm) {
+        redeemForm.addEventListener("submit", function(ev) {
+          ev.preventDefault();
+          var code = extractCleanCode(codeInput ? codeInput.value : "");
+          var peerId = String(peerIdInput ? peerIdInput.value : "").trim().replace(/[^0-9-]/g, "");
+          if (!code) {
+            showAlert(resultBox, false, "❌ Введите код приглашения (например, <b>fgb1_...</b>).");
+            return;
+          }
+          if (!peerId || !/^-?\\d{4,20}$/.test(peerId)) {
+            showAlert(resultBox, false, "❌ Введите ваш числовой <b>Telegram ID</b> (напишите /start боту, чтобы узнать его).");
+            return;
+          }
+          redeemBtn.disabled = true;
+          var prevText = redeemBtn.textContent;
+          redeemBtn.textContent = "⏳ Активируем...";
+          var initData = (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) || "";
+          fetch("/beta/web-activate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code: code, peerId: peerId, initData: initData })
+          })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+              redeemBtn.disabled = false;
+              redeemBtn.textContent = prevText;
+              if (data && data.ok) {
+                showAlert(
+                  resultBox,
+                  true,
+                  "✅ <b>Бета-доступ активирован для ID " + data.peerId + "!</b><br>Теперь откройте FullGram под этим аккаунтом — функции разблокируются автоматически."
+                );
+                if (statusPill) {
+                  statusPill.className = "pill ok";
+                  statusPill.textContent = "Бета-доступ активирован";
+                }
+                if (openAppLink) {
+                  openAppLink.href = "fullgram://beta";
+                  openAppLink.textContent = "🚀 Открыть FullGram и синхронизировать";
+                }
+              } else {
+                showAlert(resultBox, false, "❌ " + ((data && data.error) || "Не удалось активировать код."));
+              }
+            })
+            .catch(function() {
+              redeemBtn.disabled = false;
+              redeemBtn.textContent = prevText;
+              showAlert(resultBox, false, "❌ Ошибка сети. Проверьте подключение и попробуйте снова.");
+            });
+        });
+      }
+
+      var checkForm = document.getElementById("checkForm");
+      var checkBtn = document.getElementById("checkSubmitBtn");
+      if (checkForm) {
+        checkForm.addEventListener("submit", function(ev) {
+          ev.preventDefault();
+          var peerId = String(checkPeerInput ? checkPeerInput.value : "").trim().replace(/[^0-9-]/g, "");
+          if (!peerId || !/^-?\\d{4,20}$/.test(peerId)) {
+            showAlert(checkResultBox, false, "❌ Введите корректный числовой Telegram ID.");
+            return;
+          }
+          checkBtn.disabled = true;
+          checkBtn.textContent = "⏳ Проверяем...";
+          fetch("/beta/public-status?peerId=" + encodeURIComponent(peerId))
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+              checkBtn.disabled = false;
+              checkBtn.textContent = "🔍 Проверить статус бета-доступа";
+              if (data && data.active) {
+                showAlert(checkResultBox, true, "✅ <b>Доступ активен!</b> Аккаунт <b>" + data.peerId + "</b> состоит в закрытом бета-тесте FullGram.");
+              } else {
+                showAlert(checkResultBox, false, "ℹ️ Для аккаунта <b>" + peerId + "</b> бета-доступ ещё не активирован. Перейдите на вкладку «Активация по коду».");
+              }
+            })
+            .catch(function() {
+              checkBtn.disabled = false;
+              checkBtn.textContent = "🔍 Проверить статус бета-доступа";
+              showAlert(checkResultBox, false, "❌ Не удалось проверить статус.");
+            });
+        });
+      }
+
+      var copyBtn = document.getElementById("copyCodeBtn");
+      if (copyBtn) {
+        copyBtn.addEventListener("click", function() {
+          var code = (codeInput && codeInput.value.trim()) || copyBtn.getAttribute("data-code") || "";
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(code).then(function() {
+              copyBtn.textContent = "✅ Код скопирован";
+            });
+          }
+        });
       }
     })();
   </script>
@@ -1429,15 +2001,58 @@ async function handleTelegramWebhook(request, env, origin) {
   const actorId = actor && actor.id != null ? String(actor.id).trim() : "";
   const ownerId = String(env.OWNER_USER_ID || DEFAULT_OWNER_ID).trim();
 
-  // Allow any user to redeem a beta invite via /start beta_<CODE> in private chat ONLY
+  // Allow any user in private chat ONLY to:
+  // 1) redeem a beta invite via /start beta_<CODE>, /activate <CODE>, or sending fgb1_... / /beta/<CODE>
+  // 2) tap /start (without args) on a non-owner account to see their Telegram ID and instructions to activate beta
+  // 3) check their own beta status via callback beta_my_status
+  // Management/admin commands and plugins remain 100% owner-locked!
+  const isOwnerActor = Boolean(actorId && actorId === ownerId && isAdminUserId(actorId, env));
+
+  if (!isOwnerActor && update.callback_query?.id && update.callback_query?.data === "beta_my_status") {
+    const cq = update.callback_query;
+    const cqChatType = cq.message?.chat?.type || "";
+    if (cqChatType === "private" && cq.from?.id != null) {
+      const checkId = normalizePeerId(String(cq.from.id));
+      const usersData = await loadBetaUsers(env);
+      const rec = usersData.users[checkId];
+      const active = Boolean(rec && !rec.revoked);
+      await answerTelegramCallback(
+        env,
+        cq.id,
+        active ? "✅ Бета-доступ активен!" : "ℹ️ Бета-доступ ещё не активирован."
+      );
+      await sendTelegramMessage(
+        env,
+        cq.message.chat.id,
+        active
+          ? `✅ <b>Бета-доступ активен!</b>\n\nВаш Telegram ID: <code>${escapeHtml(checkId)}</code>\nОткройте FullGram — все функции разблокированы.`
+          : `ℹ️ <b>Бета-доступ пока не активирован</b>\n\nВаш Telegram ID: <code>${escapeHtml(checkId)}</code>\nОтправьте сюда код приглашения (например, <code>fgb1_...</code>) или активируйте доступ на сайте:`,
+        {
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [[{ text: "🌐 Сайт бета-активации", url: `${origin}/beta` }]]
+          }
+        }
+      );
+      return jsonResponse({ ok: true });
+    }
+  }
+
   const preMsg = update.message;
   if (preMsg?.from?.id != null && preMsg.chat?.type === "private" && typeof preMsg.text === "string") {
     const preText = preMsg.text.trim();
-    const betaStartMatch = preText.match(/^\/start(?:@\S+)?\s+(?:beta[_-])?([A-Za-z0-9_.-]+)$/i);
-    if (betaStartMatch && (preText.toLowerCase().includes("beta") || betaStartMatch[1].startsWith("fgb1_"))) {
-      const code = betaStartMatch[1].trim();
-      const preSenderId = String(preMsg.from.id).trim();
-      const result = await redeemBetaInvite(env, code, preSenderId, {
+    const preSenderId = normalizePeerId(String(preMsg.from.id).trim());
+    const extractedBetaCode = extractBetaInviteCodeFromText(preText);
+    const isExplicitBetaRedeem = Boolean(
+      extractedBetaCode && (
+        preText.toLowerCase().includes("beta") ||
+        extractedBetaCode.toLowerCase().startsWith("fgb1_") ||
+        /^\/activate\b/i.test(preText) ||
+        (!isOwnerActor && !preText.startsWith("/"))
+      )
+    );
+    if (isExplicitBetaRedeem) {
+      const result = await redeemBetaInvite(env, extractedBetaCode, preSenderId, {
         via: "bot",
         username: preMsg.from?.username || ""
       });
@@ -1452,26 +2067,76 @@ async function handleTelegramWebhook(request, env, origin) {
           {
             parse_mode: "HTML",
             reply_markup: {
-              inline_keyboard: [[{ text: "🚀 Открыть FullGram", url: `${origin}/beta/${encodeURIComponent(result.code)}?done=1` }]]
+              inline_keyboard: [[{ text: "🚀 Открыть портал FullGram", url: `${origin}/beta/${encodeURIComponent(result.code)}?done=1` }]]
             }
           }
         );
       } else {
-        await sendTelegramMessage(env, preMsg.chat.id, `❌ ${result.error}`);
+        await sendTelegramMessage(
+          env,
+          preMsg.chat.id,
+          `❌ ${escapeHtml(result.error)}\n\nВаш Telegram ID: <code>${escapeHtml(preSenderId)}</code>`,
+          {
+            parse_mode: "HTML",
+            reply_markup: {
+              inline_keyboard: [[{ text: "🌐 Открыть сайт активации", url: `${origin}/beta` }]]
+            }
+          }
+        );
       }
+      return jsonResponse({ ok: true });
+    }
+
+    if (!isOwnerActor && (/^\/start(?:@\S+)?$/i.test(preText) || /^\/help(?:@\S+)?$/i.test(preText))) {
+      const usersData = await loadBetaUsers(env);
+      const rec = usersData.users[preSenderId];
+      const active = Boolean(rec && !rec.revoked);
+      await sendTelegramMessage(
+        env,
+        preMsg.chat.id,
+        `🔐 <b>Активация закрытого бета-теста FullGram</b>\n\n` +
+        `Ваш Telegram ID: <code>${escapeHtml(preSenderId)}</code>\n` +
+        `Статус: ${active ? "✅ <b>Бета-доступ активен</b>" : "⏳ <b>Ожидает активации</b>"}\n\n` +
+        `Чтобы активировать доступ на этом аккаунте:\n` +
+        `• Отправьте сюда ваш код приглашения (<code>fgb1_...</code>) или ссылку инвайта;\n` +
+        `• Либо активируйте доступ через веб-портал по кнопке ниже.\n\n` +
+        `<i>Панель управления ботом доступна исключительно владельцу FullGram.</i>`,
+        {
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "🌐 Открыть сайт бета-активации", url: `${origin}/beta` }],
+              [{ text: "🔍 Проверить мой статус", callback_data: "beta_my_status" }]
+            ]
+          }
+        }
+      );
       return jsonResponse({ ok: true });
     }
   }
 
-  if (!actorId || actorId !== ownerId || !isAdminUserId(actorId, env)) {
+  if (!isOwnerActor) {
     if (update.callback_query?.id) {
-      await answerTelegramCallback(env, update.callback_query.id, "⛔ Доступ запрещён: бот только для владельца.");
+      await answerTelegramCallback(env, update.callback_query.id, "⛔ Управление ботом доступно только владельцу FullGram.");
     } else if (update.inline_query?.id) {
       // Ignore inline queries silently from non-owners
     } else {
       const msgObj = update.message || update.edited_message;
       if (msgObj?.chat?.id && msgObj?.chat?.type === "private") {
-        await sendTelegramMessage(env, msgObj.chat.id, "⛔ Доступ запрещён. Этот бот доступен исключительно владельцу FullGram.");
+        const guestId = normalizePeerId(String(msgObj.from?.id || ""));
+        await sendTelegramMessage(
+          env,
+          msgObj.chat.id,
+          `⛔ Управление ботом доступно исключительно владельцу FullGram.\n\n` +
+          `Для активации закрытого бета-теста отправьте код приглашения (<code>fgb1_...</code>) или откройте сайт активации.\n` +
+          (guestId ? `Ваш Telegram ID: <code>${escapeHtml(guestId)}</code>` : ""),
+          {
+            parse_mode: "HTML",
+            reply_markup: {
+              inline_keyboard: [[{ text: "🌐 Открыть сайт активации", url: `${origin}/beta` }]]
+            }
+          }
+        );
       }
     }
     return jsonResponse({ ok: true });
@@ -2018,7 +2683,8 @@ export default {
         return new Response("Not Found", { status: 404 });
       }
       const cache = caches.default;
-      const cachedResp = await cache.match(request);
+      const cacheKey = new Request(`${origin}/assets/frames/${fileName}?fmt=rgba2`, { method: "GET" });
+      const cachedResp = await cache.match(cacheKey);
       if (cachedResp) {
         return cachedResp;
       }
@@ -2028,7 +2694,7 @@ export default {
       ];
       for (const srcUrl of sources) {
         try {
-          const upstream = await fetch(srcUrl, { cf: { cacheTtl: 86400, cacheEverything: true } });
+          const upstream = await fetch(srcUrl, { cf: { cacheTtl: 3600, cacheEverything: true } });
           if (upstream.ok) {
             const resp = new Response(upstream.body, {
               status: 200,
@@ -2039,7 +2705,7 @@ export default {
                 "X-Content-Type-Options": "nosniff"
               }
             });
-            ctx.waitUntil(cache.put(request, resp.clone()));
+            ctx.waitUntil(cache.put(cacheKey, resp.clone()));
             return resp;
           }
         } catch {
@@ -2158,26 +2824,75 @@ export default {
       return jsonResponse({ version: 2, frames: [], profileEffects: [] });
     }
 
+    if (request.method === "GET" && path === "/beta/public-status") {
+      const peerId = normalizePeerId(url.searchParams.get("peerId") || "");
+      if (!peerId || !/^-?\d{4,20}$/.test(peerId)) {
+        return jsonResponse({ ok: false, active: false, error: "Некорректный Telegram ID" }, 400);
+      }
+      if (isAdminUserId(peerId, env)) {
+        return jsonResponse({ ok: true, active: true, peerId });
+      }
+      const usersData = await loadBetaUsers(env);
+      const userRec = usersData.users[peerId];
+      return jsonResponse({ ok: true, active: Boolean(userRec && !userRec.revoked), peerId });
+    }
+
+    if (request.method === "POST" && path === "/beta/web-activate") {
+      try {
+        const body = await request.json();
+        const rawCode = extractBetaInviteCodeFromText(body.code || "") || String(body.code || "").trim();
+        let peerId = normalizePeerId(body.peerId != null ? String(body.peerId).trim() : "");
+        let verifiedUsername = "";
+        if (typeof body.initData === "string" && body.initData.trim() && env.TG_BOT_TOKEN) {
+          const verified = await verifyTelegramInitData(body.initData.trim(), env.TG_BOT_TOKEN);
+          if (verified?.user?.id != null) {
+            peerId = normalizePeerId(String(verified.user.id));
+            verifiedUsername = String(verified.user.username || "");
+          }
+        }
+        if (!rawCode || !peerId || !/^-?\d{4,20}$/.test(peerId)) {
+          return jsonResponse({ ok: false, error: "Укажите корректный код приглашения и числовой Telegram ID." }, 400);
+        }
+        const result = await redeemBetaInvite(env, rawCode, peerId, {
+          via: "web",
+          username: verifiedUsername
+        });
+        if (!result.ok) {
+          return jsonResponse({ ok: false, error: result.error }, result.status || 403);
+        }
+        return jsonResponse({
+          ok: true,
+          active: true,
+          peerId: result.peerId,
+          code: result.code,
+          remaining: result.remaining
+        });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err.message }, 400);
+      }
+    }
+
     if (request.method === "GET" && (path.startsWith("/beta/") || path === "/beta")) {
       const rawCode = path.startsWith("/beta/") ? path.slice("/beta/".length) : (url.searchParams.get("code") || "");
       const code = rawCode.trim().replace(/[^a-zA-Z0-9_.-]/g, "");
-      if (!code) {
-        return new Response("Invalid beta invite code", { status: 400 });
-      }
       const done = url.searchParams.get("done") === "1";
-      const inv = await loadBetaInvites(env);
-      const entry = inv.invites && inv.invites[code] ? inv.invites[code] : null;
-      const now = Math.floor(Date.now() / 1000);
-      const maxUses = entry ? (entry.maxUses || 1) : 0;
-      const uses = entry ? (entry.uses || 0) : 0;
-      const statusInfo = {
-        exists: Boolean(entry),
-        revoked: Boolean(entry?.revoked),
-        expired: Boolean(entry?.expiresAt && now > entry.expiresAt),
-        exhausted: Boolean(entry && uses >= maxUses),
-        maxUses,
-        remaining: Math.max(0, maxUses - uses)
-      };
+      let statusInfo = null;
+      let entry = null;
+      if (code) {
+        const inv = await loadBetaInvites(env);
+        entry = inv.invites && inv.invites[code] ? inv.invites[code] : null;
+        const now = Math.floor(Date.now() / 1000);
+        const maxUses = entry ? (entry.maxUses || 1) : 0;
+        const uses = entry ? (entry.uses || 0) : 0;
+        statusInfo = {
+          exists: Boolean(entry),
+          revoked: Boolean(entry?.revoked),
+          expired: Boolean(entry?.expiresAt && now > entry.expiresAt),
+          exhausted: Boolean(entry && uses >= maxUses),
+          maxUses,
+          remaining: Math.max(0, maxUses - uses)
+        };
+      }
       let botUsername = String(entry?.botUsername || "").trim().replace(/^@/, "");
       if (!botUsername) {
         botUsername = await resolveBotUsername(env);
@@ -2405,6 +3120,41 @@ export default {
         const sponsorTier = auth.isAdmin ? "plus" : (await getSponsorTier(env, auth.uid));
         const canManageAny = Boolean(auth.isAdmin || sponsorTier === "plus");
         const result = await applyNftAction(env, body, auth.uid, canManageAny);
+        return jsonResponse({ ok: true, ...result });
+      } catch (err) {
+        return jsonResponse({ ok: false, error: err.message }, 400);
+      }
+    }
+
+    if (request.method === "POST" && path === "/economy/action") {
+      const auth = await authenticateRequest(request, env);
+      if (!auth) {
+        return jsonResponse({ ok: false, error: "Unauthorized" }, 401);
+      }
+      try {
+        const body = await request.json();
+        const selfPeerId = normalizePeerId(String(auth.uid));
+        const targetPeerId = normalizePeerId(body.peerId != null ? String(body.peerId).trim() : selfPeerId);
+        const sponsorTier = auth.isAdmin ? "plus" : (await getSponsorTier(env, auth.uid));
+        const canManageAny = Boolean(auth.isAdmin || sponsorTier === "plus");
+        if (!canManageAny && targetPeerId !== selfPeerId) {
+          return jsonResponse({ ok: false, error: "Forbidden: can only manage your own economy items" }, 403);
+        }
+        const act = String(body.action || "").trim().toLowerCase();
+        const selfAllowedActions = new Set([
+          "revoke_username",
+          "revoke_number",
+          "toggle_username",
+          "toggle_number",
+          "transfer_username",
+          "transfer_number",
+          "transfer_gram",
+          "transfer_stars"
+        ]);
+        if (!canManageAny && !selfAllowedActions.has(act)) {
+          return jsonResponse({ ok: false, error: "Forbidden: Sponsor+ required to mint server economy items" }, 403);
+        }
+        const result = await applyEconomyChange(env, { ...body, peerId: targetPeerId }, auth.uid);
         return jsonResponse({ ok: true, ...result });
       } catch (err) {
         return jsonResponse({ ok: false, error: err.message }, 400);

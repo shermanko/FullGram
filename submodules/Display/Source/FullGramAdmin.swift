@@ -907,6 +907,43 @@ public final class FullGramAdmin: @unchecked Sendable {
         }
     }
 
+    public func performEconomyAction(
+        actorPeerId: Int64,
+        targetPeerId: Int64? = nil,
+        toPeerId: Int64? = nil,
+        action: String,
+        amount: Double? = nil,
+        username: String? = nil,
+        number: String? = nil,
+        entryId: String? = nil,
+        isActive: Bool? = nil,
+        isPrimary: Bool? = nil,
+        completion: (@Sendable (Result<Void, Error>) -> Void)? = nil
+    ) {
+        let normActor = FullGramCloudCosmetics.normalizedPeerId(actorPeerId)
+        let normTarget = FullGramCloudCosmetics.normalizedPeerId(targetPeerId ?? actorPeerId)
+        var payload: [String: Any] = [
+            "action": action,
+            "peerId": String(normTarget)
+        ]
+        if let toPeerId { payload["toPeerId"] = String(FullGramCloudCosmetics.normalizedPeerId(toPeerId)) }
+        if let amount { payload["amount"] = amount }
+        if let username, !username.isEmpty { payload["username"] = username }
+        if let number, !number.isEmpty { payload["number"] = number }
+        if let entryId, !entryId.isEmpty { payload["id"] = entryId }
+        if let isActive { payload["isActive"] = isActive }
+        if let isPrimary { payload["isPrimary"] = isPrimary }
+
+        self.sendClientSessionJSONRequest(path: "/economy/action", peerId: normActor, payload: payload, didRetry: false) { result in
+            switch result {
+            case .success:
+                completion?(.success(()))
+            case let .failure(err):
+                completion?(.failure(err))
+            }
+        }
+    }
+
     public func grantEconomy(
         actorPeerId: Int64,
         targetPeerId: Int64,

@@ -480,16 +480,16 @@ public enum FullGramAvatarFrames {
     ]
 
     public static let customFullGramFrames: [FullGramAvatarFramePreset] = [
-        FullGramAvatarFramePreset(id: "fg_chrome_wings", title: "FG Chrome Wings", category: "FullGram", fileName: "fg_chrome_wings", accentHex: 0xE2E8F0, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_crimson_wings", title: "FG Crimson Wings", category: "FullGram", fileName: "fg_crimson_wings", accentHex: 0xFF2E4C, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_solar_flare", title: "FG Solar Orange", category: "FullGram", fileName: "fg_solar_flare", accentHex: 0xFF8C00, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_mascot_sparkle", title: "FG Mascot Sparkle", category: "FullGram", fileName: "fg_mascot_sparkle", accentHex: 0xF472B6, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_obsidian_blade", title: "FG Obsidian Edge", category: "FullGram", fileName: "fg_obsidian_blade", accentHex: 0x94A3B8, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_neon_core", title: "FG Neon Core", category: "FullGram", fileName: "fg_neon_core", accentHex: 0x00F5D4, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_stealth_hud", title: "FG Stealth HUD", category: "FullGram", fileName: "fg_stealth_hud", accentHex: 0x00E5FF, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_royal_crown", title: "FG Royal Gold", category: "FullGram", fileName: "fg_royal_crown", accentHex: 0xFFD700, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_void_prism", title: "FG Void Prism", category: "FullGram", fileName: "fg_void_prism", accentHex: 0xA855F7, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_arctic_chrome", title: "FG Arctic Chrome", category: "FullGram", fileName: "fg_arctic_chrome", accentHex: 0x67E8F9, isBundled: false),
+        FullGramAvatarFramePreset(id: "fg_chrome_wings", title: "FG Chrome Wings", category: "FullGram", fileName: "fg_chrome_wings", accentHex: 0xE2E8F0, isBundled: true),
+        FullGramAvatarFramePreset(id: "fg_crimson_wings", title: "FG Crimson Wings", category: "FullGram", fileName: "fg_crimson_wings", accentHex: 0xFF2E4C, isBundled: true),
+        FullGramAvatarFramePreset(id: "fg_solar_flare", title: "FG Solar Orange", category: "FullGram", fileName: "fg_solar_flare", accentHex: 0xFF8C00, isBundled: true),
+        FullGramAvatarFramePreset(id: "fg_mascot_sparkle", title: "FG Mascot Sparkle", category: "FullGram", fileName: "fg_mascot_sparkle", accentHex: 0xF472B6, isBundled: true),
+        FullGramAvatarFramePreset(id: "fg_obsidian_blade", title: "FG Obsidian Edge", category: "FullGram", fileName: "fg_obsidian_blade", accentHex: 0x94A3B8, isBundled: true),
+        FullGramAvatarFramePreset(id: "fg_neon_core", title: "FG Neon Core", category: "FullGram", fileName: "fg_neon_core", accentHex: 0x00F5D4, isBundled: true),
+        FullGramAvatarFramePreset(id: "fg_stealth_hud", title: "FG Stealth HUD", category: "FullGram", fileName: "fg_stealth_hud", accentHex: 0x00E5FF, isBundled: true),
+        FullGramAvatarFramePreset(id: "fg_royal_crown", title: "FG Royal Gold", category: "FullGram", fileName: "fg_royal_crown", accentHex: 0xFFD700, isBundled: true),
+        FullGramAvatarFramePreset(id: "fg_void_prism", title: "FG Void Prism", category: "FullGram", fileName: "fg_void_prism", accentHex: 0xA855F7, isBundled: true),
+        FullGramAvatarFramePreset(id: "fg_arctic_chrome", title: "FG Arctic Chrome", category: "FullGram", fileName: "fg_arctic_chrome", accentHex: 0x67E8F9, isBundled: true),
         FullGramAvatarFramePreset(id: "fg_cyber_hex", title: "Cyber Hex Grid", category: "Кибер", fileName: "fg_cyber_hex", accentHex: 0x00E5FF, isBundled: false),
         FullGramAvatarFramePreset(id: "fg_synthwave_ring", title: "Synthwave Sunset", category: "Неон", fileName: "fg_synthwave_ring", accentHex: 0xFF2A85, isBundled: false),
         FullGramAvatarFramePreset(id: "fg_matrix_code", title: "Matrix Digital", category: "Кибер", fileName: "fg_matrix_code", accentHex: 0x00FF66, isBundled: false),
@@ -529,8 +529,45 @@ public enum FullGramAvatarFrames {
         FullGramAvatarFramePreset(id: "fg_candy_swirl", title: "Candy Swirl", category: "Милые", fileName: "fg_candy_swirl", accentHex: 0xF472B6, isBundled: false),
         FullGramAvatarFramePreset(id: "fg_emerald_vine", title: "Emerald Vine", category: "Природа", fileName: "fg_emerald_vine", accentHex: 0x22C55E, isBundled: false),
         FullGramAvatarFramePreset(id: "fg_fireflies", title: "Night Fireflies", category: "Природа", fileName: "fg_fireflies", accentHex: 0xFACC15, isBundled: false),
-        FullGramAvatarFramePreset(id: "fg_diamond_lux", title: "Diamond Luxury", category: "FullGram", fileName: "fg_diamond_lux", accentHex: 0xE0F2FE, isBundled: false)
+        FullGramAvatarFramePreset(id: "fg_diamond_lux", title: "Diamond Luxury", category: "FullGram", fileName: "fg_diamond_lux", accentHex: 0xE0F2FE, isBundled: true)
     ]
+
+    public static func userUploadedPresets(forPeerId peerId: Int64) -> [FullGramAvatarFramePreset] {
+        var list: [FullGramAvatarFramePreset] = []
+        let norm = FullGramCloudCosmetics.normalizedPeerId(peerId)
+        let localURL = self.customLocalFrameURL(forPeerId: peerId)
+        if FileManager.default.fileExists(atPath: localURL.path) {
+            list.append(FullGramAvatarFramePreset(
+                id: "custom_local",
+                title: "Моя рамка (Фото)",
+                category: "Кастом",
+                fileName: "custom_\(norm)",
+                accentHex: 0x00E5FF,
+                isBundled: false,
+                localCustomPath: localURL.path
+            ))
+        }
+        if let customUrl = FullGramCloudCosmetics.shared.cosmetics(forPeerId: peerId, selfPeerId: peerId)?.customFrameUrl,
+           !customUrl.isEmpty,
+           customUrl.lowercased().hasPrefix("https://") {
+            var fnv: UInt64 = 14695981039346656037
+            for byte in customUrl.utf8 {
+                fnv ^= UInt64(byte)
+                fnv = fnv &* 1099511628211
+            }
+            let safeHash = String(fnv, radix: 16)
+            list.append(FullGramAvatarFramePreset(
+                id: "custom_url",
+                title: "Своя рамка (URL)",
+                category: "Кастом",
+                fileName: "custom_url_\(safeHash)",
+                accentHex: 0x00F5D4,
+                isBundled: false,
+                remoteURLs: [customUrl]
+            ))
+        }
+        return list
+    }
 
     public static var allFrames: [FullGramAvatarFramePreset] {
         let local = self.builtInFrames + self.customFullGramFrames
@@ -549,7 +586,7 @@ public enum FullGramAvatarFrames {
     public static func cacheDirectory() -> URL {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
-        let dir = base.appendingPathComponent("FullGramFrames", isDirectory: true)
+        let dir = base.appendingPathComponent("FullGramFramesV2", isDirectory: true)
         if !FileManager.default.fileExists(atPath: dir.path) {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
@@ -565,14 +602,15 @@ public enum FullGramAvatarFrames {
     }
 
     public static func remoteURLs(for preset: FullGramAvatarFramePreset) -> [URL] {
-        var strings = preset.remoteURLs
+        let strings = preset.remoteURLs
         if strings.isEmpty {
             let file = "\(preset.fileName).png"
-            strings = [
-                self.workerFramesBaseURL + file,
-                self.cdnBaseURL + file,
-                self.rawBaseURL + file
+            let baseList = [
+                self.workerFramesBaseURL + file + "?v=2",
+                self.rawBaseURL + file,
+                self.cdnBaseURL + file
             ]
+            return baseList.compactMap { URL(string: $0) }
         }
         var seen = Set<String>()
         var urls: [URL] = []
@@ -1076,7 +1114,7 @@ public final class FullGramAnimatedImageDecoder {
                 }
                 return
             }
-            guard !preset.isBundled && preset.localCustomPath == nil else { return }
+            guard preset.localCustomPath == nil else { return }
             let thumbURLs = FullGramAvatarFrames.thumbnailRemoteURLs(for: preset)
             let fullURLs = FullGramAvatarFrames.remoteURLs(for: preset)
             let downloadDst = (thumbURLs == fullURLs) ? FullGramAvatarFrames.cachedDiskURL(for: preset) : thumbDst
@@ -1167,7 +1205,7 @@ public final class FullGramAnimatedImageDecoder {
                 }
                 return
             }
-            guard !preset.isBundled && preset.localCustomPath == nil else {
+            guard preset.localCustomPath == nil else {
                 DispatchQueue.main.async { completion(nil) }
                 return
             }
@@ -1353,6 +1391,55 @@ public final class FullGramAnimatedImageDecoder {
         }
     }
 
+    private static func downscaledCGImage(_ image: CGImage, maxPixelSize: Int) -> CGImage {
+        let maxSide = max(image.width, image.height)
+        guard maxPixelSize > 0, maxSide > maxPixelSize else {
+            return image
+        }
+        let scale = CGFloat(maxPixelSize) / CGFloat(maxSide)
+        let targetW = max(1, Int((CGFloat(image.width) * scale).rounded()))
+        let targetH = max(1, Int((CGFloat(image.height) * scale).rounded()))
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(
+                  data: nil,
+                  width: targetW,
+                  height: targetH,
+                  bitsPerComponent: 8,
+                  bytesPerRow: targetW * 4,
+                  space: colorSpace,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else {
+            return image
+        }
+        ctx.interpolationQuality = .high
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: targetW, height: targetH))
+        return ctx.makeImage() ?? image
+    }
+
+    private static func decodeSingleFrame(
+        source: CGImageSource,
+        index: Int,
+        maxPixelSize: Int
+    ) -> CGImage? {
+        let directOpts: [CFString: Any] = [
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+        if let rawImg = CGImageSourceCreateImageAtIndex(source, index, directOpts as CFDictionary) {
+            let scaled = self.downscaledCGImage(rawImg, maxPixelSize: maxPixelSize)
+            if self.isImageVisiblyOpaque(scaled) {
+                return scaled
+            }
+        }
+        let thumbOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, index, thumbOptions as CFDictionary)
+            ?? CGImageSourceCreateImageAtIndex(source, index, nil)
+    }
+
     private static func decodeStaticThumbnail(
         url: URL,
         cacheKey: String,
@@ -1368,12 +1455,6 @@ public final class FullGramAnimatedImageDecoder {
             self.removeCorruptCachedFileIfNeeded(url)
             return nil
         }
-        let thumbOptions: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true
-        ]
 
         var candidateIndices: [Int] = [0]
         if rawCount > 1 {
@@ -1386,8 +1467,7 @@ public final class FullGramAnimatedImageDecoder {
         var firstDecoded: CGImage?
         var chosen: CGImage?
         for idx in candidateIndices {
-            guard let img = CGImageSourceCreateThumbnailAtIndex(source, idx, thumbOptions as CFDictionary)
-                ?? CGImageSourceCreateImageAtIndex(source, idx, nil) else {
+            guard let img = self.decodeSingleFrame(source: source, index: idx, maxPixelSize: maxPixelSize) else {
                 continue
             }
             if firstDecoded == nil {
@@ -1429,7 +1509,7 @@ public final class FullGramAnimatedImageDecoder {
         self.inflightCallbacks[preset.id] = [completion]
         self.inflightLock.unlock()
 
-        func finish(_ seq: FullGramAnimatedFrameSequence?) {
+        @Sendable func finish(_ seq: FullGramAnimatedFrameSequence?) {
             self.inflightLock.lock()
             let callbacks = self.inflightCallbacks.removeValue(forKey: preset.id) ?? []
             self.inflightLock.unlock()
@@ -1447,7 +1527,7 @@ public final class FullGramAnimatedImageDecoder {
                 }
                 return
             }
-            guard !preset.isBundled && preset.localCustomPath == nil else {
+            guard preset.localCustomPath == nil else {
                 finish(nil)
                 return
             }
@@ -1492,7 +1572,7 @@ public final class FullGramAnimatedImageDecoder {
         self.inflightCallbacks[cacheKey] = [completion]
         self.inflightLock.unlock()
 
-        func finish(_ seq: FullGramAnimatedFrameSequence?) {
+        @Sendable func finish(_ seq: FullGramAnimatedFrameSequence?) {
             self.inflightLock.lock()
             let callbacks = self.inflightCallbacks.removeValue(forKey: cacheKey) ?? []
             self.inflightLock.unlock()
@@ -1539,7 +1619,7 @@ public final class FullGramAnimatedImageDecoder {
         self.inflightDownloadCallbacks[key] = [completion]
         self.inflightLock.unlock()
 
-        func finishDownload(_ ok: Bool) {
+        @Sendable func finishDownload(_ ok: Bool) {
             self.inflightLock.lock()
             let callbacks = self.inflightDownloadCallbacks.removeValue(forKey: key) ?? []
             self.inflightLock.unlock()
@@ -1618,18 +1698,10 @@ public final class FullGramAnimatedImageDecoder {
         images.reserveCapacity(min(rawCount, maxFrames))
         durations.reserveCapacity(min(rawCount, maxFrames))
 
-        let thumbOptions: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true
-        ]
-
         var totalDuration: Double = 0.0
         var idx = 0
         while idx < rawCount {
-            if let cgImage = CGImageSourceCreateThumbnailAtIndex(source, idx, thumbOptions as CFDictionary)
-                ?? CGImageSourceCreateImageAtIndex(source, idx, nil) {
+            if let cgImage = self.decodeSingleFrame(source: source, index: idx, maxPixelSize: maxPixelSize) {
                 var delay = 0.0
                 let endIdx = min(rawCount, idx + strideStep)
                 for j in idx ..< endIdx {

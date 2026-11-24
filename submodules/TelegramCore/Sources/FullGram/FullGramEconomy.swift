@@ -66,11 +66,11 @@ public struct FullGramCatalogGift: Codable, Equatable, Sendable {
 
 public struct FullGramOwnedGift: Codable, Equatable, Sendable {
     public let id: String
-    public let ownerPeerId: Int64
+    public var ownerPeerId: Int64
     public let senderName: String
-    public let recipientName: String
+    public var recipientName: String
     public let giftKey: String
-    public let realGiftId: Int64?
+    public var realGiftId: Int64?
     public let emoji: String
     public let title: String
     public let priceStars: Int64
@@ -90,10 +90,12 @@ public struct FullGramOwnedGift: Codable, Equatable, Sendable {
     public var patternName: String?
     public var patternRarityPermille: Int?
     public var pinnedToProfile: Bool
+    public var hiddenFromProfile: Bool?
 
     public var slug: String {
         let num = self.nftNumber ?? 1
-        if let gid = self.realGiftId {
+        let gid = self.realGiftId ?? FullGramEconomy.fallbackUpgradableGiftId
+        if self.isUpgraded || self.realGiftId != nil {
             return "FullGram-\(gid)-\(num)"
         }
         return "FullGramGift-\(self.giftKey)-\(num)"
@@ -159,6 +161,9 @@ public struct FullGramChatGiftPayload: Codable, Equatable, Sendable {
         case nft
         case upgrade
         case stars
+        case ton
+        case number
+        case username
     }
 
     public let kind: Kind
@@ -167,6 +172,7 @@ public struct FullGramChatGiftPayload: Codable, Equatable, Sendable {
     public let emoji: String
     public let number: Int32?
     public let starsPrice: Int64
+    public let tonAmount: Double?
     public let modelName: String?
     public let backdropName: String?
     public let backdropInnerHex: UInt32?
@@ -177,6 +183,8 @@ public struct FullGramChatGiftPayload: Codable, Equatable, Sendable {
     public let canUpgrade: Bool
     public let senderName: String
     public let slug: String?
+    public let realGiftId: Int64?
+    public let backdropId: Int32?
 
     public init(
         kind: Kind,
@@ -185,6 +193,7 @@ public struct FullGramChatGiftPayload: Codable, Equatable, Sendable {
         emoji: String,
         number: Int32? = nil,
         starsPrice: Int64 = 0,
+        tonAmount: Double? = nil,
         modelName: String? = nil,
         backdropName: String? = nil,
         backdropInnerHex: UInt32? = nil,
@@ -194,7 +203,9 @@ public struct FullGramChatGiftPayload: Codable, Equatable, Sendable {
         comment: String = "",
         canUpgrade: Bool = false,
         senderName: String = "",
-        slug: String? = nil
+        slug: String? = nil,
+        realGiftId: Int64? = nil,
+        backdropId: Int32? = nil
     ) {
         self.kind = kind
         self.giftRecordId = giftRecordId
@@ -202,6 +213,7 @@ public struct FullGramChatGiftPayload: Codable, Equatable, Sendable {
         self.emoji = emoji
         self.number = number
         self.starsPrice = starsPrice
+        self.tonAmount = tonAmount
         self.modelName = modelName
         self.backdropName = backdropName
         self.backdropInnerHex = backdropInnerHex
@@ -212,39 +224,81 @@ public struct FullGramChatGiftPayload: Codable, Equatable, Sendable {
         self.canUpgrade = canUpgrade
         self.senderName = senderName
         self.slug = slug
+        self.realGiftId = realGiftId
+        self.backdropId = backdropId
     }
 
     private static let markerPrefix = "\u{2063}FG_GIFT:"
     private static let markerSuffix = "\u{2063}"
+    private static let entityUrlPrefix = "tg://fg-gift?d="
 
-    public func encodeMessageText() -> String {
-        let header: String
+    public var cleanSummaryText: String {
         let displayTitle = FullGramGrantedNFT.decoratedTitle(self.title)
         switch self.kind {
         case .nft, .upgrade:
             let numStr = self.number.map { " #\($0)" } ?? ""
-            header = "\(self.emoji) Подарок NFT: \(displayTitle)\(numStr)"
+            return "🎁 \(displayTitle)\(numStr)"
         case .gift:
-            header = "\(self.emoji) Подарок: \(displayTitle) (\(self.starsPrice) ★)"
+            return "\(self.emoji.isEmpty ? "🎁" : self.emoji) \(displayTitle)"
         case .stars:
-            header = "⭐️ Подарок: \(self.starsPrice) Звёзд Telegram"
+            return "⭐️ \(self.starsPrice) Звёзд Telegram"
+        case .ton:
+            let amt = String(format: "%.2f", self.tonAmount ?? 0.0)
+            return "💎 \(amt) TON"
+        case .number:
+            return "📞 \(self.title)"
+        case .username:
+            return "🔗 \(self.title)"
         }
-        var lines: [String] = [header]
-        if let model = self.modelName, !model.isEmpty {
-            let bg = self.backdropName.map { " · Фон: \($0)" } ?? ""
-            lines.append("Модель: \(model)\(bg)")
-        }
-        if !self.comment.isEmpty {
-            lines.append("«\(self.comment)»")
-        }
-        if let data = try? JSONEncoder().encode(self) {
-            let b64 = data.base64EncodedString()
-            lines.append("\(Self.markerPrefix)\(b64)\(Self.markerSuffix)")
-        }
-        return lines.joined(separator: "\n")
     }
 
-    public static func parse(from text: String) -> FullGramChatGiftPayload? {
+    public func encodeMessageWithEntities() -> (String, [MessageTextEntity]) {
+        let text = self.cleanSummaryText
+        guard let data = try? JSONEncoder().encode(self) else {
+            return (text, [])
+        }
+        let b64Url = data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let utf16Len = (text as NSString).length
+        guard utf16Len > 0 else {
+            return (self.encodeMessageText(), [])
+        }
+        let entity = MessageTextEntity(
+            range: 0 ..< utf16Len,
+            type: .TextUrl(url: "\(Self.entityUrlPrefix)\(b64Url)")
+        )
+        return (text, [entity])
+    }
+
+    public func encodeMessageText() -> String {
+        let text = self.cleanSummaryText
+        if let data = try? JSONEncoder().encode(self) {
+            let b64 = data.base64EncodedString()
+            return "\(text)\(Self.markerPrefix)\(b64)\(Self.markerSuffix)"
+        }
+        return text
+    }
+
+    public static func parse(from text: String, entities: [MessageTextEntity]? = nil) -> FullGramChatGiftPayload? {
+        if let entities {
+            for entity in entities {
+                if case let .TextUrl(url) = entity.type, url.hasPrefix(Self.entityUrlPrefix) {
+                    var b64 = String(url.dropFirst(Self.entityUrlPrefix.count))
+                        .replacingOccurrences(of: "-", with: "+")
+                        .replacingOccurrences(of: "_", with: "/")
+                    let rem = b64.count % 4
+                    if rem > 0 {
+                        b64 += String(repeating: "=", count: 4 - rem)
+                    }
+                    if let data = Data(base64Encoded: b64),
+                       let decoded = try? JSONDecoder().decode(FullGramChatGiftPayload.self, from: data) {
+                        return decoded
+                    }
+                }
+            }
+        }
         guard let startRange = text.range(of: Self.markerPrefix) else {
             return nil
         }
@@ -330,6 +384,7 @@ public final class FullGramEconomy: @unchecked Sendable {
         var ownedGifts: [FullGramOwnedGift] = []
         var customNumbers: [FullGramCollectibleNumber] = []
         var customUsernames: [FullGramCollectibleUsername] = []
+        var deletedCloudItemKeys: Set<String> = []
     }
 
     private let lock = NSLock()
@@ -453,6 +508,19 @@ public final class FullGramEconomy: @unchecked Sendable {
     public func giftStars(peerName: String, amount: Int64) -> Bool {
         guard amount > 0 else { return false }
         return self.spendStars(amount, title: "Подарок ★ \(peerName)", subtitle: "Отправлено \(amount) Звёзд Telegram")
+    }
+
+    @discardableResult
+    public func transferGram(peerName: String, amount: Double) -> Bool {
+        guard amount > 0.0 else { return false }
+        return self.spendGram(amount, title: "Перевод TON → \(peerName)", subtitle: String(format: "Отправлено %.2f TON", amount))
+    }
+
+    public func clearTransactions() {
+        self.lock.lock()
+        self.state.transactions.removeAll()
+        self.saveLocked()
+        self.lock.unlock()
     }
 
     // MARK: - Gifts & NFT Upgrades
@@ -583,6 +651,9 @@ public final class FullGramEconomy: @unchecked Sendable {
             return
         }
         self.state.ownedGifts[idx].pinnedToProfile.toggle()
+        if self.state.ownedGifts[idx].pinnedToProfile {
+            self.state.ownedGifts[idx].hiddenFromProfile = false
+        }
         let updated = self.state.ownedGifts[idx]
         self.saveLocked()
         self.lock.unlock()
@@ -590,6 +661,89 @@ public final class FullGramEconomy: @unchecked Sendable {
         if updated.isUpgraded {
             Self.syncToGrantedNFTStore(updated)
         }
+    }
+
+    public func toggleHideGift(id: String) {
+        self.lock.lock()
+        guard let idx = self.state.ownedGifts.firstIndex(where: { $0.id == id }) else {
+            self.lock.unlock()
+            return
+        }
+        let nextHidden = !(self.state.ownedGifts[idx].hiddenFromProfile ?? false)
+        self.state.ownedGifts[idx].hiddenFromProfile = nextHidden
+        if nextHidden {
+            self.state.ownedGifts[idx].pinnedToProfile = false
+        }
+        let updated = self.state.ownedGifts[idx]
+        self.saveLocked()
+        self.lock.unlock()
+
+        if updated.isUpgraded {
+            Self.syncToGrantedNFTStore(updated)
+        }
+    }
+
+    public func removeOwnedGift(id: String, removeFromGrantedStore: Bool = true) {
+        var removed: FullGramOwnedGift?
+        self.lock.lock()
+        if let idx = self.state.ownedGifts.firstIndex(where: { $0.id == id }) {
+            removed = self.state.ownedGifts.remove(at: idx)
+            self.saveLocked()
+        }
+        self.lock.unlock()
+        if removeFromGrantedStore, let rem = removed {
+            FullGramGrantedNFTStore.shared.removeLocal(peerId: rem.ownerPeerId, entryId: "eco_\(rem.id)")
+        }
+    }
+
+    public func transferOwnedGift(id: String, toPeerId: Int64, toPeerName: String) -> FullGramOwnedGift? {
+        self.lock.lock()
+        guard let idx = self.state.ownedGifts.firstIndex(where: { $0.id == id }) else {
+            self.lock.unlock()
+            return nil
+        }
+        let oldOwner = self.state.ownedGifts[idx].ownerPeerId
+        self.state.ownedGifts[idx].ownerPeerId = toPeerId
+        self.state.ownedGifts[idx].recipientName = toPeerName
+        self.state.ownedGifts[idx].pinnedToProfile = true
+        self.state.ownedGifts[idx].hiddenFromProfile = false
+        let updated = self.state.ownedGifts[idx]
+        self.saveLocked()
+        self.lock.unlock()
+
+        FullGramGrantedNFTStore.shared.removeLocal(peerId: oldOwner, entryId: "eco_\(updated.id)")
+        if updated.isUpgraded {
+            Self.syncToGrantedNFTStore(updated)
+        }
+        return updated
+    }
+
+    public func syncOwnedGiftStateFromProfile(ecoEntryId: String, pinned: Bool, hidden: Bool) {
+        self.lock.lock()
+        if let idx = self.state.ownedGifts.firstIndex(where: { $0.id == ecoEntryId }) {
+            self.state.ownedGifts[idx].pinnedToProfile = pinned
+            self.state.ownedGifts[idx].hiddenFromProfile = hidden
+            self.saveLocked()
+        }
+        self.lock.unlock()
+    }
+
+    public func syncOwnedGiftTraitsFromProfile(
+        ecoEntryId: String,
+        modelName: String,
+        backdropName: String,
+        patternName: String,
+        number: Int32
+    ) {
+        self.lock.lock()
+        if let idx = self.state.ownedGifts.firstIndex(where: { $0.id == ecoEntryId }) {
+            if !modelName.isEmpty { self.state.ownedGifts[idx].modelName = modelName }
+            if !backdropName.isEmpty { self.state.ownedGifts[idx].backdropName = backdropName }
+            if !patternName.isEmpty { self.state.ownedGifts[idx].patternName = patternName }
+            self.state.ownedGifts[idx].nftNumber = number
+            self.saveLocked()
+        }
+        self.lock.unlock()
     }
 
     private static func applyUpgradeTraits(
@@ -616,8 +770,11 @@ public final class FullGramEconomy: @unchecked Sendable {
         gift.patternRarityPermille = pickedPattern.1
     }
 
+    public static let fallbackUpgradableGiftId: Int64 = 5936013938331222569
+
     public static func syncToGrantedNFTStore(_ gift: FullGramOwnedGift) {
-        guard gift.isUpgraded, let gid = gift.realGiftId else { return }
+        guard gift.isUpgraded else { return }
+        let gid = gift.realGiftId ?? Self.fallbackUpgradableGiftId
         let nft = FullGramGrantedNFT(
             id: "eco_\(gift.id)",
             giftId: String(gid),
@@ -629,6 +786,7 @@ public final class FullGramEconomy: @unchecked Sendable {
             number: gift.nftNumber ?? 1,
             note: gift.comment,
             pinned: gift.pinnedToProfile,
+            hidden: gift.hiddenFromProfile ?? false,
             grantedAt: gift.purchasedAt
         )
         FullGramGrantedNFTStore.shared.appendLocal(peerId: gift.ownerPeerId, nft: nft)
@@ -722,6 +880,9 @@ public final class FullGramEconomy: @unchecked Sendable {
 
     public func removeCustomNumber(id: String) {
         self.lock.lock()
+        for item in self.state.customNumbers where item.id == id {
+            self.state.deletedCloudItemKeys.insert("num:\(item.number)")
+        }
         self.state.customNumbers.removeAll { $0.id == id }
         self.saveLocked()
         self.lock.unlock()
@@ -798,8 +959,20 @@ public final class FullGramEconomy: @unchecked Sendable {
         self.lock.unlock()
     }
 
+    public func detachPrimaryCollectibleUsername(id: String) {
+        self.lock.lock()
+        if let idx = self.state.customUsernames.firstIndex(where: { $0.id == id }) {
+            self.state.customUsernames[idx].isPrimary = false
+        }
+        self.saveLocked()
+        self.lock.unlock()
+    }
+
     public func removeCollectibleUsername(id: String) {
         self.lock.lock()
+        for item in self.state.customUsernames where item.id == id {
+            self.state.deletedCloudItemKeys.insert("uname:\(item.username.lowercased())")
+        }
         self.state.customUsernames.removeAll { $0.id == id }
         self.saveLocked()
         self.lock.unlock()
@@ -850,8 +1023,8 @@ public final class FullGramEconomy: @unchecked Sendable {
     private var isRefreshingCloud = false
 
     public func activeCustomNumber(forPeerId peerId: Int64, isSelf: Bool) -> FullGramCollectibleNumber? {
-        if isSelf, let local = self.activeCustomNumber {
-            return local
+        if isSelf {
+            return self.activeCustomNumber
         }
         let norm = FullGramGrantedNFTStore.normalizedTelegramId(for: peerId)
         self.lock.lock()
@@ -863,14 +1036,18 @@ public final class FullGramEconomy: @unchecked Sendable {
         let norm = FullGramGrantedNFTStore.normalizedTelegramId(for: peerId)
         self.lock.lock()
         let cloud = self.cloudUsers[norm]?.usernames.filter { $0.isActive } ?? []
-        let local = isSelf ? self.state.customUsernames.filter { $0.isActive } : []
+        let localAll = isSelf ? self.state.customUsernames : []
+        let deletedKeys = self.state.deletedCloudItemKeys
         self.lock.unlock()
-        var merged = local
-        let existing = Set(local.map { $0.username.lowercased() })
-        for item in cloud where !existing.contains(item.username.lowercased()) {
-            merged.append(item)
+        if isSelf {
+            var merged = localAll.filter { $0.isActive }
+            let knownAll = Set(localAll.map { $0.username.lowercased() })
+            for item in cloud where !knownAll.contains(item.username.lowercased()) && !deletedKeys.contains("uname:\(item.username.lowercased())") {
+                merged.append(item)
+            }
+            return merged
         }
-        return merged
+        return cloud
     }
 
     public func refreshCloudIfNeeded(selfPeerId: Int64? = nil, maxAge: TimeInterval = 45.0) {
@@ -935,11 +1112,11 @@ public final class FullGramEconomy: @unchecked Sendable {
                         self.state.lastSyncedCloudStars = me.starsBalance
                     }
                     let existingNames = Set(self.state.customUsernames.map { $0.username.lowercased() })
-                    for u in me.usernames where !existingNames.contains(u.username.lowercased()) {
+                    for u in me.usernames where !existingNames.contains(u.username.lowercased()) && !self.state.deletedCloudItemKeys.contains("uname:\(u.username.lowercased())") {
                         self.state.customUsernames.append(u)
                     }
                     let existingNums = Set(self.state.customNumbers.map { $0.number })
-                    for n in me.numbers where !existingNums.contains(n.number) {
+                    for n in me.numbers where !existingNums.contains(n.number) && !self.state.deletedCloudItemKeys.contains("num:\(n.number)") {
                         self.state.customNumbers.append(n)
                     }
                     if let encoded = try? JSONEncoder().encode(self.state) {

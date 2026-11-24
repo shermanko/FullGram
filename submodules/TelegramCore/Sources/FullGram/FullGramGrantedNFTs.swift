@@ -108,6 +108,8 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
     private static let lastSyncKey = "fullgram.nfts.lastSync"
 
     private let lock = NSRecursiveLock()
+    private var serverUsersById: [Int64: [FullGramGrantedNFT]] = [:]
+    private var localUsersById: [Int64: [FullGramGrantedNFT]] = [:]
     private var usersById: [Int64: [FullGramGrantedNFT]] = [:]
     private var isRefreshing = false
     private var needsFollowUpRefresh = false
@@ -174,13 +176,70 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
     }()
 
     private init() {
+        self.loadLocalItemsCache()
         self.loadDiskCache()
+        self.rebuildCombinedLocked()
     }
 
     private var cacheFileURL: URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         return dir.appendingPathComponent("fullgram_nfts.json")
+    }
+
+    private var localItemsFileURL: URL {
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return dir.appendingPathComponent("fullgram_local_nfts_v1.json")
+    }
+
+    private func loadLocalItemsCache() {
+        guard let data = try? Data(contentsOf: self.localItemsFileURL),
+              let payload = try? JSONDecoder().decode(FullGramGrantedNFTsPayload.self, from: data) else {
+            return
+        }
+        var mapped: [Int64: [FullGramGrantedNFT]] = [:]
+        for (k, list) in payload.users {
+            if let id = Int64(k) {
+                let norm = Self.normalizedTelegramId(for: id)
+                mapped[norm] = list
+            }
+        }
+        self.localUsersById = mapped
+    }
+
+    private func saveLocalItemsLocked() {
+        var strUsers: [String: [FullGramGrantedNFT]] = [:]
+        for (k, list) in self.localUsersById where !list.isEmpty {
+            strUsers[String(k)] = list
+        }
+        let payload = FullGramGrantedNFTsPayload(version: 1, users: strUsers)
+        if let data = try? JSONEncoder().encode(payload) {
+            try? data.write(to: self.localItemsFileURL, options: .atomic)
+        }
+    }
+
+    private func rebuildCombinedLocked() {
+        var combined: [Int64: [FullGramGrantedNFT]] = [:]
+        let allPeers = Set(self.serverUsersById.keys).union(self.localUsersById.keys)
+        for peer in allPeers {
+            var merged: [FullGramGrantedNFT] = []
+            var seenIds = Set<String>()
+            if let locals = self.localUsersById[peer] {
+                for item in locals where seenIds.insert(item.id).inserted {
+                    merged.append(item)
+                }
+            }
+            if let servers = self.serverUsersById[peer] {
+                for item in servers where seenIds.insert(item.id).inserted {
+                    merged.append(item)
+                }
+            }
+            if !merged.isEmpty {
+                combined[peer] = merged
+            }
+        }
+        self.usersById = combined
     }
 
     private func loadDiskCache() {
@@ -208,7 +267,21 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
             }
         }
         self.lock.lock()
-        self.usersById = mapped
+        self.serverUsersById = mapped
+        // Clean up optimistic non-eco local entries that are now confirmed in serverUsersById
+        for (peer, serverItems) in mapped {
+            if var locals = self.localUsersById[peer] {
+                let serverIds = Set(serverItems.map(\.id))
+                locals.removeAll { !$0.id.hasPrefix("eco_") && serverIds.contains($0.id) }
+                if locals.isEmpty {
+                    self.localUsersById.removeValue(forKey: peer)
+                } else {
+                    self.localUsersById[peer] = locals
+                }
+            }
+        }
+        self.saveLocalItemsLocked()
+        self.rebuildCombinedLocked()
         self.lock.unlock()
     }
 
@@ -230,10 +303,12 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
     public func appendLocal(peerId: Int64, nft: FullGramGrantedNFT) {
         let norm = Self.normalizedTelegramId(for: peerId)
         self.lock.lock()
-        var list = self.usersById[norm] ?? []
+        var list = self.localUsersById[norm] ?? []
         list.removeAll { $0.id == nft.id }
         list.insert(nft, at: 0)
-        self.usersById[norm] = list
+        self.localUsersById[norm] = list
+        self.saveLocalItemsLocked()
+        self.rebuildCombinedLocked()
         self.lock.unlock()
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
@@ -243,40 +318,77 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
     public func removeLocal(peerId: Int64, entryId: String) {
         self.lock.lock()
         for key in Self.candidatePeerIds(for: peerId) {
-            if var list = self.usersById[key] {
+            if var list = self.localUsersById[key] {
                 list.removeAll { $0.id == entryId }
                 if list.isEmpty {
-                    self.usersById.removeValue(forKey: key)
+                    self.localUsersById.removeValue(forKey: key)
                 } else {
-                    self.usersById[key] = list
+                    self.localUsersById[key] = list
+                }
+            }
+            if var sList = self.serverUsersById[key] {
+                sList.removeAll { $0.id == entryId }
+                if sList.isEmpty {
+                    self.serverUsersById.removeValue(forKey: key)
+                } else {
+                    self.serverUsersById[key] = sList
                 }
             }
         }
+        self.saveLocalItemsLocked()
+        self.rebuildCombinedLocked()
         self.lock.unlock()
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
         }
     }
 
+    private static func matchesSlug(_ item: FullGramGrantedNFT, slug: String) -> Bool {
+        if let gid = item.numericGiftId {
+            if "FullGram-\(gid)-\(item.number)".caseInsensitiveCompare(slug) == .orderedSame {
+                return true
+            }
+        }
+        if item.id.hasPrefix("eco_") {
+            let ecoId = String(item.id.dropFirst(4))
+            if slug.lowercased().contains(ecoId.lowercased()) {
+                return true
+            }
+        }
+        if "FullGram-\(item.giftId)-\(item.number)".caseInsensitiveCompare(slug) == .orderedSame {
+            return true
+        }
+        return false
+    }
+
     public func setHiddenLocal(peerId: Int64, slug: String, hidden: Bool) -> FullGramGrantedNFT? {
         var matched: FullGramGrantedNFT?
         self.lock.lock()
         for key in Self.candidatePeerIds(for: peerId) {
-            if var list = self.usersById[key] {
-                for idx in list.indices {
-                    guard let gid = list[idx].numericGiftId else { continue }
-                    let expected = "FullGram-\(gid)-\(list[idx].number)"
-                    if expected.caseInsensitiveCompare(slug) == .orderedSame {
-                        list[idx].hidden = hidden
-                        if hidden { list[idx].pinned = false }
-                        matched = list[idx]
-                    }
+            if var list = self.localUsersById[key] {
+                for idx in list.indices where Self.matchesSlug(list[idx], slug: slug) {
+                    list[idx].hidden = hidden
+                    if hidden { list[idx].pinned = false }
+                    matched = list[idx]
                 }
-                self.usersById[key] = list
+                self.localUsersById[key] = list
+            }
+            if var sList = self.serverUsersById[key] {
+                for idx in sList.indices where Self.matchesSlug(sList[idx], slug: slug) {
+                    sList[idx].hidden = hidden
+                    if hidden { sList[idx].pinned = false }
+                    matched = sList[idx]
+                }
+                self.serverUsersById[key] = sList
             }
         }
+        self.saveLocalItemsLocked()
+        self.rebuildCombinedLocked()
         self.lock.unlock()
-        if matched != nil {
+        if let m = matched {
+            if m.id.hasPrefix("eco_") {
+                FullGramEconomy.shared.syncOwnedGiftStateFromProfile(ecoEntryId: String(m.id.dropFirst(4)), pinned: m.pinned, hidden: m.hidden)
+            }
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
             }
@@ -288,21 +400,30 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
         var matched: FullGramGrantedNFT?
         self.lock.lock()
         for key in Self.candidatePeerIds(for: peerId) {
-            if var list = self.usersById[key] {
-                for idx in list.indices {
-                    guard let gid = list[idx].numericGiftId else { continue }
-                    let expected = "FullGram-\(gid)-\(list[idx].number)"
-                    if expected.caseInsensitiveCompare(slug) == .orderedSame {
-                        list[idx].pinned = pinned
-                        if pinned { list[idx].hidden = false }
-                        matched = list[idx]
-                    }
+            if var list = self.localUsersById[key] {
+                for idx in list.indices where Self.matchesSlug(list[idx], slug: slug) {
+                    list[idx].pinned = pinned
+                    if pinned { list[idx].hidden = false }
+                    matched = list[idx]
                 }
-                self.usersById[key] = list
+                self.localUsersById[key] = list
+            }
+            if var sList = self.serverUsersById[key] {
+                for idx in sList.indices where Self.matchesSlug(sList[idx], slug: slug) {
+                    sList[idx].pinned = pinned
+                    if pinned { sList[idx].hidden = false }
+                    matched = sList[idx]
+                }
+                self.serverUsersById[key] = sList
             }
         }
+        self.saveLocalItemsLocked()
+        self.rebuildCombinedLocked()
         self.lock.unlock()
-        if matched != nil {
+        if let m = matched {
+            if m.id.hasPrefix("eco_") {
+                FullGramEconomy.shared.syncOwnedGiftStateFromProfile(ecoEntryId: String(m.id.dropFirst(4)), pinned: m.pinned, hidden: m.hidden)
+            }
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
             }
@@ -310,30 +431,87 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
         return matched
     }
 
+    public func setPinnedSlugsLocal(peerId: Int64, pinnedSlugs: Set<String>) {
+        let lowerPinned = Set(pinnedSlugs.map { $0.lowercased() })
+        var changedIds: [(String, Bool, Bool)] = []
+        self.lock.lock()
+        for key in Self.candidatePeerIds(for: peerId) {
+            if var list = self.localUsersById[key] {
+                for idx in list.indices {
+                    let gidStr = list[idx].numericGiftId.map(String.init) ?? list[idx].giftId
+                    let s = "fullgram-\(gidStr)-\(list[idx].number)".lowercased()
+                    let shouldPin = lowerPinned.contains(s)
+                    if list[idx].pinned != shouldPin {
+                        list[idx].pinned = shouldPin
+                        if shouldPin { list[idx].hidden = false }
+                        changedIds.append((list[idx].id, list[idx].pinned, list[idx].hidden))
+                    }
+                }
+                self.localUsersById[key] = list
+            }
+            if var sList = self.serverUsersById[key] {
+                for idx in sList.indices {
+                    let gidStr = sList[idx].numericGiftId.map(String.init) ?? sList[idx].giftId
+                    let s = "fullgram-\(gidStr)-\(sList[idx].number)".lowercased()
+                    let shouldPin = lowerPinned.contains(s)
+                    if sList[idx].pinned != shouldPin {
+                        sList[idx].pinned = shouldPin
+                        if shouldPin { sList[idx].hidden = false }
+                        changedIds.append((sList[idx].id, sList[idx].pinned, sList[idx].hidden))
+                    }
+                }
+                self.serverUsersById[key] = sList
+            }
+        }
+        self.saveLocalItemsLocked()
+        self.rebuildCombinedLocked()
+        self.lock.unlock()
+        for (entryId, p, h) in changedIds where entryId.hasPrefix("eco_") {
+            FullGramEconomy.shared.syncOwnedGiftStateFromProfile(ecoEntryId: String(entryId.dropFirst(4)), pinned: p, hidden: h)
+        }
+        if !changedIds.isEmpty {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+            }
+        }
+    }
+
     public func removeBySlugLocal(peerId: Int64, slug: String) -> FullGramGrantedNFT? {
         var removed: FullGramGrantedNFT?
         self.lock.lock()
         for key in Self.candidatePeerIds(for: peerId) {
-            if var list = self.usersById[key] {
-                for item in list {
-                    if let gid = item.numericGiftId, "FullGram-\(gid)-\(item.number)".caseInsensitiveCompare(slug) == .orderedSame {
-                        removed = item
-                        break
-                    }
+            if var list = self.localUsersById[key] {
+                for item in list where Self.matchesSlug(item, slug: slug) {
+                    removed = item
+                    break
                 }
-                list.removeAll { item in
-                    guard let gid = item.numericGiftId else { return false }
-                    return "FullGram-\(gid)-\(item.number)".caseInsensitiveCompare(slug) == .orderedSame
-                }
+                list.removeAll { Self.matchesSlug($0, slug: slug) }
                 if list.isEmpty {
-                    self.usersById.removeValue(forKey: key)
+                    self.localUsersById.removeValue(forKey: key)
                 } else {
-                    self.usersById[key] = list
+                    self.localUsersById[key] = list
+                }
+            }
+            if var sList = self.serverUsersById[key] {
+                for item in sList where Self.matchesSlug(item, slug: slug) {
+                    if removed == nil { removed = item }
+                    break
+                }
+                sList.removeAll { Self.matchesSlug($0, slug: slug) }
+                if sList.isEmpty {
+                    self.serverUsersById.removeValue(forKey: key)
+                } else {
+                    self.serverUsersById[key] = sList
                 }
             }
         }
+        self.saveLocalItemsLocked()
+        self.rebuildCombinedLocked()
         self.lock.unlock()
-        if removed != nil {
+        if let rem = removed {
+            if rem.id.hasPrefix("eco_") {
+                FullGramEconomy.shared.removeOwnedGift(id: String(rem.id.dropFirst(4)), removeFromGrantedStore: false)
+            }
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
             }
@@ -362,26 +540,46 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
         var updated: FullGramGrantedNFT?
         self.lock.lock()
         for key in Self.candidatePeerIds(for: peerId) {
-            if var list = self.usersById[key] {
-                for idx in list.indices {
-                    guard let gid = list[idx].numericGiftId else { continue }
-                    let expected = "FullGram-\(gid)-\(list[idx].number)"
-                    if expected.caseInsensitiveCompare(slug) == .orderedSame {
-                        list[idx].modelName = modelName
-                        list[idx].backdropName = backdropName
-                        list[idx].backdropId = backdropId
-                        list[idx].patternName = patternName
-                        if let number, number >= 1 {
-                            list[idx].number = number
-                        }
-                        updated = list[idx]
+            if var list = self.localUsersById[key] {
+                for idx in list.indices where Self.matchesSlug(list[idx], slug: slug) {
+                    list[idx].modelName = modelName
+                    list[idx].backdropName = backdropName
+                    list[idx].backdropId = backdropId
+                    list[idx].patternName = patternName
+                    if let number, number >= 1 {
+                        list[idx].number = number
                     }
+                    updated = list[idx]
                 }
-                self.usersById[key] = list
+                self.localUsersById[key] = list
+            }
+            if var sList = self.serverUsersById[key] {
+                for idx in sList.indices where Self.matchesSlug(sList[idx], slug: slug) {
+                    sList[idx].modelName = modelName
+                    sList[idx].backdropName = backdropName
+                    sList[idx].backdropId = backdropId
+                    sList[idx].patternName = patternName
+                    if let number, number >= 1 {
+                        sList[idx].number = number
+                    }
+                    updated = sList[idx]
+                }
+                self.serverUsersById[key] = sList
             }
         }
+        self.saveLocalItemsLocked()
+        self.rebuildCombinedLocked()
         self.lock.unlock()
-        if updated != nil {
+        if let u = updated {
+            if u.id.hasPrefix("eco_") {
+                FullGramEconomy.shared.syncOwnedGiftTraitsFromProfile(
+                    ecoEntryId: String(u.id.dropFirst(4)),
+                    modelName: modelName,
+                    backdropName: backdropName,
+                    patternName: patternName,
+                    number: u.number
+                )
+            }
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
             }

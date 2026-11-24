@@ -12,8 +12,31 @@ import UndoUI
 
 // MARK: - Хаб: Кошелёк Gram, Звёзды, Подарки FullGram, Апгрейд NFT, Номера +888 и Юзернеймы
 
+private func fullGramSendGiftPayloadMessage(account: Account, peerId: EnginePeer.Id, payload: FullGramChatGiftPayload) {
+    let (msgText, msgEntities) = payload.encodeMessageWithEntities()
+    let _ = enqueueMessages(
+        account: account,
+        peerId: peerId,
+        messages: [
+            .message(
+                text: msgText,
+                attributes: [TextEntitiesMessageAttribute(entities: msgEntities)],
+                inlineStickers: [:],
+                mediaReference: nil,
+                threadId: nil,
+                replyToMessageId: nil,
+                replyToStoryId: nil,
+                localGroupingKey: nil,
+                correlationId: nil,
+                bubbleUpEmojiOrStickersets: []
+            )
+        ]
+    ).startStandalone()
+}
+
 private final class FullGramEconomyHubArguments {
     let grantGram: () -> Void
+    let transferGram: () -> Void
     let grantStars: () -> Void
     let giftStars: () -> Void
     let grantToUser: () -> Void
@@ -25,6 +48,7 @@ private final class FullGramEconomyHubArguments {
 
     init(
         grantGram: @escaping () -> Void,
+        transferGram: @escaping () -> Void,
         grantStars: @escaping () -> Void,
         giftStars: @escaping () -> Void,
         grantToUser: @escaping () -> Void,
@@ -35,6 +59,7 @@ private final class FullGramEconomyHubArguments {
         openTransactions: @escaping () -> Void
     ) {
         self.grantGram = grantGram
+        self.transferGram = transferGram
         self.grantStars = grantStars
         self.giftStars = giftStars
         self.grantToUser = grantToUser
@@ -50,6 +75,7 @@ private enum FullGramEconomyHubEntry: ItemListNodeEntry {
     case walletHeader(String)
     case gramBalance(String, String)
     case grantGramAction(String)
+    case transferGramAction(String)
     case starsBalance(String, String)
     case grantStarsAction(String)
     case giftStarsAction(String)
@@ -68,7 +94,7 @@ private enum FullGramEconomyHubEntry: ItemListNodeEntry {
 
     var section: ItemListSectionId {
         switch self {
-        case .walletHeader, .gramBalance, .grantGramAction, .starsBalance, .grantStarsAction, .giftStarsAction, .grantToUserAction, .transactionsLink:
+        case .walletHeader, .gramBalance, .grantGramAction, .transferGramAction, .starsBalance, .grantStarsAction, .giftStarsAction, .grantToUserAction, .transactionsLink:
             return 0
         case .marketHeader, .giftMarketLink, .myGiftsLink, .marketInfo:
             return 1
@@ -82,11 +108,12 @@ private enum FullGramEconomyHubEntry: ItemListNodeEntry {
         case .walletHeader: return 0
         case .gramBalance: return 1
         case .grantGramAction: return 2
-        case .starsBalance: return 3
-        case .grantStarsAction: return 4
-        case .giftStarsAction: return 5
-        case .grantToUserAction: return 6
-        case .transactionsLink: return 7
+        case .transferGramAction: return 3
+        case .starsBalance: return 4
+        case .grantStarsAction: return 5
+        case .giftStarsAction: return 6
+        case .grantToUserAction: return 7
+        case .transactionsLink: return 8
         case .marketHeader: return 100
         case .giftMarketLink: return 101
         case .myGiftsLink: return 102
@@ -111,6 +138,8 @@ private enum FullGramEconomyHubEntry: ItemListNodeEntry {
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .none, action: {})
         case let .grantGramAction(title):
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.grantGram)
+        case let .transferGramAction(title):
+            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.transferGram)
         case let .grantStarsAction(title):
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.grantStars)
         case let .giftStarsAction(title):
@@ -274,9 +303,10 @@ public func fullGramEconomyHubController(context: AccountContext) -> ViewControl
         changed.set(version.modify { $0 + 1 })
     }
 
+    let selfRawId = context.account.peerId.id._internalGetInt64Value()
     let args = FullGramEconomyHubArguments(
         grantGram: {
-            let alert = UIAlertController(title: "Кошелёк Gram / TON", message: "Введите любой баланс Gram/TON, который хотите себе выдать:", preferredStyle: .alert)
+            let alert = UIAlertController(title: "Кошелёк Gram / TON", message: "Введите баланс Gram/TON или обнулите кошелёк:", preferredStyle: .alert)
             alert.addTextField { tf in
                 tf.keyboardType = .decimalPad
                 tf.placeholder = "Например: 5000"
@@ -289,10 +319,72 @@ public func fullGramEconomyHubController(context: AccountContext) -> ViewControl
                     FullGramEconomy.shared.setGramBalance(val)
                 }
             })
+            if FullGramEconomy.shared.gramBalance > 0 {
+                alert.addAction(UIAlertAction(title: "Обнулить баланс TON", style: .destructive) { _ in
+                    FullGramEconomy.shared.setGramBalance(0.0, note: "Сброс баланса TON")
+                })
+            }
             presentNativeImpl?(alert)
         },
+        transferGram: {
+            let selector = context.sharedContext.makePeerSelectionController(PeerSelectionControllerParams(
+                context: context,
+                filter: [.onlyWriteable, .excludeDisabled],
+                hasChatListSelector: true,
+                hasContactSelector: true,
+                hasGlobalSearch: true,
+                title: "Кому перевести TON / Gram?"
+            ))
+            selector.peerSelected = { [weak selector] peer, _ in
+                selector?.dismiss()
+                let peerTitle = peer.compactDisplayTitle
+                let alert = UIAlertController(
+                    title: "Перевести TON → \(peerTitle)",
+                    message: String(format: "Ваш баланс: %.2f TON\nСколько TON перевести?", FullGramEconomy.shared.gramBalance),
+                    preferredStyle: .alert
+                )
+                alert.addTextField { tf in
+                    tf.keyboardType = .decimalPad
+                    tf.placeholder = "Например: 50"
+                }
+                alert.addTextField { tf in
+                    tf.placeholder = "Комментарий (необязательно)"
+                }
+                alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+                alert.addAction(UIAlertAction(title: "Перевести", style: .default) { _ in
+                    let rawAmt = (alert.textFields?.first?.text ?? "").replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
+                    let amt = Double(rawAmt) ?? 0.0
+                    let comment = (alert.textFields?.dropFirst().first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard amt > 0 else { return }
+                    if FullGramEconomy.shared.transferGram(peerName: peerTitle, amount: amt) {
+                        FullGramAdmin.shared.performEconomyAction(
+                            actorPeerId: selfRawId,
+                            toPeerId: peer.id.id._internalGetInt64Value(),
+                            action: "transfer_gram",
+                            amount: amt
+                        )
+                        let payload = FullGramChatGiftPayload(
+                            kind: .ton,
+                            giftRecordId: UUID().uuidString,
+                            title: String(format: "%.2f TON", amt),
+                            emoji: "💎",
+                            tonAmount: amt,
+                            comment: comment,
+                            senderName: "FullGram"
+                        )
+                        fullGramSendGiftPayloadMessage(account: context.account, peerId: peer.id, payload: payload)
+                    } else {
+                        let err = UIAlertController(title: "Недостаточно TON", message: "Сначала пополните баланс Gram / TON в кошельке.", preferredStyle: .alert)
+                        err.addAction(UIAlertAction(title: "OK", style: .default))
+                        presentNativeImpl?(err)
+                    }
+                })
+                presentNativeImpl?(alert)
+            }
+            presentControllerImpl?(selector)
+        },
         grantStars: {
-            let alert = UIAlertController(title: "Звёзды Telegram (FullGram)", message: "Введите любое количество звёзд (★) для выдачи на баланс:", preferredStyle: .alert)
+            let alert = UIAlertController(title: "Звёзды Telegram (FullGram)", message: "Введите количество звёзд (★) для баланса:", preferredStyle: .alert)
             alert.addTextField { tf in
                 tf.keyboardType = .numberPad
                 tf.placeholder = "Например: 25000"
@@ -305,6 +397,11 @@ public func fullGramEconomyHubController(context: AccountContext) -> ViewControl
                     FullGramEconomy.shared.setStarsBalance(val)
                 }
             })
+            if FullGramEconomy.shared.starsBalance > 0 {
+                alert.addAction(UIAlertAction(title: "Обнулить звёзды ★", style: .destructive) { _ in
+                    FullGramEconomy.shared.setStarsBalance(0, note: "Сброс баланса звёзд")
+                })
+            }
             presentNativeImpl?(alert)
         },
         giftStars: {
@@ -337,7 +434,13 @@ public func fullGramEconomyHubController(context: AccountContext) -> ViewControl
                     let comment = (alert.textFields?.dropFirst().first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                     guard amt > 0 else { return }
                     if FullGramEconomy.shared.giftStars(peerName: peerTitle, amount: amt) {
-                        let msgText = FullGramChatGiftPayload(
+                        FullGramAdmin.shared.performEconomyAction(
+                            actorPeerId: selfRawId,
+                            toPeerId: peer.id.id._internalGetInt64Value(),
+                            action: "transfer_stars",
+                            amount: Double(amt)
+                        )
+                        let payload = FullGramChatGiftPayload(
                             kind: .stars,
                             giftRecordId: UUID().uuidString,
                             title: "\(amt) Звёзд Telegram",
@@ -347,10 +450,8 @@ public func fullGramEconomyHubController(context: AccountContext) -> ViewControl
                             comment: comment,
                             canUpgrade: false,
                             senderName: "FullGram"
-                        ).encodeMessageText()
-                        let _ = enqueueMessages(account: context.account, peerId: peer.id, messages: [
-                            .message(text: msgText, attributes: [], inlineStickers: [:], mediaReference: nil, threadId: nil, replyToMessageId: nil, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: [])
-                        ]).startStandalone()
+                        )
+                        fullGramSendGiftPayloadMessage(account: context.account, peerId: peer.id, payload: payload)
                     } else {
                         let err = UIAlertController(title: "Недостаточно звёзд", message: "Сначала выдайте звёзды на баланс в кошельке.", preferredStyle: .alert)
                         err.addAction(UIAlertAction(title: "OK", style: .default))
@@ -412,9 +513,10 @@ public func fullGramEconomyHubController(context: AccountContext) -> ViewControl
         var entries: [FullGramEconomyHubEntry] = [
             .walletHeader("КОШЕЛЁК GRAM И ЗВЁЗДЫ (FULLGRAM)"),
             .gramBalance("Баланс Gram / TON", gramStr),
-            .grantGramAction("Выдать баланс Gram (вписать число)…"),
+            .grantGramAction("Настроить / сбросить баланс Gram…"),
+            .transferGramAction("Перевести TON / Gram пользователю…"),
             .starsBalance("Баланс Звёзд Telegram", starsStr),
-            .grantStarsAction("Выдать звёзды (вписать число)…"),
+            .grantStarsAction("Настроить / сбросить баланс ★…"),
             .giftStarsAction("Подарить звёзды другу или себе…")
         ]
         if isPrivileged {
@@ -599,22 +701,10 @@ public func fullGramGiftMarketController(
             comment: owned.comment,
             canUpgrade: owned.canUpgradeToNFT && !owned.isUpgraded,
             senderName: "FullGram",
-            slug: owned.slug
+            slug: owned.slug,
+            realGiftId: owned.realGiftId
         )
-        let _ = enqueueMessages(account: context.account, peerId: rec.0, messages: [
-            .message(
-                text: payload.encodeMessageText(),
-                attributes: [],
-                inlineStickers: [:],
-                mediaReference: nil,
-                threadId: nil,
-                replyToMessageId: nil,
-                replyToStoryId: nil,
-                localGroupingKey: nil,
-                correlationId: nil,
-                bubbleUpEmojiOrStickersets: []
-            )
-        ]).startStandalone()
+        fullGramSendGiftPayloadMessage(account: context.account, peerId: rec.0, payload: payload)
 
         let done = UIAlertController(
             title: owned.isUpgraded ? "🎁 NFT отправлен!" : "🎁 Подарок отправлен!",
@@ -838,6 +928,8 @@ private enum FullGramMyGiftsEntry: ItemListNodeEntry {
 
 public func fullGramMyGiftsAndUpgradesController(context: AccountContext, peerId: EnginePeer.Id) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
+    var presentControllerImpl: ((ViewController) -> Void)?
+    var presentNativeImpl: ((UIViewController) -> Void)?
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
     let observer = NotificationCenter.default.addObserver(forName: FullGramEconomy.didChangeNotification, object: nil, queue: .main) { _ in
@@ -846,7 +938,66 @@ public func fullGramMyGiftsAndUpgradesController(context: AccountContext, peerId
 
     let args = FullGramMyGiftsArguments(
         openGift: { gift in
-            pushImpl?(fullGramGiftUpgradeController(context: context, ownedGift: gift))
+            let sheet = UIAlertController(
+                title: "\(gift.emoji) \(FullGramGrantedNFT.decoratedTitle(gift.title))",
+                message: gift.isUpgraded
+                    ? "NFT #\(gift.nftNumber ?? 1) • \(gift.modelName ?? "") • \(gift.backdropName ?? "")"
+                    : "Подарок за \(gift.priceStars) ★ → \(gift.recipientName)",
+                preferredStyle: .actionSheet
+            )
+            sheet.addAction(UIAlertAction(title: gift.isUpgraded ? "Настроить модель / фон / узор" : "Улучшить до NFT", style: .default) { _ in
+                pushImpl?(fullGramGiftUpgradeController(context: context, ownedGift: gift))
+            })
+            sheet.addAction(UIAlertAction(title: gift.pinnedToProfile ? "Открепить из профиля" : "Закрепить в профиле", style: .default) { _ in
+                FullGramEconomy.shared.togglePinGift(id: gift.id)
+            })
+            let isHidden = gift.hiddenFromProfile ?? false
+            sheet.addAction(UIAlertAction(title: isHidden ? "Показать в профиле" : "Скрыть из профиля", style: .default) { _ in
+                FullGramEconomy.shared.toggleHideGift(id: gift.id)
+            })
+            sheet.addAction(UIAlertAction(title: "Переслать / передать пользователю…", style: .default) { _ in
+                let selector = context.sharedContext.makePeerSelectionController(PeerSelectionControllerParams(
+                    context: context,
+                    filter: [.onlyWriteable, .excludeDisabled],
+                    hasChatListSelector: true,
+                    hasContactSelector: true,
+                    hasGlobalSearch: true,
+                    title: "Кому передать подарок / NFT?"
+                ))
+                selector.peerSelected = { [weak selector] peer, _ in
+                    selector?.dismiss()
+                    let toRaw = peer.id.id._internalGetInt64Value()
+                    let toName = peer.compactDisplayTitle
+                    if let moved = FullGramEconomy.shared.transferOwnedGift(id: gift.id, toPeerId: toRaw, toPeerName: toName) {
+                        let payload = FullGramChatGiftPayload(
+                            kind: moved.isUpgraded ? .nft : .gift,
+                            giftRecordId: moved.id,
+                            title: moved.title,
+                            emoji: moved.emoji,
+                            number: moved.nftNumber,
+                            starsPrice: moved.priceStars,
+                            modelName: moved.modelName,
+                            backdropName: moved.backdropName,
+                            backdropInnerHex: moved.backdropInnerHex,
+                            backdropOuterHex: moved.backdropOuterHex,
+                            patternName: moved.patternName,
+                            rarityText: moved.isUpgraded ? "Коллекционный NFT" : "Подарок Telegram",
+                            comment: moved.comment,
+                            canUpgrade: moved.canUpgradeToNFT && !moved.isUpgraded,
+                            senderName: "FullGram",
+                            slug: moved.slug,
+                            realGiftId: moved.realGiftId
+                        )
+                        fullGramSendGiftPayloadMessage(account: context.account, peerId: peer.id, payload: payload)
+                    }
+                }
+                presentControllerImpl?(selector)
+            })
+            sheet.addAction(UIAlertAction(title: "Удалить подарок / NFT", style: .destructive) { _ in
+                FullGramEconomy.shared.removeOwnedGift(id: gift.id)
+            })
+            sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            presentNativeImpl?(sheet)
         },
         openMarket: {
             pushImpl?(fullGramGiftMarketController(context: context, targetPeerId: peerId, targetPeerName: nil))
@@ -885,6 +1036,14 @@ public func fullGramMyGiftsAndUpgradesController(context: AccountContext, peerId
 
     let controller = ItemListController(context: context, state: signal)
     pushImpl = { [weak controller] c in controller?.push(c) }
+    presentControllerImpl = { [weak controller] c in controller?.present(c, in: .window(.root)) }
+    presentNativeImpl = { [weak controller] vc in
+        if let pop = vc.popoverPresentationController, let view = controller?.view {
+            pop.sourceView = view
+            pop.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1.0, height: 1.0)
+        }
+        controller?.present(vc, animated: true)
+    }
     return controller
 }
 
@@ -898,6 +1057,8 @@ private final class FullGramGiftUpgradeArguments {
     let performRandomUpgrade: () -> Void
     let performCustomUpgrade: () -> Void
     let sendNFTCardToChat: () -> Void
+    let transferGift: () -> Void
+    let deleteGift: () -> Void
     let togglePinned: () -> Void
 
     init(
@@ -908,6 +1069,8 @@ private final class FullGramGiftUpgradeArguments {
         performRandomUpgrade: @escaping () -> Void,
         performCustomUpgrade: @escaping () -> Void,
         sendNFTCardToChat: @escaping () -> Void,
+        transferGift: @escaping () -> Void,
+        deleteGift: @escaping () -> Void,
         togglePinned: @escaping () -> Void
     ) {
         self.pickModel = pickModel
@@ -917,6 +1080,8 @@ private final class FullGramGiftUpgradeArguments {
         self.performRandomUpgrade = performRandomUpgrade
         self.performCustomUpgrade = performCustomUpgrade
         self.sendNFTCardToChat = sendNFTCardToChat
+        self.transferGift = transferGift
+        self.deleteGift = deleteGift
         self.togglePinned = togglePinned
     }
 }
@@ -931,7 +1096,9 @@ private enum FullGramGiftUpgradeEntry: ItemListNodeEntry {
     case upgradeRandomAction(String)
     case upgradeCustomAction(String)
     case sendCardAction(String)
+    case transferAction(String)
     case pinToggle(Bool)
+    case deleteAction(String)
     case info(String)
 
     var section: ItemListSectionId {
@@ -952,8 +1119,10 @@ private enum FullGramGiftUpgradeEntry: ItemListNodeEntry {
         case .upgradeRandomAction: return 10
         case .upgradeCustomAction: return 11
         case .sendCardAction: return 12
-        case .pinToggle: return 13
-        case .info: return 14
+        case .transferAction: return 13
+        case .pinToggle: return 14
+        case .deleteAction: return 15
+        case .info: return 16
         }
     }
 
@@ -982,8 +1151,12 @@ private enum FullGramGiftUpgradeEntry: ItemListNodeEntry {
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.performCustomUpgrade)
         case let .sendCardAction(title):
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.sendCardAction)
+        case let .transferAction(title):
+            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.transferGift)
         case let .pinToggle(val):
-            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Закрепить в пузырях профиля", value: val, sectionId: self.section, style: .blocks, updated: { _ in args.togglePinned() })
+            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Закрепить в профиле", value: val, sectionId: self.section, style: .blocks, updated: { _ in args.togglePinned() })
+        case let .deleteAction(title):
+            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .destructive, alignment: .natural, sectionId: self.section, style: .blocks, action: args.deleteGift)
         case let .info(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
         }
@@ -992,6 +1165,8 @@ private enum FullGramGiftUpgradeEntry: ItemListNodeEntry {
 
 public func fullGramGiftUpgradeController(context: AccountContext, ownedGift: FullGramOwnedGift) -> ViewController {
     var presentNativeImpl: ((UIViewController) -> Void)?
+    var presentControllerImpl: ((ViewController) -> Void)?
+    var popImpl: (() -> Void)?
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
     let observer = NotificationCenter.default.addObserver(forName: FullGramEconomy.didChangeNotification, object: nil, queue: .main) { _ in
@@ -1109,14 +1284,61 @@ public func fullGramGiftUpgradeController(context: AccountContext, ownedGift: Fu
                 comment: latest.comment,
                 canUpgrade: latest.canUpgradeToNFT && !latest.isUpgraded,
                 senderName: latest.senderName,
-                slug: latest.slug
+                slug: latest.slug,
+                realGiftId: latest.realGiftId
             )
-            let _ = enqueueMessages(account: context.account, peerId: EnginePeer.Id(latest.ownerPeerId), messages: [
-                .message(text: payload.encodeMessageText(), attributes: [], inlineStickers: [:], mediaReference: nil, threadId: nil, replyToMessageId: nil, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: [])
-            ]).startStandalone()
-            let done = UIAlertController(title: "Отправлено", message: "Карточка подарка/NFT отправлена в чат.", preferredStyle: .alert)
+            fullGramSendGiftPayloadMessage(account: context.account, peerId: EnginePeer.Id(latest.ownerPeerId), payload: payload)
+            let done = UIAlertController(title: "Отправлено", message: "Нативная плашка подарка/NFT отправлена в чат.", preferredStyle: .alert)
             done.addAction(UIAlertAction(title: "OK", style: .default))
             presentNativeImpl?(done)
+        },
+        transferGift: {
+            let selector = context.sharedContext.makePeerSelectionController(PeerSelectionControllerParams(
+                context: context,
+                filter: [.onlyWriteable, .excludeDisabled],
+                hasChatListSelector: true,
+                hasContactSelector: true,
+                hasGlobalSearch: true,
+                title: "Кому переслать / передать?"
+            ))
+            selector.peerSelected = { [weak selector] peer, _ in
+                selector?.dismiss()
+                let toRaw = peer.id.id._internalGetInt64Value()
+                let toName = peer.compactDisplayTitle
+                if let moved = FullGramEconomy.shared.transferOwnedGift(id: ownedGift.id, toPeerId: toRaw, toPeerName: toName) {
+                    let payload = FullGramChatGiftPayload(
+                        kind: moved.isUpgraded ? .nft : .gift,
+                        giftRecordId: moved.id,
+                        title: moved.title,
+                        emoji: moved.emoji,
+                        number: moved.nftNumber,
+                        starsPrice: moved.priceStars,
+                        modelName: moved.modelName,
+                        backdropName: moved.backdropName,
+                        backdropInnerHex: moved.backdropInnerHex,
+                        backdropOuterHex: moved.backdropOuterHex,
+                        patternName: moved.patternName,
+                        rarityText: moved.isUpgraded ? "Коллекционный NFT" : "Подарок Telegram",
+                        comment: moved.comment,
+                        canUpgrade: moved.canUpgradeToNFT && !moved.isUpgraded,
+                        senderName: "FullGram",
+                        slug: moved.slug,
+                        realGiftId: moved.realGiftId
+                    )
+                    fullGramSendGiftPayloadMessage(account: context.account, peerId: peer.id, payload: payload)
+                    popImpl?()
+                }
+            }
+            presentControllerImpl?(selector)
+        },
+        deleteGift: {
+            let confirm = UIAlertController(title: "Удалить подарок / NFT?", message: "Подарок будет удалён из вашего профиля.", preferredStyle: .alert)
+            confirm.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+            confirm.addAction(UIAlertAction(title: "Удалить", style: .destructive) { _ in
+                FullGramEconomy.shared.removeOwnedGift(id: ownedGift.id)
+                popImpl?()
+            })
+            presentNativeImpl?(confirm)
         },
         togglePinned: {
             FullGramEconomy.shared.togglePinGift(id: ownedGift.id)
@@ -1147,8 +1369,10 @@ public func fullGramGiftUpgradeController(context: AccountContext, ownedGift: Fu
         } else if current.isUpgraded {
             entries.append(.upgradeCustomAction("🎨 Применить новые выбранные трейты NFT"))
         }
-        entries.append(.sendCardAction("🎁 Отправить карточку в чат"))
+        entries.append(.sendCardAction("🎁 Отправить плашку подарка в чат"))
+        entries.append(.transferAction("📤 Переслать / передать пользователю…"))
         entries.append(.pinToggle(current.pinnedToProfile))
+        entries.append(.deleteAction("🗑 Удалить подарок / NFT"))
         entries.append(.info("Как в настоящем Telegram: при апгрейде подарка выпадают редкие модель, градиентный фон, узор и уникальный номер #."))
 
         let data = ItemListPresentationData(presentationData)
@@ -1167,6 +1391,8 @@ public func fullGramGiftUpgradeController(context: AccountContext, ownedGift: Fu
     }
 
     let controller = ItemListController(context: context, state: signal)
+    presentControllerImpl = { [weak controller] c in controller?.present(c, in: .window(.root)) }
+    popImpl = { [weak controller] in _ = controller?.dismiss() }
     presentNativeImpl = { [weak controller] vc in
         if let pop = vc.popoverPresentationController, let view = controller?.view {
             pop.sourceView = view
@@ -1232,7 +1458,9 @@ private enum FullGramNumbersEntry: ItemListNodeEntry {
 
 public func fullGramCollectibleNumbersController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
+    var presentControllerImpl: ((ViewController) -> Void)?
     var presentNativeImpl: ((UIViewController) -> Void)?
+    let selfRawId = context.account.peerId.id._internalGetInt64Value()
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
     let observer = NotificationCenter.default.addObserver(forName: FullGramEconomy.didChangeNotification, object: nil, queue: .main) { _ in
@@ -1274,11 +1502,41 @@ public func fullGramCollectibleNumbersController(context: AccountContext) -> Vie
             sheet.addAction(UIAlertAction(title: "Показать карточку Fragment", style: .default) { _ in
                 pushImpl?(fullGramCollectibleNumberInfoController(context: context, item: item, ownerName: "Вы"))
             })
-            sheet.addAction(UIAlertAction(title: item.isActive ? "Скрыть из профиля" : "Поставить в профиль", style: .default) { _ in
-                FullGramEconomy.shared.setActiveCustomNumber(id: item.isActive ? nil : item.id)
+            sheet.addAction(UIAlertAction(title: item.isActive ? "Открепить / скрыть из профиля" : "Закрепить в профиле", style: .default) { _ in
+                let nextActive = !item.isActive
+                FullGramEconomy.shared.setActiveCustomNumber(id: nextActive ? item.id : nil)
+                FullGramAdmin.shared.performEconomyAction(actorPeerId: selfRawId, action: "toggle_number", number: item.number, entryId: item.id, isActive: nextActive)
+            })
+            sheet.addAction(UIAlertAction(title: "Переслать / передать пользователю…", style: .default) { _ in
+                let selector = context.sharedContext.makePeerSelectionController(PeerSelectionControllerParams(
+                    context: context,
+                    filter: [.onlyWriteable, .excludeDisabled],
+                    hasChatListSelector: true,
+                    hasContactSelector: true,
+                    hasGlobalSearch: true,
+                    title: "Кому передать номер \(item.number)?"
+                ))
+                selector.peerSelected = { [weak selector] peer, _ in
+                    selector?.dismiss()
+                    let toRaw = peer.id.id._internalGetInt64Value()
+                    FullGramEconomy.shared.removeCustomNumber(id: item.id)
+                    FullGramAdmin.shared.performEconomyAction(actorPeerId: selfRawId, toPeerId: toRaw, action: "transfer_number", number: item.number, entryId: item.id)
+                    let payload = FullGramChatGiftPayload(
+                        kind: .number,
+                        giftRecordId: item.id,
+                        title: item.number,
+                        emoji: "📞",
+                        tonAmount: item.priceTon,
+                        rarityText: "Анонимный номер Fragment",
+                        senderName: "FullGram"
+                    )
+                    fullGramSendGiftPayloadMessage(account: context.account, peerId: peer.id, payload: payload)
+                }
+                presentControllerImpl?(selector)
             })
             sheet.addAction(UIAlertAction(title: "Удалить номер", style: .destructive) { _ in
                 FullGramEconomy.shared.removeCustomNumber(id: item.id)
+                FullGramAdmin.shared.performEconomyAction(actorPeerId: selfRawId, action: "revoke_number", number: item.number, entryId: item.id)
             })
             sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
             presentNativeImpl?(sheet)
@@ -1296,7 +1554,7 @@ public func fullGramCollectibleNumbersController(context: AccountContext) -> Vie
         for (idx, item) in list.enumerated() {
             entries.append(.numberRow(Int32(idx), item))
         }
-        entries.append(.info("Активный номер +888 появляется в вашем профиле как в настоящем Telegram. При нажатии открывается карточка Fragment с ценой покупки."))
+        entries.append(.info("Активный номер +888 появляется в вашем профиле как в настоящем Telegram. Его можно открепить, переслать другому пользователю или удалить."))
 
         let data = ItemListPresentationData(presentationData)
         let state = ItemListControllerState(
@@ -1315,6 +1573,7 @@ public func fullGramCollectibleNumbersController(context: AccountContext) -> Vie
 
     let controller = ItemListController(context: context, state: signal)
     pushImpl = { [weak controller] c in controller?.push(c) }
+    presentControllerImpl = { [weak controller] c in controller?.present(c, in: .window(.root)) }
     presentNativeImpl = { [weak controller] vc in
         if let pop = vc.popoverPresentationController, let view = controller?.view {
             pop.sourceView = view
@@ -1380,7 +1639,9 @@ private enum FullGramUsernamesEntry: ItemListNodeEntry {
 
 public func fullGramCollectibleUsernamesController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
+    var presentControllerImpl: ((ViewController) -> Void)?
     var presentNativeImpl: ((UIViewController) -> Void)?
+    let selfRawId = context.account.peerId.id._internalGetInt64Value()
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
     let observer = NotificationCenter.default.addObserver(forName: FullGramEconomy.didChangeNotification, object: nil, queue: .main) { _ in
@@ -1426,14 +1687,52 @@ public func fullGramCollectibleUsernamesController(context: AccountContext) -> V
             sheet.addAction(UIAlertAction(title: "Показать карточку Fragment", style: .default) { _ in
                 pushImpl?(fullGramCollectibleUsernameInfoController(context: context, item: item, ownerName: "Вы"))
             })
-            sheet.addAction(UIAlertAction(title: "Сделать основным в профиле", style: .default) { _ in
-                FullGramEconomy.shared.setPrimaryCollectibleUsername(id: item.id)
-            })
-            sheet.addAction(UIAlertAction(title: item.isActive ? "Скрыть из профиля" : "Показать как дополнительный", style: .default) { _ in
+            if item.isPrimary {
+                sheet.addAction(UIAlertAction(title: "Открепить с основного места", style: .default) { _ in
+                    FullGramEconomy.shared.detachPrimaryCollectibleUsername(id: item.id)
+                    FullGramAdmin.shared.performEconomyAction(actorPeerId: selfRawId, action: "toggle_username", username: item.username, entryId: item.id, isActive: true, isPrimary: false)
+                })
+            } else {
+                sheet.addAction(UIAlertAction(title: "Сделать основным в профиле", style: .default) { _ in
+                    FullGramEconomy.shared.setPrimaryCollectibleUsername(id: item.id)
+                    FullGramAdmin.shared.performEconomyAction(actorPeerId: selfRawId, action: "toggle_username", username: item.username, entryId: item.id, isActive: true, isPrimary: true)
+                })
+            }
+            sheet.addAction(UIAlertAction(title: item.isActive ? "Открепить / скрыть из профиля" : "Показать в профиле", style: .default) { _ in
+                let nextActive = !item.isActive
                 FullGramEconomy.shared.toggleCollectibleUsernameActive(id: item.id)
+                FullGramAdmin.shared.performEconomyAction(actorPeerId: selfRawId, action: "toggle_username", username: item.username, entryId: item.id, isActive: nextActive, isPrimary: false)
+            })
+            sheet.addAction(UIAlertAction(title: "Переслать / передать пользователю…", style: .default) { _ in
+                let selector = context.sharedContext.makePeerSelectionController(PeerSelectionControllerParams(
+                    context: context,
+                    filter: [.onlyWriteable, .excludeDisabled],
+                    hasChatListSelector: true,
+                    hasContactSelector: true,
+                    hasGlobalSearch: true,
+                    title: "Кому передать @\(item.username)?"
+                ))
+                selector.peerSelected = { [weak selector] peer, _ in
+                    selector?.dismiss()
+                    let toRaw = peer.id.id._internalGetInt64Value()
+                    FullGramEconomy.shared.removeCollectibleUsername(id: item.id)
+                    FullGramAdmin.shared.performEconomyAction(actorPeerId: selfRawId, toPeerId: toRaw, action: "transfer_username", username: item.username, entryId: item.id)
+                    let payload = FullGramChatGiftPayload(
+                        kind: .username,
+                        giftRecordId: item.id,
+                        title: "@\(item.username)",
+                        emoji: "🔗",
+                        tonAmount: item.priceTon,
+                        rarityText: "Коллекционный адрес Fragment",
+                        senderName: "FullGram"
+                    )
+                    fullGramSendGiftPayloadMessage(account: context.account, peerId: peer.id, payload: payload)
+                }
+                presentControllerImpl?(selector)
             })
             sheet.addAction(UIAlertAction(title: "Удалить юзернейм", style: .destructive) { _ in
                 FullGramEconomy.shared.removeCollectibleUsername(id: item.id)
+                FullGramAdmin.shared.performEconomyAction(actorPeerId: selfRawId, action: "revoke_username", username: item.username, entryId: item.id)
             })
             sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
             presentNativeImpl?(sheet)
@@ -1451,7 +1750,7 @@ public func fullGramCollectibleUsernamesController(context: AccountContext) -> V
         for (idx, item) in list.enumerated() {
             entries.append(.usernameRow(Int32(idx), item))
         }
-        entries.append(.info("Коллекционные @юзернеймы отображаются в вашем профиле (основной и дополнительные) с реалистичной карточкой Fragment при нажатии."))
+        entries.append(.info("Коллекционные @юзернеймы отображаются в вашем профиле. Их можно открепить, переслать другому пользователю или удалить."))
 
         let data = ItemListPresentationData(presentationData)
         let state = ItemListControllerState(
@@ -1470,6 +1769,7 @@ public func fullGramCollectibleUsernamesController(context: AccountContext) -> V
 
     let controller = ItemListController(context: context, state: signal)
     pushImpl = { [weak controller] c in controller?.push(c) }
+    presentControllerImpl = { [weak controller] c in controller?.present(c, in: .window(.root)) }
     presentNativeImpl = { [weak controller] vc in
         if let pop = vc.popoverPresentationController, let view = controller?.view {
             pop.sourceView = view
@@ -1644,9 +1944,14 @@ private enum FullGramTransactionsEntry: ItemListNodeEntry {
 }
 
 public func fullGramEconomyTransactionsController(context: AccountContext) -> ViewController {
-    let signal = context.sharedContext.presentationData
+    let changed = ValuePromise<Int>(0, ignoreRepeated: false)
+    let version = Atomic<Int>(value: 0)
+    let observer = NotificationCenter.default.addObserver(forName: FullGramEconomy.didChangeNotification, object: nil, queue: .main) { _ in
+        changed.set(version.modify { $0 + 1 })
+    }
+    let signal = combineLatest(context.sharedContext.presentationData, changed.get())
     |> deliverOnMainQueue
-    |> map { presentationData -> (ItemListControllerState, (ItemListNodeState, Any)) in
+    |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let txs = FullGramEconomy.shared.transactions
         var entries: [FullGramTransactionsEntry] = [.header("ПОСЛЕДНИЕ ОПЕРАЦИИ")]
         if txs.isEmpty {
@@ -1657,15 +1962,21 @@ public func fullGramEconomyTransactionsController(context: AccountContext) -> Vi
             }
         }
         let data = ItemListPresentationData(presentationData)
+        let rightBtn: ItemListNavigationButton? = txs.isEmpty ? nil : ItemListNavigationButton(content: .text("Очистить"), style: .regular, enabled: true, action: {
+            FullGramEconomy.shared.clearTransactions()
+        })
         let state = ItemListControllerState(
             presentationData: data,
             title: .text("История операций"),
             leftNavigationButton: nil,
-            rightNavigationButton: nil,
+            rightNavigationButton: rightBtn,
             backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back)
         )
         let listState = ItemListNodeState(presentationData: data, entries: entries, style: .blocks)
         return (state, (listState, ()))
+    }
+    |> afterDisposed {
+        NotificationCenter.default.removeObserver(observer)
     }
     return ItemListController(context: context, state: signal)
 }

@@ -364,10 +364,11 @@ private final class FullGramAvatarFramesViewController: ViewController, UITextFi
             }
             let preferredOrder = ["FullGram", "Кибер", "Неон", "Аниме", "Милые", "Стихия", "Космос", "Природа", "Игры", "Эмоции", "Эффект", "Флаги", "Discord"]
             let favCount = FullGramAvatarFrames.favoriteFrameIds.count
+            let userUploadedCount = FullGramAvatarFrames.userUploadedPresets(forPeerId: self.selfPeerId).count
             var result: [(String, Int)] = [
-                ("Все", allF.count),
+                ("Все", allF.count + userUploadedCount),
                 ("★ Избранное", favCount),
-                ("⭐ Свои", FullGramAvatarFrames.customFullGramFrames.count)
+                ("⭐ Свои", FullGramAvatarFrames.customFullGramFrames.count + userUploadedCount)
             ]
             var seen: Set<String> = ["Все", "★ Избранное", "⭐ Свои"]
             for cat in preferredOrder {
@@ -460,8 +461,19 @@ private final class FullGramAvatarFramesViewController: ViewController, UITextFi
         self.collectionView.setContentOffset(.zero, animated: false)
     }
 
+    private func currentActiveFrameSelectionId() -> String? {
+        guard let cos = FullGramCloudCosmetics.shared.cosmetics(forPeerId: self.selfPeerId, selfPeerId: self.selfPeerId) else {
+            return nil
+        }
+        if let url = cos.customFrameUrl, !url.isEmpty {
+            return "custom_url"
+        }
+        return cos.frameId
+    }
+
     private func applyFilter() {
-        let allF = FullGramAvatarFrames.allFrames
+        let userCustom = FullGramAvatarFrames.userUploadedPresets(forPeerId: self.selfPeerId)
+        let allF = userCustom + FullGramAvatarFrames.allFrames
         let allE = FullGramProfileEffects.allEffects
         self.segmentedControl.setTitle("Рамки (\(allF.count))", forSegmentAt: 0)
         self.segmentedControl.setTitle("Эффекты (\(allE.count))", forSegmentAt: 1)
@@ -475,7 +487,8 @@ private final class FullGramAvatarFramesViewController: ViewController, UITextFi
                 let favSet = Set(FullGramAvatarFrames.favoriteFrameIds)
                 frames = frames.filter { favSet.contains($0.id) }
             } else if cat == "⭐ Свои" {
-                frames = frames.filter { Self.customFrameIds.contains($0.id) }
+                let userIds = Set(userCustom.map(\.id))
+                frames = frames.filter { userIds.contains($0.id) || Self.customFrameIds.contains($0.id) }
             } else {
                 frames = frames.filter { $0.category == cat }
             }
@@ -561,6 +574,8 @@ private final class FullGramAvatarFramesViewController: ViewController, UITextFi
                 guard let self else { return }
                 let raw = alert.textFields?.first?.text ?? ""
                 FullGramAvatarFrames.setCustomURLFrame(urlString: raw, forPeerId: self.selfPeerId)
+                self.rebuildCategoryBar()
+                self.applyFilter()
                 self.refreshPreview()
                 self.updateVisibleCellSelectionStates()
             }))
@@ -586,8 +601,16 @@ private final class FullGramAvatarFramesViewController: ViewController, UITextFi
         }
         if let pickedData {
             FullGramAvatarFrames.saveCustomLocalFrame(data: pickedData, forPeerId: self.selfPeerId)
-            FullGramCloudCosmetics.shared.uploadCustomFrame(peerId: self.selfPeerId, data: pickedData, isGif: isGif) { _ in }
+            FullGramCloudCosmetics.shared.uploadCustomFrame(peerId: self.selfPeerId, data: pickedData, isGif: isGif) { [weak self] _ in
+                Task { @MainActor in
+                    self?.rebuildCategoryBar()
+                    self?.applyFilter()
+                    self?.refreshPreview()
+                }
+            }
         }
+        self.rebuildCategoryBar()
+        self.applyFilter()
         self.refreshPreview()
         self.updateVisibleCellSelectionStates()
     }
@@ -628,7 +651,7 @@ private final class FullGramAvatarFramesViewController: ViewController, UITextFi
     private func updateVisibleCellSelectionStates() {
         let theme = self.presentationData.theme
         if self.activeTab == .frames {
-            let activeId = FullGramAvatarFrames.selectedFrameId(forPeerId: self.selfPeerId)
+            let activeId = self.currentActiveFrameSelectionId()
             for cell in self.collectionView.visibleCells {
                 if let frameCell = cell as? FullGramFrameGridCell,
                    let idx = self.collectionView.indexPath(for: frameCell),
@@ -660,8 +683,15 @@ extension FullGramAvatarFramesViewController: UICollectionViewDataSource, UIColl
         if self.activeTab == .frames {
             let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "FrameCell", for: indexPath) as! FullGramFrameGridCell
             let preset = self.filteredFrames[indexPath.item]
-            let activeId = FullGramAvatarFrames.selectedFrameId(forPeerId: self.selfPeerId)
-            cell.configure(preset: preset, selected: activeId == preset.id, favorite: FullGramAvatarFrames.isFavoriteFrame(preset.id), theme: self.presentationData.theme) { [weak self] in
+            let activeId = self.currentActiveFrameSelectionId()
+            let animatePreview = (activeId == preset.id) || preset.id.hasPrefix("fg_") || preset.isBundled || preset.category == "Кастом"
+            cell.configure(
+                preset: preset,
+                selected: activeId == preset.id,
+                animate: animatePreview,
+                favorite: FullGramAvatarFrames.isFavoriteFrame(preset.id),
+                theme: self.presentationData.theme
+            ) { [weak self] in
                 FullGramAvatarFrames.toggleFavoriteFrame(preset.id)
                 self?.rebuildCategoryBar()
                 if self?.selectedCategory == "★ Избранное" {
@@ -701,8 +731,14 @@ extension FullGramAvatarFramesViewController: UICollectionViewDataSource, UIColl
         if self.activeTab == .frames {
             guard indexPath.item < self.filteredFrames.count else { return }
             let preset = self.filteredFrames[indexPath.item]
-            let current = FullGramAvatarFrames.selectedFrameId(forPeerId: self.selfPeerId)
-            FullGramAvatarFrames.setSelectedFrame(forPeerId: self.selfPeerId, frameId: current == preset.id ? nil : preset.id)
+            let current = self.currentActiveFrameSelectionId()
+            if current == preset.id {
+                FullGramAvatarFrames.setSelectedFrame(forPeerId: self.selfPeerId, frameId: nil)
+            } else if preset.id == "custom_url", let url = preset.remoteURLs.first {
+                FullGramAvatarFrames.setCustomURLFrame(urlString: url, forPeerId: self.selfPeerId)
+            } else {
+                FullGramAvatarFrames.setSelectedFrame(forPeerId: self.selfPeerId, frameId: preset.id)
+            }
         } else {
             guard indexPath.item < self.filteredEffects.count else { return }
             let preset = self.filteredEffects[indexPath.item]
@@ -740,6 +776,7 @@ extension FullGramAvatarFramesViewController: UICollectionViewDataSourcePrefetch
 
 private final class FullGramFrameGridCell: UICollectionViewCell {
     private let avatarCircle = UIView()
+    private let avatarGlyphLabel = UILabel()
     private let frameView = FullGramAvatarFrameView()
     private let loadingSpinner = UIActivityIndicatorView(style: .medium)
     private let starButton = UIButton(type: .system)
@@ -749,13 +786,20 @@ private final class FullGramFrameGridCell: UICollectionViewCell {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        self.contentView.layer.cornerRadius = 12.0
+        self.contentView.layer.cornerRadius = 14.0
         self.contentView.layer.cornerCurve = .continuous
 
         self.avatarCircle.translatesAutoresizingMaskIntoConstraints = false
-        self.avatarCircle.layer.cornerRadius = 22.0
-        self.avatarCircle.backgroundColor = UIColor(white: 0.5, alpha: 0.16)
+        self.avatarCircle.layer.cornerRadius = 23.0
+        self.avatarCircle.backgroundColor = UIColor(rgb: 0x262B3D)
         self.contentView.addSubview(self.avatarCircle)
+
+        self.avatarGlyphLabel.translatesAutoresizingMaskIntoConstraints = false
+        self.avatarGlyphLabel.text = "FG"
+        self.avatarGlyphLabel.font = UIFont.systemFont(ofSize: 12.0, weight: .bold)
+        self.avatarGlyphLabel.textColor = UIColor.white.withAlphaComponent(0.65)
+        self.avatarGlyphLabel.textAlignment = .center
+        self.avatarCircle.addSubview(self.avatarGlyphLabel)
 
         self.frameView.translatesAutoresizingMaskIntoConstraints = false
         self.avatarCircle.addSubview(self.frameView)
@@ -785,15 +829,18 @@ private final class FullGramFrameGridCell: UICollectionViewCell {
         self.contentView.addSubview(self.titleLabel)
 
         self.catLabel.translatesAutoresizingMaskIntoConstraints = false
-        self.catLabel.font = UIFont.systemFont(ofSize: 9.5)
+        self.catLabel.font = UIFont.systemFont(ofSize: 9.5, weight: .medium)
         self.catLabel.textAlignment = .center
         self.contentView.addSubview(self.catLabel)
 
         NSLayoutConstraint.activate([
             self.avatarCircle.topAnchor.constraint(equalTo: self.contentView.topAnchor, constant: 12.0),
             self.avatarCircle.centerXAnchor.constraint(equalTo: self.contentView.centerXAnchor),
-            self.avatarCircle.widthAnchor.constraint(equalToConstant: 44.0),
-            self.avatarCircle.heightAnchor.constraint(equalToConstant: 44.0),
+            self.avatarCircle.widthAnchor.constraint(equalToConstant: 46.0),
+            self.avatarCircle.heightAnchor.constraint(equalToConstant: 46.0),
+
+            self.avatarGlyphLabel.centerXAnchor.constraint(equalTo: self.avatarCircle.centerXAnchor),
+            self.avatarGlyphLabel.centerYAnchor.constraint(equalTo: self.avatarCircle.centerYAnchor),
 
             self.frameView.topAnchor.constraint(equalTo: self.avatarCircle.topAnchor),
             self.frameView.bottomAnchor.constraint(equalTo: self.avatarCircle.bottomAnchor),
@@ -839,12 +886,18 @@ private final class FullGramFrameGridCell: UICollectionViewCell {
         self.loadingSpinner.stopAnimating()
     }
 
-    func configure(preset: FullGramAvatarFramePreset, selected: Bool, favorite: Bool, theme: PresentationTheme, onToggleFavorite: @escaping () -> Void) {
+    func configure(preset: FullGramAvatarFramePreset, selected: Bool, animate: Bool, favorite: Bool, theme: PresentationTheme, onToggleFavorite: @escaping () -> Void) {
         self.onToggleFavorite = onToggleFavorite
         self.titleLabel.text = preset.title
         self.titleLabel.textColor = theme.list.itemPrimaryTextColor
+        self.avatarCircle.backgroundColor = UIColor(rgb: preset.accentHex).withAlphaComponent(theme.overallDarkAppearance ? 0.20 : 0.16)
+        self.avatarGlyphLabel.textColor = theme.list.itemPrimaryTextColor.withAlphaComponent(0.55)
         self.updateSelection(selected: selected, favorite: favorite, preset: preset, theme: theme)
-        self.frameView.configureThumbnail(with: preset)
+        if animate {
+            self.frameView.configure(with: preset)
+        } else {
+            self.frameView.configureThumbnail(with: preset)
+        }
     }
 
     func updateSelection(selected: Bool, favorite: Bool, preset: FullGramAvatarFramePreset, theme: PresentationTheme) {

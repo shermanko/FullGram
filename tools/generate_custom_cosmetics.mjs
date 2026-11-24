@@ -245,41 +245,41 @@ function encodePNG(width, height, rgba) {
   ]);
 }
 
-function encodeAPNG(width, height, framesRGBA, delayNum = 75, delayDen = 1000) {
-  const { palette, indexedFrames } = quantizeFramesToPalette(framesRGBA);
-
+function encodeAPNG(width, height, framesRGBA, delayNum = 80, delayDen = 1000) {
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8; // bit depth
-  ihdr[9] = 3; // Indexed-color (PLTE + tRNS)
+  ihdr[9] = 6; // Truecolor with alpha (RGBA) — 100% native iOS ImageIO / CGImageSource compatible
   ihdr[10] = 0;
   ihdr[11] = 0;
   ihdr[12] = 0;
 
-  const plte = Buffer.alloc(palette.length * 3);
-  const trns = Buffer.alloc(palette.length);
-  for (let i = 0; i < palette.length; i++) {
-    plte[i * 3] = palette[i][0];
-    plte[i * 3 + 1] = palette[i][1];
-    plte[i * 3 + 2] = palette[i][2];
-    trns[i] = palette[i][3];
-  }
-
   const actl = Buffer.alloc(8);
-  actl.writeUInt32BE(indexedFrames.length, 0);
+  actl.writeUInt32BE(framesRGBA.length, 0);
   actl.writeUInt32BE(0, 4); // infinite loop
 
   const parts = [
     PNG_SIG,
     makeChunk("IHDR", ihdr),
-    makeChunk("PLTE", plte),
-    makeChunk("tRNS", trns),
     makeChunk("acTL", actl),
   ];
   let seq = 0;
 
-  for (let i = 0; i < indexedFrames.length; i++) {
+  for (let i = 0; i < framesRGBA.length; i++) {
+    const src = framesRGBA[i];
+    const clean = new Uint8Array(src.length);
+    for (let p = 0; p < src.length; p += 4) {
+      const a = src[p + 3];
+      if (a >= 6) {
+        // Gentle bit-rounding yields compact zlib compression (<130 KB) while keeping smooth 32-bit RGBA gradients
+        clean[p] = src[p] & 0xfc;
+        clean[p + 1] = src[p + 1] & 0xfc;
+        clean[p + 2] = src[p + 2] & 0xfc;
+        clean[p + 3] = a >= 250 ? 255 : (a & 0xf8);
+      }
+    }
+
     const fctl = Buffer.alloc(26);
     fctl.writeUInt32BE(seq++, 0);
     fctl.writeUInt32BE(width, 4);
@@ -288,11 +288,11 @@ function encodeAPNG(width, height, framesRGBA, delayNum = 75, delayDen = 1000) {
     fctl.writeUInt32BE(0, 16);
     fctl.writeUInt16BE(delayNum, 20);
     fctl.writeUInt16BE(delayDen, 22);
-    fctl[24] = 1; // APNG_DISPOSE_OP_BACKGROUND
-    fctl[25] = 0; // APNG_BLEND_OP_SOURCE
+    fctl[24] = 0; // APNG_DISPOSE_OP_NONE
+    fctl[25] = 0; // APNG_BLEND_OP_SOURCE (replaces full frame RGBA including alpha=0 cleanly)
     parts.push(makeChunk("fcTL", fctl));
 
-    const compressed = encodeRawIndexed(width, height, indexedFrames[i]);
+    const compressed = encodeRawRGBA(width, height, clean);
     if (i === 0) {
       parts.push(makeChunk("IDAT", compressed));
     } else {
@@ -543,16 +543,17 @@ const CUSTOM_FRAMES = [
 ];
 
 function renderFrameAPNG(spec) {
-  const S = 224;
+  const S = 184;
+  const sc = S / 224.0;
   const cx = S / 2;
   const cy = S / 2;
-  const numFrames = 12;
+  const numFrames = 10;
   const rgb1 = hexToRGB(spec.c1);
   const rgb2 = hexToRGB(spec.c2);
   const rgb3 = hexToRGB(spec.c3);
 
-  // Strict ring bounds for 224x224 canvas: inner clear circle >= 86px so center of avatar
-  // stays 100% unobstructed, outer edge <= 110px with sculpted bevels & crisp visibility.
+  // Strict ring bounds in 224-reference coordinates (dx, dy are normalized by sc = S/224):
+  // inner clear circle >= 86px so center of avatar stays 100% unobstructed, outer edge <= 110px.
   const R_INNER = 87.5;
   const R_MID = 98.5;
   const R_OUTER = 110.2;
@@ -565,9 +566,9 @@ function renderFrameAPNG(spec) {
     const buf = new Uint8Array(S * S * 4);
 
     for (let y = 0; y < S; y++) {
-      const dy = y - cy;
+      const dy = (y - cy) / sc;
       for (let x = 0; x < S; x++) {
-        const dx = x - cx;
+        const dx = (x - cx) / sc;
         const r = Math.hypot(dx, dy);
         if (r < R_INNER - 4 || r > R_OUTER + 3) continue;
 
@@ -982,16 +983,27 @@ const t0 = Date.now();
 
 // 1. Generate 50 custom animated APNG frames
 const framesDir = path.join(ROOT, "assets", "frames");
+const bundledFramesDir = path.join(ROOT, "Telegram", "Telegram-iOS", "Resources", "FullGramFrames");
 fs.mkdirSync(framesDir, { recursive: true });
+fs.mkdirSync(bundledFramesDir, { recursive: true });
 let totalFrameBytes = 0;
+let maxFrameBytes = 0;
+let maxFrameName = "";
 for (const spec of CUSTOM_FRAMES) {
   const apng = renderFrameAPNG(spec);
   const outPath = path.join(framesDir, `${spec.id}.png`);
   fs.writeFileSync(outPath, apng);
+  if (spec.category === "FullGram") {
+    fs.writeFileSync(path.join(bundledFramesDir, `${spec.id}.png`), apng);
+  }
   totalFrameBytes += apng.length;
+  if (apng.length > maxFrameBytes) {
+    maxFrameBytes = apng.length;
+    maxFrameName = spec.id;
+  }
 }
 console.log(
-  `Generated ${CUSTOM_FRAMES.length} custom animated APNG frames in assets/frames/ (${(totalFrameBytes / 1024 / 1024).toFixed(2)} MB total)`
+  `Generated ${CUSTOM_FRAMES.length} custom animated RGBA APNG frames in assets/frames/ (${(totalFrameBytes / 1024 / 1024).toFixed(2)} MB total, max: ${maxFrameName} ${(maxFrameBytes / 1024).toFixed(1)} KB)`
 );
 
 if (process.argv.includes("--frames-only")) {

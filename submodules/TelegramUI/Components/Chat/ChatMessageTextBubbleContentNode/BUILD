@@ -40,6 +40,10 @@ swift_library(
         "//submodules/TelegramUI/Components/InteractiveTextComponent",
         "//submodules/TelegramUI/Components/ShimmeringMask",
         "//submodules/TelegramUI/Components/StreamingTextReveal:StreamingTextReveal",
+        "//submodules/ComponentFlow",
+        "//submodules/AppBundle",
+        "//submodules/TelegramUI/Components/Gifts/GiftItemComponent",
+        "//submodules/TelegramUI/Components/PeerInfo/PeerInfoCoverComponent",
     ],
     visibility = [
         "//visibility:public",

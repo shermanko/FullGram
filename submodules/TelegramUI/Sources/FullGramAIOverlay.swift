@@ -1675,7 +1675,7 @@ final class FullGramAIOverlayCoordinator {
     }
 
     private func presentChatGiftCardSheet(payload: FullGramChatGiftPayload, peerId: EnginePeer.Id) {
-        if payload.kind == .stars {
+        if payload.kind == .stars || payload.kind == .ton {
             let vc = fullGramEconomyHubController(context: self.context)
             if let nav = self.rootController {
                 nav.pushViewController(vc)
@@ -1684,6 +1684,65 @@ final class FullGramAIOverlayCoordinator {
             }
             return
         }
+        if payload.kind == .number {
+            let vc = fullGramCollectibleNumbersController(context: self.context)
+            if let nav = self.rootController {
+                nav.pushViewController(vc)
+            } else {
+                self.context.sharedContext.presentGlobalController(vc, nil)
+            }
+            return
+        }
+        if payload.kind == .username {
+            let vc = fullGramCollectibleUsernamesController(context: self.context)
+            if let nav = self.rootController {
+                nav.pushViewController(vc)
+            } else {
+                self.context.sharedContext.presentGlobalController(vc, nil)
+            }
+            return
+        }
+
+        // Open real interactive 3D Telegram GiftViewScreen for any FullGram NFT!
+        let candidateSlug: String? = {
+            if let s = payload.slug, s.lowercased().hasPrefix("fullgram-") {
+                return s
+            }
+            if let gid = payload.realGiftId {
+                return "FullGram-\(gid)-\(payload.number ?? 1)"
+            }
+            return nil
+        }()
+        if (payload.kind == .nft || payload.kind == .upgrade), let slug = candidateSlug {
+            let _ = (self.context.engine.payments.getUniqueStarGift(slug: slug)
+            |> deliverOnMainQueue).startStandalone(next: { [weak self] uniqueGift in
+                guard let self else { return }
+                let giftController = self.context.sharedContext.makeGiftViewScreen(
+                    context: self.context,
+                    gift: uniqueGift,
+                    shareStory: nil,
+                    openChatTheme: nil,
+                    dismissed: nil
+                )
+                if let nav = self.rootController {
+                    nav.pushViewController(giftController)
+                } else {
+                    self.context.sharedContext.presentGlobalController(giftController, nil)
+                }
+            }, error: { [weak self] _ in
+                guard let self else { return }
+                if let owned = FullGramEconomy.shared.findOwnedGift(id: payload.giftRecordId) {
+                    let vc = fullGramGiftUpgradeController(context: self.context, ownedGift: owned)
+                    if let nav = self.rootController {
+                        nav.pushViewController(vc)
+                    } else {
+                        self.context.sharedContext.presentGlobalController(vc, nil)
+                    }
+                }
+            })
+            return
+        }
+
         if let owned = FullGramEconomy.shared.findOwnedGift(id: payload.giftRecordId) {
             let vc = fullGramGiftUpgradeController(context: self.context, ownedGift: owned)
             if let nav = self.rootController {

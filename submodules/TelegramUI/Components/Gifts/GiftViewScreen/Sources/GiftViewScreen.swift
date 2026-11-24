@@ -2188,27 +2188,45 @@ private final class GiftViewSheetContent: CombinedComponent {
                 var items: [ContextMenuItem] = []
                 let strings = presentationData.strings
                 
-                if let reference = arguments.reference, case .unique = arguments.gift, let togglePinnedToTop = controller.togglePinnedToTop, let pinnedToTop = arguments.pinnedToTop {
-                    items.append(.action(ContextMenuActionItem(text: pinnedToTop ? strings.PeerInfo_Gifts_Context_Unpin : strings.PeerInfo_Gifts_Context_Pin , icon: { theme in generateTintedImage(image: UIImage(bundleImageName: pinnedToTop ? "Chat/Context Menu/Unpin" : "Chat/Context Menu/Pin"), color: theme.contextMenu.primaryColor) }, action: { [weak self, weak controller] c, f in
-                        c?.dismiss(completion: { [weak self, weak controller] in
-                            guard let self, let controller else {
-                                return
-                            }
-                            
-                            let pinnedToTop = !pinnedToTop
-                            if togglePinnedToTop(reference, pinnedToTop) {
-                                if pinnedToTop {
-                                    controller.dismissAnimated()
-                                } else {
-                                    let toastText = strings.PeerInfo_Gifts_ToastUnpinned_Text
-                                    controller.present(UndoOverlayController(presentationData: presentationData, content: .universal(animation: "anim_toastunpin", scale: 0.06, colors: [:], title: nil, text: toastText, customUndoText: nil, timeout: 5), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), in: .current)
-                                    if case let .profileGift(peerId, gift) = self.subject {
-                                        self.subject = .profileGift(peerId, gift.withPinnedToTop(false))
+                if let reference = arguments.reference, case let .unique(uniqueGiftForPin) = arguments.gift {
+                    if let togglePinnedToTop = controller.togglePinnedToTop, let pinnedToTop = arguments.pinnedToTop {
+                        items.append(.action(ContextMenuActionItem(text: pinnedToTop ? strings.PeerInfo_Gifts_Context_Unpin : strings.PeerInfo_Gifts_Context_Pin , icon: { theme in generateTintedImage(image: UIImage(bundleImageName: pinnedToTop ? "Chat/Context Menu/Unpin" : "Chat/Context Menu/Pin"), color: theme.contextMenu.primaryColor) }, action: { [weak self, weak controller] c, f in
+                            c?.dismiss(completion: { [weak self, weak controller] in
+                                guard let self, let controller else {
+                                    return
+                                }
+                                
+                                let pinnedToTop = !pinnedToTop
+                                if togglePinnedToTop(reference, pinnedToTop) {
+                                    if pinnedToTop {
+                                        controller.dismissAnimated()
+                                    } else {
+                                        let toastText = strings.PeerInfo_Gifts_ToastUnpinned_Text
+                                        controller.present(UndoOverlayController(presentationData: presentationData, content: .universal(animation: "anim_toastunpin", scale: 0.06, colors: [:], title: nil, text: toastText, customUndoText: nil, timeout: 5), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), in: .current)
+                                        if case let .profileGift(peerId, gift) = self.subject {
+                                            self.subject = .profileGift(peerId, gift.withPinnedToTop(false))
+                                        }
                                     }
                                 }
-                            }
-                        })
-                    })))
+                            })
+                        })))
+                    } else if uniqueGiftForPin.slug.lowercased().hasPrefix("fullgram-"),
+                              case let .peerId(ownerId) = uniqueGiftForPin.owner,
+                              ownerId == self.context.account.peerId {
+                        let pinnedToTop = arguments.pinnedToTop ?? true
+                        items.append(.action(ContextMenuActionItem(text: pinnedToTop ? strings.PeerInfo_Gifts_Context_Unpin : strings.PeerInfo_Gifts_Context_Pin, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: pinnedToTop ? "Chat/Context Menu/Unpin" : "Chat/Context Menu/Pin"), color: theme.contextMenu.primaryColor) }, action: { [weak self, weak controller] c, _ in
+                            c?.dismiss(completion: { [weak self, weak controller] in
+                                guard let self, let controller else { return }
+                                let nextPinned = !pinnedToTop
+                                let rawId = self.context.account.peerId.id._internalGetInt64Value()
+                                let updated = FullGramGrantedNFTStore.shared.setPinnedLocal(peerId: rawId, slug: uniqueGiftForPin.slug, pinned: nextPinned)
+                                FullGramGrantedNFTStore.shared.onServerNFTAction?(rawId, rawId, nil, updated?.id ?? "", uniqueGiftForPin.slug, nextPinned ? "pin" : "unpin", nil, nil, nil, nil, nil)
+                                controller.profileGiftsContext?.reload()
+                                let toastText = nextPinned ? strings.Gift_Displayed_NewText : strings.PeerInfo_Gifts_ToastUnpinned_Text
+                                controller.present(UndoOverlayController(presentationData: presentationData, content: .succeed(text: toastText, timeout: 3.0, customUndoText: nil), elevatedLayout: false, action: { _ in return false }), in: .current)
+                            })
+                        })))
+                    }
                 }
                                 
                 if case let .unique(gift) = arguments.gift, let resellAmount = gift.resellAmounts?.first, resellAmount.amount.value > 0 {
@@ -6971,7 +6989,15 @@ public class GiftViewScreen: ViewControllerComponentContainer {
                     }
                 }
             case let .uniqueGift(gift, _):
-                return (nil, nil, nil, nil, nil, nil, false, .unique(gift), 0, nil, nil, nil, false, false, nil, false, false, false, false, nil, nil, gift.resellAmounts, nil, nil, nil, nil, nil, false, nil, nil, gift.number, nil)
+                let matchedFG = FullGramGrantedNFTStore.shared.findBySlug(gift.slug)
+                let resolvedSavedToProfile = matchedFG.map { !$0.nft.hidden } ?? true
+                let resolvedPinnedToTop = matchedFG?.nft.pinned
+                let fgRef: StarGiftReference? = gift.slug.lowercased().hasPrefix("fullgram-") ? .slug(slug: gift.slug) : nil
+                let ownerPeerId: EnginePeer.Id? = {
+                    if case let .peerId(pid) = gift.owner { return pid }
+                    return nil
+                }()
+                return (ownerPeerId, nil, nil, nil, nil, fgRef, false, .unique(gift), 0, nil, nil, nil, false, resolvedSavedToProfile, resolvedPinnedToTop, false, false, false, fgRef != nil, fgRef != nil ? 0 : nil, fgRef != nil ? 0 : nil, gift.resellAmounts, nil, nil, fgRef != nil ? 0 : nil, nil, nil, false, nil, nil, gift.number, nil)
             case let .profileGift(peerId, gift):
                 var messageId: EngineMessage.Id?
                 if case let .message(messageIdValue) = gift.reference {

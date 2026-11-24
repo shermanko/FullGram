@@ -1507,12 +1507,16 @@ func _internal_updateStarGiftAddedToProfile(account: Account, reference: StarGif
 }
 
 func _internal_updateStarGiftsPinnedToTop(account: Account, peerId: EnginePeer.Id, references: [StarGiftReference]) -> Signal<Never, NoError> {
+    var pinnedFullGramSlugs = Set<String>()
     let realReferences = references.filter { ref in
         if case let .slug(slug) = ref, slug.lowercased().hasPrefix("fullgram-") {
+            pinnedFullGramSlugs.insert(slug)
             return false
         }
         return true
     }
+    let rawOwnerId = peerId.id._internalGetInt64Value()
+    FullGramGrantedNFTStore.shared.setPinnedSlugsLocal(peerId: rawOwnerId, pinnedSlugs: pinnedFullGramSlugs)
     if realReferences.isEmpty && !references.isEmpty {
         return .complete()
     }
@@ -1664,6 +1668,45 @@ func _internal_transferStarGift(account: Account, prepaid: Bool, reference: Star
         let toId = peerId.id._internalGetInt64Value()
         let transferred = FullGramGrantedNFTStore.shared.transferBySlugLocal(fromPeerId: fromId, toPeerId: toId, slug: slug)
         FullGramGrantedNFTStore.shared.onServerNFTAction?(fromId, fromId, toId, transferred?.id ?? "", slug, "transfer", nil, nil, nil, nil, nil)
+        if let item = transferred {
+            let payload = FullGramChatGiftPayload(
+                kind: .nft,
+                giftRecordId: item.id,
+                title: item.title,
+                emoji: "🎁",
+                number: item.number,
+                starsPrice: 0,
+                modelName: item.modelName,
+                backdropName: item.backdropName,
+                patternName: item.patternName,
+                rarityText: "Коллекционный NFT",
+                comment: item.note,
+                canUpgrade: false,
+                senderName: "FullGram",
+                slug: slug,
+                realGiftId: item.numericGiftId,
+                backdropId: item.backdropId
+            )
+            let (msgText, msgEntities) = payload.encodeMessageWithEntities()
+            let _ = enqueueMessages(
+                account: account,
+                peerId: peerId,
+                messages: [
+                    .message(
+                        text: msgText,
+                        attributes: [TextEntitiesMessageAttribute(entities: msgEntities)],
+                        inlineStickers: [:],
+                        mediaReference: nil,
+                        threadId: nil,
+                        replyToMessageId: nil,
+                        replyToStoryId: nil,
+                        localGroupingKey: nil,
+                        correlationId: nil,
+                        bubbleUpEmojiOrStickersets: []
+                    )
+                ]
+            ).startStandalone()
+        }
         return .complete()
     }
     return account.postbox.transaction { transaction -> (Api.InputPeer, Api.InputSavedStarGift)? in
