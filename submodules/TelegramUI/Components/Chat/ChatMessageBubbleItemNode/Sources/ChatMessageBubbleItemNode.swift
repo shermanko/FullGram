@@ -4496,7 +4496,7 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
             isFullGramDeleted = messages.contains(where: { $0.0.attributes.contains(where: { $0 is FullGramDeletedMessageAttribute }) })
         }
         if FullGramExtras.shared.dimDeletedMessages && isFullGramDeleted {
-            fgAlpha = 0.52
+            fgAlpha = FullGramExtras.shared.deletedMessageAlpha
         }
         if strongSelf.mainContainerNode.alpha != fgAlpha {
             strongSelf.mainContainerNode.alpha = fgAlpha

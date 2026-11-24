@@ -2212,6 +2212,7 @@ private struct FullGramMessageHistoryArguments {
     let toggleEdits: (Bool) -> Void
     let toggleDeleted: (Bool) -> Void
     let toggleDimDeleted: (Bool) -> Void
+    let selectDimLevel: () -> Void
     let toggleBots: (Bool) -> Void
     let openRestrictionBypass: () -> Void
     let toggleMedia: (FullGramMediaToggle, Bool) -> Void
@@ -2226,6 +2227,7 @@ private enum FullGramMessageHistoryEntry: ItemListNodeEntry {
     case header(String)
     case saveDeleted(String, Bool)
     case dimDeleted(String, Bool)
+    case dimLevel(String, String)
     case saveEdits(String, Bool)
     case saveForBots(String, Bool)
     case restrictionBypassLink(String, String)
@@ -2243,7 +2245,7 @@ private enum FullGramMessageHistoryEntry: ItemListNodeEntry {
 
     var section: ItemListSectionId {
         switch self {
-        case .header, .saveDeleted, .dimDeleted, .saveEdits, .saveForBots, .restrictionBypassLink, .info:
+        case .header, .saveDeleted, .dimDeleted, .dimLevel, .saveEdits, .saveForBots, .restrictionBypassLink, .info:
             return 0
         case .recordsHeader, .record, .empty:
             return 1
@@ -2262,6 +2264,8 @@ private enum FullGramMessageHistoryEntry: ItemListNodeEntry {
             return 1
         case .dimDeleted:
             return 2
+        case .dimLevel:
+            return 7
         case .saveEdits:
             return 3
         case .saveForBots:
@@ -2306,6 +2310,8 @@ private enum FullGramMessageHistoryEntry: ItemListNodeEntry {
             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, sectionId: self.section, style: .blocks, updated: arguments.toggleDeleted)
         case let .dimDeleted(title, value):
             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, sectionId: self.section, style: .blocks, updated: arguments.toggleDimDeleted)
+        case let .dimLevel(title, label):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: arguments.selectDimLevel)
         case let .saveEdits(title, value):
             return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: title, value: value, sectionId: self.section, style: .blocks, updated: arguments.toggleEdits)
         case let .saveForBots(title, value):
@@ -2420,6 +2426,28 @@ public func fullGramMessageHistoryController(context: AccountContext) -> ViewCon
         },
         toggleDimDeleted: { value in
             FullGramExtras.shared.dimDeletedMessages = value
+        },
+        selectDimLevel: {
+            let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+            let isRussian = presentationData.strings.baseLanguageCode.hasPrefix("ru")
+            let sheet = ActionSheetController(presentationData: presentationData)
+            let levels: [Int] = [10, 25, 40, 52, 70, 85]
+            let items: [ActionSheetItem] = levels.map { level in
+                ActionSheetButtonItem(title: "\(level)%", color: .accent, action: { [weak sheet] in
+                    sheet?.dismissAnimated()
+                    FullGramExtras.shared.dimDeletedMessages = true
+                    FullGramExtras.shared.deletedMessageOpacityPercent = level
+                })
+            }
+            sheet.setItemGroups([
+                ActionSheetItemGroup(items: items),
+                ActionSheetItemGroup(items: [
+                    ActionSheetButtonItem(title: isRussian ? "Отмена" : "Cancel", color: .accent, font: .bold, action: { [weak sheet] in
+                        sheet?.dismissAnimated()
+                    })
+                ])
+            ])
+            presentControllerImpl?(sheet)
         },
         toggleBots: { value in
             let _ = context.engine.messages.updateFullGramMessageHistory(saveForBots: value).start()
@@ -2536,6 +2564,7 @@ public func fullGramMessageHistoryController(context: AccountContext) -> ViewCon
             .header(t("СОХРАНЕНИЕ СООБЩЕНИЙ", "MESSAGE RETENTION")),
             .saveDeleted(t("Сохранять удалённые сообщения", "Save deleted messages"), state.saveDeleted),
             .dimDeleted(t("Делать удалённые полупрозрачными", "Make deleted messages translucent"), FullGramExtras.shared.dimDeletedMessages),
+            .dimLevel(t("Прозрачность удалённых", "Deleted messages opacity"), "\(FullGramExtras.shared.deletedMessageOpacityPercent)%"),
             .saveEdits(t("Сохранять историю изменений", "Save message edits"), state.saveEdits),
             .saveForBots(t("Сохранять сообщения ботов", "Save bot messages"), state.saveForBots),
             .restrictionBypassLink(

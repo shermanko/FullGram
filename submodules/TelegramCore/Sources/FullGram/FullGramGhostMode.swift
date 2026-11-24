@@ -1457,6 +1457,15 @@ public final class FullGramExtras: @unchecked Sendable {
         set { setBool("dimDeletedMessages", newValue) }
     }
 
+    public var deletedMessageOpacityPercent: Int {
+        get { max(5, min(95, int("deletedMessageOpacityPercent", default: 52))) }
+        set { setInt("deletedMessageOpacityPercent", max(5, min(95, newValue))) }
+    }
+
+    public var deletedMessageAlpha: CGFloat {
+        return CGFloat(self.deletedMessageOpacityPercent) / 100.0
+    }
+
     public var trackOnLockScreen: Bool {
         get { bool("trackOnLockScreen", default: true) }
         set { setBool("trackOnLockScreen", newValue) }
