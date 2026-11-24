@@ -2361,7 +2361,7 @@ private final class GiftViewSheetContent: CombinedComponent {
                             guard let self, let peer else {
                                 return
                             }
-                            controller.openPeer(peer, gifts: true)
+                            self.openPeer(peer, gifts: true, dismiss: false)
                             Queue.mainQueue().after(0.6) {
                                 controller.dismiss(animated: false, completion: nil)
                             }
