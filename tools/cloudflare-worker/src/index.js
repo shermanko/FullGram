@@ -2334,6 +2334,10 @@ async function handleTelegramWebhook(request, env, origin) {
     }
 
     const code = await fileRes.text();
+    if (code.length > MAX_SCRIPT_BYTES) {
+      await sendTelegramMessage(env, chatId, "❌ Скрипт слишком большой (максимум 256 КБ).");
+      return jsonResponse({ ok: true });
+    }
     const language = lower.endsWith(".py") ? "python" : "lua";
     const caption = (msg.caption || "").trim();
     let customName = null;
@@ -2630,6 +2634,15 @@ export default {
             } catch {}
           }
           if (!entry.hashes.includes(secretHash)) {
+            // Privileged accounts (owner / sponsors) must not be claimable by anyone who merely knows their id:
+            // registering a NEW device requires cryptographic proof (Telegram initData or a bot-issued fg1 token).
+            const privileged = isAdminUserId(peerId, env) || Boolean(await getSponsorTier(env, peerId));
+            if (privileged) {
+              const proof = await authenticateRequest(request, env);
+              if (!proof || normalizePeerId(String(proof.uid || "")) !== peerId) {
+                return jsonResponse({ ok: false, error: "New device for a privileged account requires /auth proof from the admin bot" }, 403);
+              }
+            }
             if (isAdminUserId(peerId, env) && entry.hashes.length >= 4) {
               // Keep owner device slots bounded while permitting legitimate reinstalls on fresh non-admin accounts.
               entry.hashes = entry.hashes.slice(-3);

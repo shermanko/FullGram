@@ -676,6 +676,73 @@ def check_conflict_markers_in_core_files() -> None:
                 )
 
 
+def check_swift6_static_rules_text(rel: str, text: str) -> None:
+    """Fast static checks for Swift 6 / -warnings-as-errors pitfalls seen in CI (compile errors cost ~18 min)."""
+    # 1. ValuePromise over a tuple: tuples are never Equatable.
+    m = re.search(r"\bValuePromise<\(", text)
+    if m:
+        line_no = text[: m.start()].count("\n") + 1
+        raise AssertionError(f"{rel}:{line_no} ValuePromise<(tuple)> does not compile (tuples are not Equatable); use an Equatable struct")
+
+    # 2. `fooImpl = ...` assigned in a function that never declares `fooImpl`.
+    func_starts = [mm.start() for mm in re.finditer(r"^(?:public |private |fileprivate |internal )?func ", text, re.M)] + [len(text)]
+    for a, b in zip(func_starts, func_starts[1:]):
+        body = text[a:b]
+        for am in re.finditer(r"^\s+(\w+Impl)\s*=\s*\{", body, re.M):
+            name = am.group(1)
+            if not re.search(rf"\b(?:var|let)\s+{name}\b", body[: am.start()]):
+                line_no = text[: a + am.start()].count("\n") + 1
+                raise AssertionError(f"{rel}:{line_no} '{name}' assigned but never declared in this function")
+
+        # 3. Mutable `var *Impl` captured inside @Sendable singleton callbacks (Swift 6 error).
+        var_impls = set(re.findall(r"\bvar\s+(\w+Impl)\s*:", body))
+        if var_impls:
+            lines = body.split("\n")
+            i = 0
+            while i < len(lines):
+                if re.search(r"\.shared\.\w+\(.*\)\s*\{\s*[\w, ]+ in\s*$", lines[i]):
+                    depth = lines[i].count("{") - lines[i].count("}")
+                    j = i + 1
+                    while j < len(lines) and depth > 0:
+                        for name in var_impls:
+                            if re.search(rf"\b{name}\?\(", lines[j]):
+                                line_no = text[:a].count("\n") + j + 1
+                                raise AssertionError(f"{rel}:{line_no} captured mutable var '{name}' inside a @Sendable callback (use a Sendable box class)")
+                        depth += lines[j].count("{") - lines[j].count("}")
+                        j += 1
+                    i = j
+                else:
+                    i += 1
+
+    # 4. Plain imports of non-Sendable modules in files that hop threads/@Sendable.
+    if ("DispatchQueue.main.async" in text or "@Sendable" in text) and rel.startswith("submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/"):
+        for mod in ("AccountContext", "SwiftSignalKit"):
+            if re.search(rf"^import {mod}\s*$", text, re.M):
+                raise AssertionError(f"{rel} must use '@preconcurrency import {mod}' (Sendable captures are errors under -warnings-as-errors)")
+
+    # 5. `args.member` must exist on the `*Arguments` type the entry casts to.
+    for cm in re.finditer(r"let (\w+) = arguments as! (\w+)", text):
+        var, typ = cm.group(1), cm.group(2)
+        tm = re.search(rf"(?:class|struct) {typ}\b[^{{]*\{{(.*?)\n\}}", text, re.S)
+        if not tm:
+            continue
+        members = set(re.findall(r"\b(?:let|var)\s+(\w+)", tm.group(1)))
+        nxt = re.search(r"let \w+ = arguments as! ", text[cm.end():])
+        end = cm.end() + nxt.start() if nxt else len(text)
+        for um in re.finditer(rf"(?<![\w.]){var}\.(\w+)", text[cm.end():end]):
+            if um.group(1) not in members:
+                line_no = text[: cm.end() + um.start()].count("\n") + 1
+                raise AssertionError(f"{rel}:{line_no} {var}.{um.group(1)} is not a member of {typ}")
+
+
+def check_swift6_static_rules() -> int:
+    count = 0
+    for path in iter_fullgram_swift_files():
+        check_swift6_static_rules_text(path.relative_to(ROOT).as_posix(), path.read_text(encoding="utf-8"))
+        count += 1
+    return count
+
+
 def check_python_scripts() -> int:
     py_files = [ROOT / "tools/ci_checks.py"] + sorted((ROOT / "build-system/Make").glob("*.py"))
     for path in py_files:
@@ -804,6 +871,9 @@ def main() -> int:
 
     check_no_hardcoded_secrets()
     print("[OK] Hardcoded secrets scan (0 leaks)")
+
+    static_count = check_swift6_static_rules()
+    print(f"[OK] Swift 6 static rules ({static_count} files)")
 
     tab_count = check_fullgram_tabs_and_ui_safety()
     print(f"[OK] FullGram tab & UI thread-safety checks ({tab_count} ItemListController routes)")

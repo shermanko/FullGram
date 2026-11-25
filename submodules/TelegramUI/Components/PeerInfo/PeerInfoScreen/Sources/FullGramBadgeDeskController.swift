@@ -2,12 +2,12 @@ import Foundation
 import UIKit
 import Display
 import AsyncDisplayKit
-import SwiftSignalKit
+@preconcurrency import SwiftSignalKit
 import TelegramCore
 import TelegramPresentationData
 import ItemListUI
 import ItemListPeerItem
-import AccountContext
+@preconcurrency import AccountContext
 import AnimationCache
 import MultiAnimationRenderer
 import EntityKeyboard

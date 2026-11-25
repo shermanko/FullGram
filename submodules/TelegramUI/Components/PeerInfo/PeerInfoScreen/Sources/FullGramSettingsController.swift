@@ -6,10 +6,10 @@ import AVFoundation
 import AVKit
 import AsyncDisplayKit
 import Display
-import SwiftSignalKit
+@preconcurrency import SwiftSignalKit
 import Postbox
 import TelegramCore
-import AccountContext
+@preconcurrency import AccountContext
 import ItemListUI
 import PresentationDataUtils
 import TelegramPresentationData
@@ -582,10 +582,40 @@ public func fullGramOpenFontsStack(context: AccountContext, in navigationControl
     navigationController.setViewControllers(stack, animated: false)
 }
 
+private struct FullGramUncheckedSendable<T>: @unchecked Sendable {
+    let value: T
+}
+
+private final class FullGramBetaPresenterBox: @unchecked Sendable {
+    var pushController: ((ViewController) -> Void)?
+    var presentController: ((ViewController) -> Void)?
+    var replaceWithSettings: (() -> Void)?
+
+    private func onMain(_ f: @escaping @Sendable () -> Void) {
+        if Thread.isMainThread {
+            f()
+        } else {
+            DispatchQueue.main.async(execute: f)
+        }
+    }
+
+    func push(_ c: ViewController) {
+        let wrapped = FullGramUncheckedSendable(value: c)
+        self.onMain { [self] in self.pushController?(wrapped.value) }
+    }
+
+    func present(_ c: ViewController) {
+        let wrapped = FullGramUncheckedSendable(value: c)
+        self.onMain { [self] in self.presentController?(wrapped.value) }
+    }
+
+    func replace() {
+        self.onMain { [self] in self.replaceWithSettings?() }
+    }
+}
+
 public func fullGramBetaActivationController(context: AccountContext) -> ViewController {
-    var pushControllerImpl: ((ViewController) -> Void)?
-    var presentControllerImpl: ((ViewController) -> Void)?
-    var replaceWithSettingsImpl: (() -> Void)?
+    let box = FullGramBetaPresenterBox()
 
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
@@ -723,10 +753,10 @@ public func fullGramBetaActivationController(context: AccountContext) -> ViewCon
                         title: "FullGram Beta",
                         text: ru ? "Бета-тест активирован! Все функции FullGram открыты." : "Beta access activated! All FullGram features are unlocked.",
                         actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {
-                            replaceWithSettingsImpl?()
+                            box.replace()
                         })]
                     )
-                    presentControllerImpl?(okAlert)
+                    box.present(okAlert)
                 case let .failure(err):
                     let errAlert = textAlertController(
                         context: context,
@@ -734,7 +764,7 @@ public func fullGramBetaActivationController(context: AccountContext) -> ViewCon
                         text: err.localizedDescription,
                         actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]
                     )
-                    presentControllerImpl?(errAlert)
+                    box.present(errAlert)
                 }
             }
         }))
@@ -743,7 +773,7 @@ public func fullGramBetaActivationController(context: AccountContext) -> ViewCon
     }
 
     let openFullGram: () -> Void = {
-        replaceWithSettingsImpl?()
+        box.replace()
     }
 
     let copyAccountId: () -> Void = {
@@ -757,7 +787,7 @@ public func fullGramBetaActivationController(context: AccountContext) -> ViewCon
             text: ru ? "ID \(normId) скопирован в буфер обмена." : "ID \(normId) copied to clipboard.",
             actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]
         )
-        presentControllerImpl?(alert)
+        box.present(alert)
     }
 
     let checkAccessNow: () -> Void = {
@@ -766,7 +796,7 @@ public func fullGramBetaActivationController(context: AccountContext) -> ViewCon
         let peerRawId = context.account.peerId.id._internalGetInt64Value()
         FullGramBetaAccess.shared.syncWithServer(peerId: peerRawId, force: true) { active in
             if active {
-                replaceWithSettingsImpl?()
+                box.replace()
             } else {
                 let alert = textAlertController(
                     context: context,
@@ -776,7 +806,7 @@ public func fullGramBetaActivationController(context: AccountContext) -> ViewCon
                         : "Beta access not found for this account yet. Redeem your invite link via the Telegram bot or enter the code manually.",
                     actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]
                 )
-                presentControllerImpl?(alert)
+                box.present(alert)
             }
         }
     }
@@ -818,11 +848,11 @@ public func fullGramBetaActivationController(context: AccountContext) -> ViewCon
     }
 
     let controller = ItemListController(context: context, state: signal)
-    pushControllerImpl = { [weak controller] c in controller?.push(c) }
-    presentControllerImpl = { [weak controller] c in controller?.present(c, in: .window(.root)) }
-    replaceWithSettingsImpl = { [weak controller] in
+    box.pushController = { [weak controller] c in controller?.push(c) }
+    box.presentController = { [weak controller] c in controller?.present(c, in: .window(.root)) }
+    box.replaceWithSettings = { [weak controller] in
         guard let controller, let nav = controller.navigationController as? NavigationController else {
-            pushControllerImpl?(fullGramSettingsController(context: context))
+            box.push(fullGramSettingsController(context: context))
             return
         }
         var vcs = nav.viewControllers
@@ -1165,9 +1195,6 @@ func fullGramPrivacyCategoryController(context: AccountContext) -> ViewControlle
     let controller = ItemListController(context: context, state: signal)
     pushControllerImpl = { [weak controller] c in
         controller?.push(c)
-    }
-    presentControllerImpl = { [weak controller] c in
-        controller?.present(c, in: .window(.root))
     }
     return controller
 }

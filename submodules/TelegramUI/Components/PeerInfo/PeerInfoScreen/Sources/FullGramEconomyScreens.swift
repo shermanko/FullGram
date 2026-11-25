@@ -637,6 +637,11 @@ private enum FullGramGiftMarketEntry: ItemListNodeEntry {
     }
 }
 
+private struct FullGramGiftRecipient: Equatable {
+    let id: EnginePeer.Id
+    let name: String
+}
+
 public func fullGramGiftMarketController(
     context: AccountContext,
     targetPeerId: EnginePeer.Id?,
@@ -646,13 +651,12 @@ public func fullGramGiftMarketController(
     var presentControllerImpl: ((ViewController) -> Void)?
     var presentNativeImpl: ((UIViewController) -> Void)?
 
-    let recipientPromise = ValuePromise<(EnginePeer.Id, String)>(
-        (targetPeerId ?? context.account.peerId, (targetPeerId == nil || targetPeerId == context.account.peerId) ? "Себе (Избранное)" : (targetPeerName ?? "Получатель")),
-        ignoreRepeated: false
+    let initialRecipient = FullGramGiftRecipient(
+        id: targetPeerId ?? context.account.peerId,
+        name: (targetPeerId == nil || targetPeerId == context.account.peerId) ? "Себе (Избранное)" : (targetPeerName ?? "Получатель")
     )
-    let latestRecipient = Atomic<(EnginePeer.Id, String)>(
-        value: (targetPeerId ?? context.account.peerId, (targetPeerId == nil || targetPeerId == context.account.peerId) ? "Себе (Избранное)" : (targetPeerName ?? "Получатель"))
-    )
+    let recipientPromise = ValuePromise<FullGramGiftRecipient>(initialRecipient, ignoreRepeated: false)
+    let latestRecipient = Atomic<FullGramGiftRecipient>(value: initialRecipient)
 
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
@@ -676,8 +680,8 @@ public func fullGramGiftMarketController(
         guard let owned = FullGramEconomy.shared.purchaseGift(
             catalogGift: gift,
             realGiftId: realGiftId,
-            forPeerId: rec.0.toInt64(),
-            recipientName: rec.1,
+            forPeerId: rec.id.toInt64(),
+            recipientName: rec.name,
             senderName: "FullGram",
             comment: comment,
             preUpgrade: preUpgrade
@@ -704,7 +708,7 @@ public func fullGramGiftMarketController(
             slug: owned.slug,
             realGiftId: owned.realGiftId
         )
-        fullGramSendGiftPayloadMessage(account: context.account, peerId: rec.0, payload: payload)
+        fullGramSendGiftPayloadMessage(account: context.account, peerId: rec.id, payload: payload)
 
         let done = UIAlertController(
             title: owned.isUpgraded ? "🎁 NFT отправлен!" : "🎁 Подарок отправлен!",
@@ -735,7 +739,7 @@ public func fullGramGiftMarketController(
             selector.peerSelected = { [weak selector] peer, _ in
                 let isSelf = peer.id == context.account.peerId
                 let title = isSelf ? "Себе (Избранное)" : peer.compactDisplayTitle
-                let pair = (peer.id, title)
+                let pair = FullGramGiftRecipient(id: peer.id, name: title)
                 let _ = latestRecipient.swap(pair)
                 recipientPromise.set(pair)
                 selector?.dismiss()
@@ -764,7 +768,7 @@ public func fullGramGiftMarketController(
                 : ""
             let alert = UIAlertController(
                 title: "\(gift.emoji) \(gift.title) — \(gift.starsPrice) ★",
-                message: "Получатель: \(rec.1)\(upgradeNote)",
+                message: "Получатель: \(rec.name)\(upgradeNote)",
                 preferredStyle: .alert
             )
             alert.addTextField { tf in
@@ -827,7 +831,7 @@ public func fullGramGiftMarketController(
             .balanceHeader("ВАШ БАЛАНС И ПОЛУЧАТЕЛЬ"),
             .balanceRow("Звёзды FullGram", "\(FullGramEconomy.shared.starsBalance) ★"),
             .grantStars("Пополнить / выдать звёзды…"),
-            .recipientRow("Получатель подарка", rec.1),
+            .recipientRow("Получатель подарка", rec.name),
             .catalogHeader("КУПИТЬ ПОДАРОК FULLGRAM (РЕАЛЬНЫЕ ЦЕНЫ ★)")
         ]
         for (idx, pair) in catalog.enumerated() {
@@ -1150,7 +1154,7 @@ private enum FullGramGiftUpgradeEntry: ItemListNodeEntry {
         case let .upgradeCustomAction(title):
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.performCustomUpgrade)
         case let .sendCardAction(title):
-            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.sendCardAction)
+            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.sendNFTCardToChat)
         case let .transferAction(title):
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.transferGift)
         case let .pinToggle(val):

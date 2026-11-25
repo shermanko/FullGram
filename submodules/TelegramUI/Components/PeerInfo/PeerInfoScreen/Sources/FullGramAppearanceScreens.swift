@@ -3,9 +3,9 @@ import UIKit
 import UniformTypeIdentifiers
 import AsyncDisplayKit
 import Display
-import SwiftSignalKit
+@preconcurrency import SwiftSignalKit
 import TelegramCore
-import AccountContext
+@preconcurrency import AccountContext
 import ItemListUI
 import PresentationDataUtils
 import TelegramPresentationData

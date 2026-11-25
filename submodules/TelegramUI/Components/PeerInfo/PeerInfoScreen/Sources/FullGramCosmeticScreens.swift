@@ -2,11 +2,11 @@ import Foundation
 import UIKit
 import AsyncDisplayKit
 import Display
-import SwiftSignalKit
+@preconcurrency import SwiftSignalKit
 import TelegramCore
 import TelegramPresentationData
 import ItemListUI
-import AccountContext
+@preconcurrency import AccountContext
 
 // MARK: - 1. Косметика Discord: 679+ рамок аватара, кастомные рамки и 329+ анимаций открытия профиля
 

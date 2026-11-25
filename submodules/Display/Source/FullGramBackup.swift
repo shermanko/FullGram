@@ -26,8 +26,28 @@ public enum FullGramBackup {
     private static let excludedPrivacyKeys: Set<String> = [
         "fullgram.privacy.faceIdEnabled",
         "fullgram.privacy.lockedChats",
-        "fullgram.plugins.catalogURL"
+        "fullgram.plugins.catalogURL",
+        // A crafted backup must not redirect AI traffic (chat text + API key) to a foreign server
+        // or forge the local economy state.
+        "fullgram.ai.endpoint",
+        "fullgram.economy.state.v1",
+        "fullgram.economy.lastSync"
     ]
+    private static let maxBackupBytes = 8 * 1024 * 1024
+    private static let maxImportedPlugins = 200
+    private static let maxPluginCodeBytes = 256 * 1024
+
+    private static func readBackupData(url: URL) throws -> Data {
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        if size > Self.maxBackupBytes {
+            throw NSError(domain: "FullGramBackup", code: 1, userInfo: [NSLocalizedDescriptionKey: "Backup file is too large"])
+        }
+        let data = try Data(contentsOf: url)
+        if data.count > Self.maxBackupBytes {
+            throw NSError(domain: "FullGramBackup", code: 1, userInfo: [NSLocalizedDescriptionKey: "Backup file is too large"])
+        }
+        return data
+    }
     private static let antiScamWhitelistKey = "fullgram.antiscam.whitelist"
 
     public static func exportToTemporaryFile() -> URL? {
@@ -95,7 +115,7 @@ public enum FullGramBackup {
         defer {
             if accessed { url.stopAccessingSecurityScopedResource() }
         }
-        let data = try Data(contentsOf: url)
+        let data = try Self.readBackupData(url: url)
         let payload = try JSONDecoder().decode(FullGramBackupPayload.self, from: data)
         let domains = payload.stringArrayDefaults[Self.antiScamWhitelistKey] ?? []
         let totalSettings = payload.boolDefaults.count
@@ -117,7 +137,7 @@ public enum FullGramBackup {
         defer {
             if accessed { url.stopAccessingSecurityScopedResource() }
         }
-        let data = try Data(contentsOf: url)
+        let data = try Self.readBackupData(url: url)
         let payload = try JSONDecoder().decode(FullGramBackupPayload.self, from: data)
 
         var count = 0
@@ -155,13 +175,14 @@ public enum FullGramBackup {
         FullGramThemeColors.invalidateCache()
 
         var importedPlugins = 0
-        for plugin in payload.plugins {
+        for plugin in payload.plugins.prefix(Self.maxImportedPlugins) where plugin.code.utf8.count <= Self.maxPluginCodeBytes {
+            // Imported code is never auto-run: the user must enable each plugin explicitly.
             FullGramPluginManager.shared.savePlugin(
                 id: plugin.id,
                 name: plugin.name,
                 language: plugin.language,
                 code: plugin.code,
-                enabled: plugin.isEnabled
+                enabled: false
             )
             importedPlugins += 1
         }

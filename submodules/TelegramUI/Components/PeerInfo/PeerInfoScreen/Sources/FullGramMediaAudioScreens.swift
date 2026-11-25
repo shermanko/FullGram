@@ -3,12 +3,12 @@ import UIKit
 import UniformTypeIdentifiers
 import Display
 import AsyncDisplayKit
-import SwiftSignalKit
+@preconcurrency import SwiftSignalKit
 import TelegramCore
 import TelegramPresentationData
 import TelegramUIPreferences
 import ItemListUI
-import AccountContext
+@preconcurrency import AccountContext
 
 // MARK: - Category Root: Медиа и Аудио
 

@@ -3,10 +3,10 @@ import UIKit
 import AsyncDisplayKit
 import Display
 import ComponentFlow
-import SwiftSignalKit
+@preconcurrency import SwiftSignalKit
 import TelegramCore
 import TelegramPresentationData
-import AccountContext
+@preconcurrency import AccountContext
 import GiftItemComponent
 import UndoUI
 
