@@ -27,8 +27,6 @@ function invalidateMemCache(key) {
   }
 }
 
-import { CASINO_HTML } from "./casino.js";
-
 const DEFAULT_BADGES = {
   version: 1,
   roles: {
@@ -2713,18 +2711,6 @@ export default {
       } catch (err) {
         return jsonResponse({ ok: false, error: err.message }, 400);
       }
-    }
-
-    if (request.method === "GET" && path === "/casino") {
-      return new Response(CASINO_HTML, {
-        status: 200,
-        headers: {
-          "Content-Type": "text/html; charset=utf-8",
-          "Cache-Control": "no-cache",
-          "X-Content-Type-Options": "nosniff",
-          "Referrer-Policy": "no-referrer"
-        }
-      });
     }
 
     if (request.method === "GET" && path === "/config.json") {
