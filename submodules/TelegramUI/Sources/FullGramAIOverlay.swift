@@ -2329,7 +2329,7 @@ private final class FullGramNickClockGUIViewController: UIViewController {
     private let bioTemplateField = UITextField()
     private let styleControl = UISegmentedControl(items: ["Обычный", "Жирный", "Моно", "Контур", "Круг"])
     private let intervalControl = UISegmentedControl(items: ["15с", "30с", "60с", "5м"])
-    private var liveTimer: Foundation.Timer?
+    private nonisolated(unsafe) var liveTimer: Foundation.Timer?
 
     private let styleKeys = ["normal", "bold", "mono", "double", "circled"]
     private let intervalValues = [15, 30, 60, 300]
@@ -2649,9 +2649,9 @@ private final class FullGramNickClockGUIViewController: UIViewController {
             tf.placeholder = "Фамилия (необязательно)"
             tf.text = prof.lastName
         }
-        alert.addAction(UIAlertAction(title: "Сохранить", style: .default) { [weak self] _ in
-            let first = alert.textFields?.first?.text ?? ""
-            let last = alert.textFields?.last?.text ?? ""
+        alert.addAction(UIAlertAction(title: "Сохранить", style: .default) { [weak self, weak alert] _ in
+            let first = alert?.textFields?.first?.text ?? ""
+            let last = alert?.textFields?.last?.text ?? ""
             guard !first.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
             let pair = FullGramPluginManager.shared.formatNicknameTemplate("\(first) || \(last)", baseFirstName: first, baseLastName: last, style: self?.selectedStyle() ?? "normal")
             _ = FullGramPluginManager.shared.requestSetNickname(firstName: pair.firstName, lastName: pair.lastName, pluginId: "fg_nick_clock", force: true)
@@ -2749,10 +2749,10 @@ private final class FullGramDeadlinesGUIViewController: UIViewController, UITabl
         alert.addTextField { tf in
             tf.placeholder = "Задача (например: Сдать проект)"
         }
-        alert.addAction(UIAlertAction(title: "Добавить", style: .default) { [weak self] _ in
+        alert.addAction(UIAlertAction(title: "Добавить", style: .default) { [weak self, weak alert] _ in
             guard let self else { return }
-            let due = alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let task = alert.textFields?.last?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let due = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let task = alert?.textFields?.last?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !task.isEmpty else { return }
             self.items.append(DeadlineItem(due: due.isEmpty ? "Срочно" : due, task: task, done: false))
             self.saveToStorage()

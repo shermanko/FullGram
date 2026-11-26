@@ -376,8 +376,8 @@ func fullGramAntiScamController(context: AccountContext) -> ViewController {
                 let alert = UIAlertController(title: "Новый шаблон", message: "Введите фразу или регулярное выражение в формате /pattern/:", preferredStyle: .alert)
                 alert.addTextField { tf in tf.placeholder = "Например: криптосигнал или /earn.*\\$/" }
                 alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-                alert.addAction(UIAlertAction(title: "Добавить", style: .default) { _ in
-                    if let txt = alert.textFields?.first?.text {
+                alert.addAction(UIAlertAction(title: "Добавить", style: .default) { [weak alert] _ in
+                    if let txt = alert?.textFields?.first?.text {
                         FullGramAntiScam.shared.addCustomTemplate(txt)
                     }
                 })
@@ -453,8 +453,8 @@ func fullGramAntiScamController(context: AccountContext) -> ViewController {
                 tf.autocorrectionType = .no
             }
             alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            alert.addAction(UIAlertAction(title: "Проверить", style: .default) { _ in
-                let input = alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            alert.addAction(UIAlertAction(title: "Проверить", style: .default) { [weak alert] _ in
+                let input = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 guard !input.isEmpty else { return }
                 let offerVerdict = FullGramAntiScam.shared.inspectOffer(text: input, isForwarded: false, fromUnknownAuthor: false, viaBot: false, forceCheck: true)
                 let otcVerdict = FullGramAntiScam.shared.inspectOTC(text: input, forceCheck: true) ?? FullGramAntiScam.shared.inspectOTCUrl(input, forceCheck: true)

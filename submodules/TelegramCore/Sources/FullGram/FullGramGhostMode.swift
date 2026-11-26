@@ -594,7 +594,7 @@ public enum FullGramLocalPremium {
         if let state = self.states[peerId] {
             return state.local
         }
-        return FullGramExtras.shared.localPremium && self.states.keys.contains(peerId)
+        return false
     }
 
     public static func update(peerId: PeerId, local: Bool? = nil, server: Bool? = nil) {
@@ -1403,7 +1403,7 @@ public final class FullGramExtras: @unchecked Sendable {
             return bool("spoofPhotoMetadata", default: false)
         }
         set {
-            defaults.set(newValue, forKey: prefix + "spoofPhotoMetadata")
+            setBool("spoofPhotoMetadata", newValue)
             setBool("removePhotoMetadata", newValue)
         }
     }
@@ -2602,6 +2602,10 @@ public final class FullGramTransferQueue: @unchecked Sendable {
                 updatedAt: Date()
             ), at: 0)
             if self.items.count > 40 {
+                let evicted = self.items.dropFirst(40)
+                for item in evicted {
+                    self.retryCallbacks.removeValue(forKey: item.id)
+                }
                 self.items = Array(self.items.prefix(40))
             }
         }

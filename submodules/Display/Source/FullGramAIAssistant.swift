@@ -713,6 +713,16 @@ public final class FullGramAIStore {
                 }
                 return
             }
+            if !(200 ..< 300).contains(statusCode) {
+                let fallbackMsg = (json["error"] as? String)
+                    ?? (json["message"] as? String)
+                    ?? (json["detail"] as? String)
+                    ?? "Ошибка API (HTTP \(statusCode))"
+                DispatchQueue.main.async {
+                    completion(.failure(NSError(domain: "FullGramAI", code: statusCode, userInfo: [NSLocalizedDescriptionKey: fallbackMsg])))
+                }
+                return
+            }
 
             var contentText: String?
             switch provider {

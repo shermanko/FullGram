@@ -544,7 +544,7 @@ final class FullGramLyricsOverlayView: UIView {
     private var lines: [FullGramLyricsLine] = []
     private var lineViews: [FullGramKaraokeLineView] = []
     private var currentLineIndex: Int = -1
-    private var fetchDisposable = MetaDisposable()
+    private nonisolated(unsafe) let fetchDisposable = MetaDisposable()
 
     var onClose: (() -> Void)?
 

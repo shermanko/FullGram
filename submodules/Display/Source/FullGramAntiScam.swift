@@ -200,12 +200,14 @@ public final class FullGramAntiScam {
             self.raidLock.unlock()
             return
         }
+        if self.recentRuleEventKeys.count > 256 {
+            self.recentRuleEventKeys = self.recentRuleEventKeys.filter { now - $0.value < 60.0 }
+        }
         self.recentRuleEventKeys[dedupKey] = now
-        self.raidLock.unlock()
-
         var list = self.ruleEvents
         list.insert(RuleEvent(timestamp: Int32(now), chatPeerId: chatPeerId, authorId: authorId, ruleName: ruleName, detail: detail), at: 0)
         self.ruleEvents = list
+        self.raidLock.unlock()
         self.recordDetection()
     }
 
@@ -219,7 +221,14 @@ public final class FullGramAntiScam {
         var arr = self.joinTimestampsByChat[chatPeerId] ?? []
         arr.append(timestamp)
         arr = arr.filter { $0 >= cutoff }
-        self.joinTimestampsByChat[chatPeerId] = arr
+        if arr.isEmpty {
+            self.joinTimestampsByChat.removeValue(forKey: chatPeerId)
+        } else {
+            if self.joinTimestampsByChat.count > 128 {
+                self.joinTimestampsByChat = self.joinTimestampsByChat.filter { !($0.value.isEmpty) }
+            }
+            self.joinTimestampsByChat[chatPeerId] = arr
+        }
         let count = arr.count
         self.raidLock.unlock()
 
@@ -344,7 +353,9 @@ public final class FullGramAntiScam {
     }
 
     public func recordDetection() {
+        self.raidLock.lock()
         self.blockedCount += 1
+        self.raidLock.unlock()
     }
 
     private func bool(_ key: String, default fallback: Bool) -> Bool {

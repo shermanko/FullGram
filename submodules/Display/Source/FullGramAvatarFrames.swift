@@ -905,7 +905,9 @@ public enum FullGramProfileEffects {
     }
 
     public static func cachedLayerURL(effectId: String, layerIndex: Int) -> URL {
-        return self.cacheDirectory().appendingPathComponent("\(effectId)_layer\(layerIndex).png")
+        let safeId = String(effectId.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "-" ? Character($0) : "_" })
+        let token = safeId.isEmpty ? "effect" : safeId
+        return self.cacheDirectory().appendingPathComponent("\(token)_layer\(layerIndex).png")
     }
 }
 
@@ -1063,11 +1065,16 @@ public final class FullGramAnimatedImageDecoder {
     }
 
     private static func writeThumbnailPNG(_ image: CGImage, to url: URL) {
-        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {
+        let tmpURL = url.deletingLastPathComponent().appendingPathComponent(".\(UUID().uuidString).tmp.png")
+        guard let dest = CGImageDestinationCreateWithURL(tmpURL as CFURL, "public.png" as CFString, 1, nil) else {
             return
         }
         CGImageDestinationAddImage(dest, image, nil)
-        CGImageDestinationFinalize(dest)
+        if CGImageDestinationFinalize(dest) {
+            let _ = try? FileManager.default.replaceItemAt(url, withItemAt: tmpURL)
+        } else {
+            try? FileManager.default.removeItem(at: tmpURL)
+        }
     }
 
     public static func invalidate(cacheKey: String) {
@@ -1086,10 +1093,10 @@ public final class FullGramAnimatedImageDecoder {
     public static func cancelThumbnail(token: UUID?) {
         guard let token else { return }
         self.inflightLock.lock()
-        self.cancelledTokens.insert(token)
-        if self.cancelledTokens.count > 512 {
-            self.cancelledTokens.removeAll()
+        if self.cancelledTokens.count >= 512 {
+            self.cancelledTokens.removeAll(keepingCapacity: true)
         }
+        self.cancelledTokens.insert(token)
         self.inflightLock.unlock()
     }
 

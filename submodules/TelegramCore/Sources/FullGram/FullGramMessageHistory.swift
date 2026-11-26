@@ -616,7 +616,7 @@ func fullGramArchiveMessage(transaction: Transaction, mediaBox: MediaBox? = nil,
         state.remove(peerId: message.id.peerId.toInt64())
     } else if message.id.namespace != Namespaces.Message.Cloud || message.isCopyProtected() || fullGramHistoryHasExpiringAttribute(message.attributes) || !updateAllows {
         state.remove(peerId: message.id.peerId.toInt64(), messageId: message.id.id)
-    } else if shouldCapture, state.saveForBots || !isBot, contentChanged, message.text.utf8.count <= FullGramMessageHistoryState.maximumTextLength {
+    } else if shouldCapture, state.saveForBots || !isBot, contentChanged, (!message.text.isEmpty || !message.media.isEmpty), message.text.utf8.count <= FullGramMessageHistoryState.maximumTextLength {
         var attachments: [FullGramArchivedAttachment] = []
         if let mediaBox = mediaBox, fullGramPeerAllowsMediaCapture(transaction: transaction, peerId: message.id.peerId, state: state) {
             attachments = fullGramCaptureAttachments(mediaBox: mediaBox, mediaList: message.media, state: state)

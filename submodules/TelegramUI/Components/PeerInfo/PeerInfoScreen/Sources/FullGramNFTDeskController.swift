@@ -830,9 +830,9 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
             tf.keyboardType = .numberPad
             tf.placeholder = "777"
         }
-        alert.addAction(UIAlertAction(title: ru ? "Применить" : "Apply", style: .default, handler: { [weak self] _ in
+        alert.addAction(UIAlertAction(title: ru ? "Применить" : "Apply", style: .default, handler: { [weak self, weak alert] _ in
             guard let self else { return }
-            let raw = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let raw = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             if let num = Int32(raw), num >= 1 {
                 self.collectionNumber = min(9_999_999, num)
                 self.refreshPreview()
@@ -853,9 +853,9 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
             tf.text = self?.giftComment ?? ""
             tf.placeholder = ru ? "Например: С любовью от FullGram ✨" : "Optional message…"
         }
-        alert.addAction(UIAlertAction(title: ru ? "Сохранить" : "Save", style: .default, handler: { [weak self] _ in
+        alert.addAction(UIAlertAction(title: ru ? "Сохранить" : "Save", style: .default, handler: { [weak self, weak alert] _ in
             guard let self else { return }
-            self.giftComment = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            self.giftComment = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             self.refreshPreview()
         }))
         alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))

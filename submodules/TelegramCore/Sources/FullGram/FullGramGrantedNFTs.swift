@@ -354,7 +354,7 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
         }
         if item.id.hasPrefix("eco_") {
             let ecoId = String(item.id.dropFirst(4))
-            if slug.lowercased().contains(ecoId.lowercased()) {
+            if !ecoId.isEmpty && (slug.caseInsensitiveCompare(ecoId) == .orderedSame || slug.caseInsensitiveCompare("eco_\(ecoId)") == .orderedSame) {
                 return true
             }
         }

@@ -1064,7 +1064,7 @@ public final class FullGramLuaVM {
             switch op {
             case .not: return .bool(!v.isLuaTruthy)
             case .minus:
-                if case let .int(i) = v { return .int(-i) }
+                if case let .int(i) = v { return .int(0 &- i) }
                 if let d = v.asDouble { return .double(-d) }
                 return .nil
             case .hash:
@@ -1118,8 +1118,14 @@ public final class FullGramLuaVM {
                 case .plus: return .int(a &+ b)
                 case .minus: return .int(a &- b)
                 case .star: return .int(a &* b)
-                case .slashSlash: return b == 0 ? .double(Double.nan) : .int(a / b)
-                case .percent: return b == 0 ? .int(0) : .int(a % b)
+                case .slashSlash:
+                    if b == 0 { return .double(Double.nan) }
+                    if a == Int64.min && b == -1 { return .int(Int64.max) }
+                    return .int(a / b)
+                case .percent:
+                    if b == 0 { return .int(0) }
+                    if a == Int64.min && b == -1 { return .int(0) }
+                    return .int(a % b)
                 default: break
                 }
             }
@@ -1197,7 +1203,12 @@ public final class FullGramLuaVM {
         self.globalEnv.setLocal("tonumber", .function { args in
             guard let v = args.first else { return .nil }
             if let i = v.asInt, case .int = v { return .int(i) }
-            if let d = v.asDouble { return d == d.rounded() ? .int(Int64(d)) : .double(d) }
+            if let d = v.asDouble {
+                if d.isFinite && d == d.rounded(), let i = Int64(exactly: d) {
+                    return .int(i)
+                }
+                return .double(d)
+            }
             return .nil
         })
         self.globalEnv.setLocal("type", .function { args in
@@ -1332,8 +1343,16 @@ public final class FullGramLuaVM {
         // math.*
         let mathBox = FullGramPluginTableBox(dict: [
             "pi": .double(Double.pi),
-            "floor": .function { args in .int(Int64(floor(args.first?.asDouble ?? 0.0))) },
-            "ceil": .function { args in .int(Int64(ceil(args.first?.asDouble ?? 0.0))) },
+            "floor": .function { args in
+                let d = floor(args.first?.asDouble ?? 0.0)
+                if d.isFinite, let i = Int64(exactly: d) { return .int(i) }
+                return .double(d)
+            },
+            "ceil": .function { args in
+                let d = ceil(args.first?.asDouble ?? 0.0)
+                if d.isFinite, let i = Int64(exactly: d) { return .int(i) }
+                return .double(d)
+            },
             "abs": .function { args in .double(abs(args.first?.asDouble ?? 0.0)) },
             "sqrt": .function { args in .double(sqrt(args.first?.asDouble ?? 0.0)) },
             "sin": .function { args in .double(sin(args.first?.asDouble ?? 0.0)) },

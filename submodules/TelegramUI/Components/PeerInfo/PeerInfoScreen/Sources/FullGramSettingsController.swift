@@ -2856,8 +2856,15 @@ public func FullGramMediaArchiveScreen(context: AccountContext) -> ViewControlle
                         sheet?.dismissAnimated()
                         let activity = UIActivityViewController(activityItems: [url], applicationActivities: nil)
                         if let window = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).flatMap({ $0.windows }).first(where: { $0.isKeyWindow }),
-                           let root = window.rootViewController {
-                            root.present(activity, animated: true)
+                           var presenter = window.rootViewController {
+                            while let next = presenter.presentedViewController, !next.isBeingDismissed {
+                                presenter = next
+                            }
+                            if let pop = activity.popoverPresentationController {
+                                pop.sourceView = presenter.view
+                                pop.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 1.0, height: 1.0)
+                            }
+                            presenter.present(activity, animated: true)
                         }
                     }),
                     ActionSheetButtonItem(title: isRussian ? "Удалить из архива" : "Delete from archive", color: .destructive, action: { [weak sheet] in

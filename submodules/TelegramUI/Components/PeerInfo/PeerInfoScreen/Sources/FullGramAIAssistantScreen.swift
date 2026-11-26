@@ -576,8 +576,8 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
                 tf.autocorrectionType = .no
                 tf.autocapitalizationType = .none
             }
-            alert.addAction(UIAlertAction(title: "Сохранить", style: .default, handler: { _ in
-                let val = alert.textFields?.first?.text ?? ""
+            alert.addAction(UIAlertAction(title: "Сохранить", style: .default, handler: { [weak alert] _ in
+                let val = alert?.textFields?.first?.text ?? ""
                 FullGramAIKeychain.setApiKey(val, for: provider)
             }))
             alert.addAction(UIAlertAction(title: "Очистить ключ", style: .destructive, handler: { _ in
@@ -608,8 +608,8 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
                     tf.autocorrectionType = .no
                     tf.autocapitalizationType = .none
                 }
-                alert.addAction(UIAlertAction(title: "Сохранить", style: .default, handler: { _ in
-                    FullGramAIStore.shared.modelName = alert.textFields?.first?.text ?? ""
+                alert.addAction(UIAlertAction(title: "Сохранить", style: .default, handler: { [weak alert] _ in
+                    FullGramAIStore.shared.modelName = alert?.textFields?.first?.text ?? ""
                 }))
                 alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
                 presentNativeImpl?(alert)
@@ -631,8 +631,8 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
                 tf.autocorrectionType = .no
                 tf.autocapitalizationType = .none
             }
-            alert.addAction(UIAlertAction(title: "Сохранить", style: .default, handler: { _ in
-                FullGramAIStore.shared.customEndpoint = alert.textFields?.first?.text ?? ""
+            alert.addAction(UIAlertAction(title: "Сохранить", style: .default, handler: { [weak alert] _ in
+                FullGramAIStore.shared.customEndpoint = alert?.textFields?.first?.text ?? ""
             }))
             alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
             presentNativeImpl?(alert)
@@ -691,8 +691,8 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
                     tf.text = FullGramAIStore.shared.customInstructions
                     tf.placeholder = "Например: Отвечай максимально коротко по пунктам"
                 }
-                alert.addAction(UIAlertAction(title: "Сохранить", style: .default, handler: { _ in
-                    FullGramAIStore.shared.customInstructions = alert.textFields?.first?.text ?? ""
+                alert.addAction(UIAlertAction(title: "Сохранить", style: .default, handler: { [weak alert] _ in
+                    FullGramAIStore.shared.customInstructions = alert?.textFields?.first?.text ?? ""
                 }))
                 alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
                 presentNativeImpl?(alert)

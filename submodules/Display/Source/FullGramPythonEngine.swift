@@ -1053,7 +1053,7 @@ public final class FullGramPythonVM {
             let v = try self.evalExpr(inner, env: env)
             if op == .not { return .bool(!v.isTruthy) }
             if op == .minus {
-                if case let .int(i) = v { return .int(-i) }
+                if case let .int(i) = v { return .int(0 &- i) }
                 return .double(-(v.asDouble ?? 0.0))
             }
             return v
@@ -1196,10 +1196,16 @@ public final class FullGramPythonVM {
         case .slash:
             return .double((l.asDouble ?? 0) / (r.asDouble ?? 1))
         case .slashSlash:
-            if case let (.int(a), .int(b)) = (l, r), b != 0 { return .int(a / b) }
+            if case let (.int(a), .int(b)) = (l, r), b != 0 {
+                if a == Int64.min && b == -1 { return .int(Int64.max) }
+                return .int(a / b)
+            }
             return .double(floor((l.asDouble ?? 0) / (r.asDouble ?? 1)))
         case .percent:
-            if case let (.int(a), .int(b)) = (l, r), b != 0 { return .int(a % b) }
+            if case let (.int(a), .int(b)) = (l, r), b != 0 {
+                if a == Int64.min && b == -1 { return .int(0) }
+                return .int(a % b)
+            }
             return .double((l.asDouble ?? 0).truncatingRemainder(dividingBy: (r.asDouble ?? 1)))
         case .starStar:
             return .double(pow(l.asDouble ?? 0, r.asDouble ?? 0))
@@ -1524,8 +1530,16 @@ public final class FullGramPythonVM {
 
         let mathMod = FullGramPluginTableBox(dict: [
             "pi": .double(Double.pi),
-            "floor": .function { args in .int(Int64(floor(args.first?.asDouble ?? 0.0))) },
-            "ceil": .function { args in .int(Int64(ceil(args.first?.asDouble ?? 0.0))) },
+            "floor": .function { args in
+                let d = floor(args.first?.asDouble ?? 0.0)
+                if d.isFinite, let i = Int64(exactly: d) { return .int(i) }
+                return .double(d)
+            },
+            "ceil": .function { args in
+                let d = ceil(args.first?.asDouble ?? 0.0)
+                if d.isFinite, let i = Int64(exactly: d) { return .int(i) }
+                return .double(d)
+            },
             "sqrt": .function { args in .double(sqrt(args.first?.asDouble ?? 0.0)) },
             "sin": .function { args in .double(sin(args.first?.asDouble ?? 0.0)) },
             "cos": .function { args in .double(cos(args.first?.asDouble ?? 0.0)) }

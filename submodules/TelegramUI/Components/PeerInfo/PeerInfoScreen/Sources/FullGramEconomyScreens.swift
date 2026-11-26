@@ -2,12 +2,12 @@ import Foundation
 import UIKit
 import Display
 import AsyncDisplayKit
-import SwiftSignalKit
+@preconcurrency import SwiftSignalKit
 import TelegramCore
 import TelegramPresentationData
 import ItemListUI
 import PresentationDataUtils
-import AccountContext
+@preconcurrency import AccountContext
 import UndoUI
 
 // MARK: - Хаб: Кошелёк Gram, Звёзды, Подарки FullGram, Апгрейд NFT, Номера +888 и Юзернеймы
@@ -175,9 +175,11 @@ func fullGramPresentGrantEconomyMenu(
     let useAdmin = fullGramCanOpenAdmin(context: context)
 
     let showAlert: (String, String) -> Void = { title, msg in
-        let a = UIAlertController(title: title, message: msg, preferredStyle: .alert)
-        a.addAction(UIAlertAction(title: "OK", style: .default))
-        presentNative?(a)
+        DispatchQueue.main.async {
+            let a = UIAlertController(title: title, message: msg, preferredStyle: .alert)
+            a.addAction(UIAlertAction(title: "OK", style: .default))
+            presentNative?(a)
+        }
     }
 
     let sendAction: (String, Double?, String?, String?, Double?, Bool, String) -> Void = { action, amount, username, number, priceTon, isPrimary, successText in

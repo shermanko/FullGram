@@ -398,16 +398,16 @@ func fullGramBadgeDeskController(
             tf.autocorrectionType = .no
             tf.autocapitalizationType = .none
         }
-        alert.addAction(UIAlertAction(title: ru ? "Сохранить" : "Save", style: .default, handler: { _ in
-            let token = alert.textFields?.first?.text ?? ""
+        alert.addAction(UIAlertAction(title: ru ? "Сохранить" : "Save", style: .default, handler: { [weak alert] _ in
+            let token = alert?.textFields?.first?.text ?? ""
             FullGramAdmin.shared.setToken(token)
-            updateState { _ in }
+            nftTick.set(nftCounter.modify { $0 + 1 })
             onSaved?()
         }))
         if FullGramAdmin.shared.hasToken {
             alert.addAction(UIAlertAction(title: ru ? "Очистить токен" : "Clear token", style: .destructive, handler: { _ in
                 FullGramAdmin.shared.clearToken()
-                updateState { _ in }
+                nftTick.set(nftCounter.modify { $0 + 1 })
             }))
         }
         alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
@@ -1029,10 +1029,12 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
         refresh.set(tick.modify { $0 + 1 })
     }
 
-    let showAlert: (String, String) -> Void = { title, message in
-        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "OK", style: .default))
-        presenter.presentNative?(alert)
+    let showAlert: @Sendable (String, String) -> Void = { title, message in
+        DispatchQueue.main.async {
+            let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            presenter.presentNative?(alert)
+        }
     }
 
     let args = FullGramAdminPanelArguments(
@@ -1051,8 +1053,8 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
                 tf.autocorrectionType = .no
                 tf.autocapitalizationType = .none
             }
-            alert.addAction(UIAlertAction(title: ru ? "Сохранить" : "Save", style: .default, handler: { _ in
-                let raw = alert.textFields?.first?.text ?? ""
+            alert.addAction(UIAlertAction(title: ru ? "Сохранить" : "Save", style: .default, handler: { [weak alert] _ in
+                let raw = alert?.textFields?.first?.text ?? ""
                 FullGramAdmin.shared.setToken(raw)
                 bump()
                 if raw.contains("hash=") && raw.contains("user=") {
