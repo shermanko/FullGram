@@ -2078,7 +2078,7 @@ public final class FullGramPluginManager {
             }
             return dict
         }
-        let allowNetwork = !isSandboxTest && (commandsBox?.descriptor.hasNetworkPermission ?? false)
+        let allowNetwork = !isSandboxTest && (commandsBox?.descriptor.permissions.contains("net") ?? false)
         let httpGetFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
             guard let self else { return .nil }
             guard allowNetwork else {
