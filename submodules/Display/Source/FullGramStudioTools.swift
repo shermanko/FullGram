@@ -80,6 +80,7 @@ public final class FullGramDocumentViewerController: ViewController, UISearchBar
     private let thumbnailView = PDFThumbnailView()
     private lazy var webView: WKWebView = {
         let cfg = WKWebViewConfiguration()
+        cfg.defaultWebpagePreferences.allowsContentJavaScript = false
         let wv = WKWebView(frame: .zero, configuration: cfg)
         wv.navigationDelegate = self
         return wv
@@ -260,7 +261,7 @@ public final class FullGramDocumentViewerController: ViewController, UISearchBar
 
         self.spinner.startAnimating()
         self.statusLabel.text = "\(self.fileExtension.uppercased()) • \(sizeText)"
-        self.webView.loadFileURL(self.fileURL, allowingReadAccessTo: self.fileURL.deletingLastPathComponent())
+        self.webView.loadFileURL(self.fileURL, allowingReadAccessTo: self.fileURL)
 
         let ext = self.fileExtension
         let url = self.fileURL
@@ -617,7 +618,11 @@ public enum FullGramArchiveParser {
             return payload
         }
         guard entry.method == 8 else { return nil }
-        let dstCapacity = max(1, Int(entry.uncompressedSize))
+        if entry.uncompressedSize == 0 {
+            return Data()
+        }
+        let dstCapacity = Int(min(entry.uncompressedSize, UInt64(100 * 1024 * 1024)))
+        guard dstCapacity > 0 else { return nil }
         var dst = Data(count: dstCapacity)
         let decodedCount: Int = dst.withUnsafeMutableBytes { dstBuf in
             payload.withUnsafeBytes { srcBuf in
@@ -653,7 +658,9 @@ public enum FullGramArchiveParser {
             cursor += 4 // CRC32
             guard let headerSize = readVInt(data, cursor: &cursor), headerSize > 0 else { break }
             let headerStart = cursor
-            let headerEnd = min(data.count, headerStart + Int(headerSize))
+            let remaining = data.count - headerStart
+            guard headerSize <= UInt64(remaining) else { break }
+            let headerEnd = headerStart + Int(headerSize)
             guard let blockType = readVInt(data, cursor: &cursor),
                   let blockFlags = readVInt(data, cursor: &cursor) else { break }
             var dataSize: UInt64 = 0
@@ -871,7 +878,11 @@ public final class FullGramArchivePreviewController: ViewController, UITableView
                 self.allEntries = parsed.entries
                 self.filteredEntries = parsed.entries
                 let fileCount = parsed.entries.filter { !$0.isDirectory }.count
-                let totalUncompressed = parsed.entries.reduce(Int64(0)) { $0 + Int64($1.uncompressedSize) }
+                let totalUncompressed = parsed.entries.reduce(Int64(0)) { acc, entry in
+                    let clamped = Int64(clamping: entry.uncompressedSize)
+                    let (sum, overflow) = acc.addingReportingOverflow(clamped)
+                    return overflow ? Int64.max : sum
+                }
                 let sizeStr = ByteCountFormatter.string(fromByteCount: totalUncompressed, countStyle: .file)
                 let dangerousExts = ["exe", "bat", "cmd", "scr", "msi", "apk", "vbs", "ps1"]
                 let hasDangerous = parsed.entries.contains { entry in
@@ -912,7 +923,7 @@ public final class FullGramArchivePreviewController: ViewController, UITableView
                 config.image = UIImage(systemName: "folder.fill")
                 cell.accessoryType = .none
             } else {
-                let unp = ByteCountFormatter.string(fromByteCount: Int64(entry.uncompressedSize), countStyle: .file)
+                let unp = ByteCountFormatter.string(fromByteCount: Int64(clamping: entry.uncompressedSize), countStyle: .file)
                 config.secondaryText = entry.isExtractable ? "\(unp) • Нажмите для открытия" : "\(unp) • Просмотр структуры (\(self.formatLabel))"
                 config.image = UIImage(systemName: entry.isExtractable ? "doc.fill" : "lock.doc")
                 cell.accessoryType = entry.isExtractable ? .disclosureIndicator : .none

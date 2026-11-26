@@ -58,7 +58,7 @@ private final class FullGramNFTCatalogViewController: ViewController, UICollecti
     private var filteredGifts: [StarGift.Gift] = []
     private var searchQuery: String = ""
     private var activeFilter: CatalogFilter = .all
-    private var loadDisposable: Disposable?
+    private nonisolated(unsafe) var loadDisposable: Disposable?
 
     init(
         context: AccountContext,
@@ -423,7 +423,7 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
     private var collectionView: UICollectionView!
     private var headerTopConstraint: NSLayoutConstraint?
 
-    private var attributesDisposable: Disposable?
+    private nonisolated(unsafe) var attributesDisposable: Disposable?
 
     private var collectionTitle: String {
         let raw = (self.gift.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

@@ -288,6 +288,9 @@ public final class FullGramAIStore {
     }
 
     public var effectiveEndpoint: String {
+        guard self.provider == .custom else {
+            return self.provider.defaultEndpoint
+        }
         let custom = self.customEndpoint
         return custom.isEmpty ? self.provider.defaultEndpoint : custom
     }
@@ -472,7 +475,7 @@ public final class FullGramAIStore {
     // MARK: - Action Parser & Network Request
 
     public static func parseResponse(_ raw: String) -> (text: String, action: FullGramAIProposedAction?) {
-        let pattern = #"\[\[FULLGRAM_ACTION:(\{[^\n]+\})\]\]"#
+        let pattern = #"\[\[FULLGRAM_ACTION:(\{[^\n]*?\})\]\]"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else {
             return (raw.trimmingCharacters(in: .whitespacesAndNewlines), nil)
         }
@@ -621,9 +624,22 @@ public final class FullGramAIStore {
             request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
             var msgs: [[String: String]] = []
             for m in recentHistory where !m.text.isEmpty {
-                msgs.append(["role": m.isUser ? "user" : "assistant", "content": String(m.text.prefix(1600))])
+                let role = m.isUser ? "user" : "assistant"
+                let text = String(m.text.prefix(1600))
+                if msgs.isEmpty && role != "user" {
+                    continue
+                }
+                if let lastIdx = msgs.indices.last, msgs[lastIdx]["role"] == role {
+                    msgs[lastIdx]["content"] = (msgs[lastIdx]["content"] ?? "") + "\n" + text
+                } else {
+                    msgs.append(["role": role, "content": text])
+                }
             }
-            msgs.append(["role": "user", "content": composedUserMessage])
+            if let lastIdx = msgs.indices.last, msgs[lastIdx]["role"] == "user" {
+                msgs[lastIdx]["content"] = (msgs[lastIdx]["content"] ?? "") + "\n" + composedUserMessage
+            } else {
+                msgs.append(["role": "user", "content": composedUserMessage])
+            }
             bodyObj = [
                 "model": model,
                 "max_tokens": 1024,

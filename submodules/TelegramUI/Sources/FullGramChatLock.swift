@@ -11,6 +11,9 @@ final class FullGramChatLockView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        // Keep VoiceOver focus inside the lock screen; otherwise it can still
+        // reach and read the chat elements visually covered by this overlay.
+        self.accessibilityViewIsModal = true
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterial))
         blur.frame = self.bounds
         blur.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -121,23 +124,32 @@ extension ChatControllerImpl {
             var error: NSError?
             guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
                 lockView.isAuthenticating = false
-                FullGramChatPrivacy.markUnlocked(value)
-                lockView.removeFromSuperview()
+                // A missing passcode or unavailable biometric must never turn
+                // a locked chat into an unlocked one. Return to the chat list
+                // instead, where the user can configure device authentication.
+                let nav = self.effectiveNavigationController ?? (self.navigationController as? NavigationController)
+                if let nav {
+                    nav.filterController(self, animated: true)
+                } else {
+                    let _ = self.navigationController?.popViewController(animated: true)
+                }
                 return
             }
             context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: ru ? "Откройте заблокированный чат" : "Open the locked chat", reply: { success, _ in
                 DispatchQueue.main.async {
                     lockView.isAuthenticating = false
-                    if success {
+                    // Prevent background-transition race: never unlock if the app is no longer active or view detached.
+                    let canUnlock = success && UIApplication.shared.applicationState == .active && self.view.window != nil
+                    if canUnlock {
                         FullGramChatPrivacy.markUnlocked(value)
                         UIView.animate(withDuration: 0.2, animations: { lockView.alpha = 0.0 }, completion: { finished in
-                            if finished && FullGramChatPrivacy.isUnlocked(value) {
+                            if finished && FullGramChatPrivacy.isUnlocked(value) && UIApplication.shared.applicationState == .active {
                                 lockView.removeFromSuperview()
                             } else {
                                 lockView.alpha = 1.0
                             }
                         })
-                    } else {
+                    } else if !success {
                         let nav = self.effectiveNavigationController ?? (self.navigationController as? NavigationController)
                         if let nav {
                             nav.filterController(self, animated: true)

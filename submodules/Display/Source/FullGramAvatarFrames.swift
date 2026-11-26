@@ -593,12 +593,18 @@ public enum FullGramAvatarFrames {
         return dir
     }
 
+    private static func safeFileToken(_ raw: String) -> String {
+        let cleaned = raw.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "-" ? Character($0) : "_" }
+        let str = String(cleaned)
+        return str.isEmpty ? "item" : str
+    }
+
     public static func cachedDiskURL(for preset: FullGramAvatarFramePreset) -> URL {
-        return self.cacheDirectory().appendingPathComponent("\(preset.fileName).png")
+        return self.cacheDirectory().appendingPathComponent("\(Self.safeFileToken(preset.fileName)).png")
     }
 
     public static func cachedThumbnailDiskURL(for preset: FullGramAvatarFramePreset) -> URL {
-        return self.cacheDirectory().appendingPathComponent("\(preset.fileName)_thumb.png")
+        return self.cacheDirectory().appendingPathComponent("\(Self.safeFileToken(preset.fileName))_thumb.png")
     }
 
     public static func remoteURLs(for preset: FullGramAvatarFramePreset) -> [URL] {

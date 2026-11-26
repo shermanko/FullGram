@@ -41,10 +41,16 @@ final class FullGramSleepTimer {
             self.timer?.invalidate()
             self.timer = nil
             self.targetDate = nil
-            self.mode = mode
+            let normalizedMode: Mode
+            if case let .minutes(mins) = mode, mins <= 0 {
+                normalizedMode = .off
+            } else {
+                normalizedMode = mode
+            }
+            self.mode = normalizedMode
             self.lastReportedLabel = nil
 
-            if case let .minutes(mins) = mode, mins > 0 {
+            if case let .minutes(mins) = normalizedMode, mins > 0 {
                 self.targetDate = Date().addingTimeInterval(TimeInterval(mins * 60))
                 self.lastReportedLabel = self.shortLabel
                 let t = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -72,18 +78,34 @@ final class FullGramSleepTimer {
     }
 
     func handleTrackChanged() {
-        if case .endOfTrack = self.mode {
-            self.fire()
+        let apply = { [weak self] in
+            guard let self else { return }
+            if case .endOfTrack = self.mode {
+                self.fire()
+            }
+        }
+        if Thread.isMainThread {
+            apply()
+        } else {
+            DispatchQueue.main.async(execute: apply)
         }
     }
 
     private func fire() {
-        self.timer?.invalidate()
-        self.timer = nil
-        self.targetDate = nil
-        self.mode = .off
-        NotificationCenter.default.post(name: Self.didFireNotification, object: nil)
-        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        let apply = { [weak self] in
+            guard let self else { return }
+            self.timer?.invalidate()
+            self.timer = nil
+            self.targetDate = nil
+            self.mode = .off
+            NotificationCenter.default.post(name: Self.didFireNotification, object: nil)
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        }
+        if Thread.isMainThread {
+            apply()
+        } else {
+            DispatchQueue.main.async(execute: apply)
+        }
     }
 }
 

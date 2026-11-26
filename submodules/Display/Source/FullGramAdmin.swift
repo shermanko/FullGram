@@ -67,9 +67,17 @@ public final class FullGramAdmin: @unchecked Sendable {
         return str.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private let keychainLock = NSLock()
+
     private func writeKeychain(_ rawValue: String, account: String) {
+        self.keychainLock.lock()
+        defer { self.keychainLock.unlock() }
+        self.writeKeychainUnlocked(rawValue, account: account)
+    }
+
+    private func writeKeychainUnlocked(_ rawValue: String, account: String) {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.deleteKeychain(account: account)
+        self.deleteKeychainUnlocked(account: account)
         guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else {
             return
         }
@@ -80,10 +88,24 @@ public final class FullGramAdmin: @unchecked Sendable {
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
-        SecItemAdd(attrs as CFDictionary, nil)
+        let status = SecItemAdd(attrs as CFDictionary, nil)
+        if status == errSecDuplicateItem {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: self.keychainService,
+                kSecAttrAccount as String: account
+            ]
+            SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        }
     }
 
     private func deleteKeychain(account: String) {
+        self.keychainLock.lock()
+        defer { self.keychainLock.unlock() }
+        self.deleteKeychainUnlocked(account: account)
+    }
+
+    private func deleteKeychainUnlocked(account: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: self.keychainService,
@@ -120,9 +142,7 @@ public final class FullGramAdmin: @unchecked Sendable {
             self.deleteKeychain(account: self.keychainAccount)
         } else {
             self.writeKeychain(trimmed, account: self.keychainAccount)
-            if trimmed.isEmpty {
-                self.deleteKeychain(account: self.initDataAccount)
-            }
+            self.deleteKeychain(account: self.initDataAccount)
         }
     }
 
@@ -151,11 +171,11 @@ public final class FullGramAdmin: @unchecked Sendable {
 
     @discardableResult
     public func applyClientOrAdminAuthHeaders(to request: inout URLRequest, preferredClientToken: String? = nil) -> Bool {
-        if self.applyAuthHeaders(to: &request) {
-            return true
-        }
         if let preferredClientToken, !preferredClientToken.isEmpty {
             request.setValue("Bearer \(preferredClientToken)", forHTTPHeaderField: "Authorization")
+            return true
+        }
+        if self.applyAuthHeaders(to: &request) {
             return true
         }
         if let storedClient = self.readKeychain(account: self.clientSessionTokenAccount), !storedClient.isEmpty {
@@ -170,6 +190,8 @@ public final class FullGramAdmin: @unchecked Sendable {
     }
 
     private func getOrCreateDeviceSecret() -> String {
+        self.keychainLock.lock()
+        defer { self.keychainLock.unlock() }
         if let existing = self.readKeychain(account: self.deviceSecretAccount), existing.count >= 16 {
             return existing
         }
@@ -181,7 +203,7 @@ public final class FullGramAdmin: @unchecked Sendable {
         } else {
             secret = UUID().uuidString.replacingOccurrences(of: "-", with: "") + UUID().uuidString.replacingOccurrences(of: "-", with: "")
         }
-        self.writeKeychain(secret, account: self.deviceSecretAccount)
+        self.writeKeychainUnlocked(secret, account: self.deviceSecretAccount)
         return secret
     }
 
@@ -529,7 +551,7 @@ public final class FullGramAdmin: @unchecked Sendable {
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
         let payload: [String: Any] = [
-            "peerId": String(peerId),
+            "peerId": String(FullGramCloudCosmetics.normalizedPeerId(peerId)),
             "frameId": frameId ?? "",
             "nickColor": nickColor ?? "",
             "nickGlow": nickGlow
@@ -590,7 +612,7 @@ public final class FullGramAdmin: @unchecked Sendable {
     ) {
         var payload: [String: Any] = [
             "enabled": true,
-            "peerId": String(peerId),
+            "peerId": String(FullGramCloudCosmetics.normalizedPeerId(peerId)),
             "giftId": String(giftId),
             "title": title,
             "modelName": modelName,
@@ -628,7 +650,7 @@ public final class FullGramAdmin: @unchecked Sendable {
     ) {
         let payload: [String: Any] = [
             "enabled": false,
-            "peerId": String(peerId),
+            "peerId": String(FullGramCloudCosmetics.normalizedPeerId(peerId)),
             "id": entryId
         ]
         let request: URLRequest
@@ -1293,10 +1315,10 @@ public final class FullGramBetaAccess: @unchecked Sendable {
             let storedPeer = self.cachedPeerId ?? self.readKeychain(self.peerIdAccount)
             self.cachedPeerId = storedPeer
             self.lock.unlock()
-            if let storedPeer, !storedPeer.isEmpty, normId > 0 {
-                return storedPeer == String(normId)
+            guard let storedPeer, !storedPeer.isEmpty, normId > 0 else {
+                return false
             }
-            return true
+            return storedPeer == String(normId)
         }
         return false
     }

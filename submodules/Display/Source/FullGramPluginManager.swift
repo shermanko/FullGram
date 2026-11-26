@@ -832,10 +832,11 @@ public final class FullGramPluginManager {
 
     public func deletePlugin(id: String) {
         self.ensureLoaded()
+        var unloadedPlugin: FullGramLoadedPlugin?
         self.lock.lock()
         if let idx = self.descriptors.firstIndex(where: { $0.id == id }) {
             if let old = self.loaded[id], old.hasUnloadHook {
-                self.invokeLifecycleHook(plugin: old, name: "on_unload", args: [])
+                unloadedPlugin = old
             }
             let item = self.descriptors.remove(at: idx)
             let scriptURL = self.pluginsDirectoryURL.appendingPathComponent("\(item.id).\(item.language.fileExtension)")
@@ -851,6 +852,10 @@ public final class FullGramPluginManager {
             self.syncBackgroundSchedulerLocked()
         }
         self.lock.unlock()
+        // Invoke on_unload outside self.lock to prevent AB-BA deadlock with self.vmLock.
+        if let old = unloadedPlugin {
+            self.invokeLifecycleHook(plugin: old, name: "on_unload", args: [])
+        }
         self.postPluginsDidChange()
     }
 
@@ -1720,14 +1725,11 @@ public final class FullGramPluginManager {
         }
 
         let clipboardGetFn: ([FullGramPluginValue]) -> FullGramPluginValue = { _ in
-            if Thread.isMainThread {
-                return .string(UIPasteboard.general.string ?? "")
+            // Avoid DispatchQueue.main.sync while vmLock is held (deadlocks with main-thread hooks).
+            guard Thread.isMainThread else {
+                return .string("")
             }
-            var val = ""
-            DispatchQueue.main.sync {
-                val = UIPasteboard.general.string ?? ""
-            }
-            return .string(val)
+            return .string(UIPasteboard.general.string ?? "")
         }
 
         let hapticFn: ([FullGramPluginValue]) -> FullGramPluginValue = { args in
@@ -2076,8 +2078,13 @@ public final class FullGramPluginManager {
             }
             return dict
         }
+        let allowNetwork = !isSandboxTest && (commandsBox?.descriptor.hasNetworkPermission ?? false)
         let httpGetFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
             guard let self else { return .nil }
+            guard allowNetwork else {
+                self.appendLog(pluginId: pluginId, message: "BLOCKED: http_get requires @permission net")
+                return .nil
+            }
             let url = args.first?.asString ?? ""
             let headers = args.count > 1 ? extractHeaders(args[1]) : [:]
             let res = self.performSyncHTTPRequest(urlString: url, method: "GET", headers: headers, pluginId: pluginId)
@@ -2085,6 +2092,10 @@ public final class FullGramPluginManager {
         }
         let httpPostFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
             guard let self else { return .nil }
+            guard allowNetwork else {
+                self.appendLog(pluginId: pluginId, message: "BLOCKED: http_post requires @permission net")
+                return .nil
+            }
             let url = args.first?.asString ?? ""
             let body: String? = args.count > 1 ? (args[1].asString == "nil" ? nil : args[1].asString) : nil
             let headers = args.count > 2 ? extractHeaders(args[2]) : [:]
@@ -2094,6 +2105,10 @@ public final class FullGramPluginManager {
         let httpRequestFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
             guard let self, case let .table(box)? = args.first else {
                 return .table(FullGramPluginTableBox(dict: ["ok": .bool(false), "status": .int(0), "error": .string("Invalid spec")]))
+            }
+            guard allowNetwork else {
+                self.appendLog(pluginId: pluginId, message: "BLOCKED: http_request requires @permission net")
+                return .table(FullGramPluginTableBox(dict: ["ok": .bool(false), "status": .int(0), "error": .string("Missing @permission net")]))
             }
             let url = box.get(key: .string("url")).asString
             let method = box.get(key: .string("method"))
@@ -2442,6 +2457,8 @@ public final class FullGramPluginManager {
             "text": .string(text),
             "peer_id": .int(peerId)
         ])
+        self.vmLock.lock()
+        defer { self.vmLock.unlock() }
         for plugin in targets {
             do {
                 if let lua = plugin.luaVM, lua.hasFunction("on_message_action") {

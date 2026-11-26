@@ -838,7 +838,7 @@ public final class FullGramEconomy: @unchecked Sendable {
     @discardableResult
     public func buyAnonymousNumber(rawNumber: String, priceTon: Double, deductFromBalance: Bool) -> FullGramCollectibleNumber? {
         let normalized = Self.normalizeAnonymousNumber(rawNumber)
-        let cleanTon = max(0.0, priceTon)
+        let cleanTon = priceTon.isFinite ? max(0.0, priceTon) : 0.0
         self.lock.lock()
         if deductFromBalance {
             guard self.state.gramBalance + 0.000001 >= cleanTon else {
@@ -899,7 +899,7 @@ public final class FullGramEconomy: @unchecked Sendable {
     public func buyCollectibleUsername(rawUsername: String, priceTon: Double, isPrimary: Bool, deductFromBalance: Bool) -> FullGramCollectibleUsername? {
         let clean = rawUsername.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "@"))).lowercased()
         guard clean.count >= 4 else { return nil }
-        let cleanTon = max(0.0, priceTon)
+        let cleanTon = priceTon.isFinite ? max(0.0, priceTon) : 0.0
         self.lock.lock()
         if deductFromBalance {
             guard self.state.gramBalance + 0.000001 >= cleanTon else {

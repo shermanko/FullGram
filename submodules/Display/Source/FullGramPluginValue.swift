@@ -247,9 +247,8 @@ public final class FullGramPluginTableBox {
     public func get(key: FullGramPluginValue) -> FullGramPluginValue {
         switch key {
         case let .int(i):
-            let idx = Int(i) - 1 // 1-based for Lua arrays if positive
-            if idx >= 0 && idx < self.arrayPart.count {
-                return self.arrayPart[idx]
+            if i >= 1 && i <= Int64(self.arrayPart.count) {
+                return self.arrayPart[Int(i - 1)]
             }
             return self.mapPart[String(i)] ?? .nil
         case let .string(s):

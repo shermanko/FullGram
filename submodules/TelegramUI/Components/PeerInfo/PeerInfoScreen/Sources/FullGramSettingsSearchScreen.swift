@@ -772,7 +772,7 @@ func fullGramSettingsSearchController(context: AccountContext) -> ViewController
         if filtered.isEmpty {
             entries.append(.empty("Ничего не найдено.\nПопробуйте: призрак, скам, отс, офер, голос, шрифт, загрузка, плагины…"))
         } else {
-            for item in filtered {
+            for item in filtered.sorted(by: { $0.id < $1.id }) {
                 if let getter = item.isEnabled {
                     entries.append(.switchItem(item.id, item.title, getter(context)))
                 } else {

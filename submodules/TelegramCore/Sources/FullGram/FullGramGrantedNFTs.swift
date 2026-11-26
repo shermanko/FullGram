@@ -131,7 +131,7 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
     public static func candidatePeerIds(for raw: Int64) -> [Int64] {
         var ids: [Int64] = [raw]
         let u = UInt64(bitPattern: raw)
-        if raw < 0 {
+        if raw < 0, raw != Int64.min {
             let pos = abs(raw)
             if !ids.contains(pos) { ids.append(pos) }
         }
@@ -163,6 +163,9 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
             let low = u & 0xffffffff
             let high = u >> 35
             return Int64(bitPattern: (high << 32) | low)
+        }
+        if raw == Int64.min {
+            return Int64.max
         }
         return raw < 0 ? abs(raw) : raw
     }

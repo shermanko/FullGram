@@ -885,63 +885,9 @@ public enum FullGramSpeechBleep {
             }
         }
 
-        guard let url = URL(string: "https://text.pollinations.ai/openai") else {
-            deliverFormatted(fallbackSummary)
-            return
-        }
-
-        var req = URLRequest(url: url, timeoutInterval: 3.4)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let payload: [String: Any] = [
-            "model": "openai",
-            "temperature": 0.2,
-            "messages": [
-                [
-                    "role": "system",
-                    "content": "Сожми расшифровку голосового сообщения в 1-2 коротких предложения (только сама суть, факты, вопросы или договорённости, без вступлений и кавычек, на языке оригинала)."
-                ],
-                [
-                    "role": "user",
-                    "content": String(text.prefix(1500))
-                ]
-            ]
-        ]
-        req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-
-        let lock = NSLock()
-        var done = false
-        let finishOnce: (String) -> Void = { res in
-            lock.lock()
-            guard !done else {
-                lock.unlock()
-                return
-            }
-            done = true
-            lock.unlock()
-            deliverFormatted(res)
-        }
-
-        let task = URLSession.shared.dataTask(with: req) { data, _, _ in
-            if let data,
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let choices = json["choices"] as? [[String: Any]],
-               let msg = choices.first?["message"] as? [String: Any],
-               let content = msg["content"] as? String {
-                let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    finishOnce(trimmed)
-                    return
-                }
-            }
-            finishOnce(fallbackSummary)
-        }
-        task.resume()
-
-        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 3.5) {
-            task.cancel()
-            finishOnce(fallbackSummary)
-        }
+        // Use on-device extractive summary so private voice transcripts are never
+        // transmitted to a third-party AI server without explicit user consent.
+        deliverFormatted(fallbackSummary)
     }
 
     private static func buildExtractiveSummary(from text: String, words: [String]) -> String {
@@ -977,7 +923,7 @@ public enum FullGramSpeechBleep {
         sampleRate: Double = 48000.0,
         completion: @escaping @Sendable (String?) -> Void
     ) {
-        guard !samples.isEmpty else {
+        guard !samples.isEmpty, sampleRate > 0.0 else {
             completion(nil)
             return
         }

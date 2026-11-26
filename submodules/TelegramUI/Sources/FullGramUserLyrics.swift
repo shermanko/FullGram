@@ -218,7 +218,16 @@ private final class FullGramLyricsEditorViewController: UIViewController {
 
     @objc private func saveTapped() {
         let raw = self.textView.text ?? ""
-        FullGramUserLyrics.save(raw, title: self.trackTitle, artist: self.artist)
+        guard FullGramUserLyrics.save(raw, title: self.trackTitle, artist: self.artist) else {
+            let alert = UIAlertController(
+                title: "Не удалось сохранить",
+                message: "Текст слишком большой (максимум 512 КБ) или произошла ошибка записи.",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            self.present(alert, animated: true)
+            return
+        }
         self.dismiss(animated: true) { [onSaved] in
             onSaved(raw)
         }

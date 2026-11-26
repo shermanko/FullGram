@@ -1334,7 +1334,8 @@ public final class FullGramPythonVM {
                 let parts = (sep == nil || sep!.isEmpty) ? s.split(whereSeparator: { $0.isWhitespace }).map(String.init) : s.components(separatedBy: sep!)
                 return .list(parts.map { .string($0) })
             }
-            case "join": return .function { args in
+            case "join": return .function { [weak self] args in
+                guard let self else { return .string("") }
                 let items = self.iterableItems(args.first ?? .nil)
                 return .string(items.map { $0.asString }.joined(separator: s))
             }

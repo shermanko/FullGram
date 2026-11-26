@@ -786,15 +786,17 @@ public enum FullGramSilenceSkipper {
 
             while let sampleBuffer = output.copyNextSampleBuffer() {
                 if let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) {
-                    var lengthAtOffset = 0
-                    var totalLength = 0
-                    var dataPointer: UnsafeMutablePointer<Int8>?
-                    if CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0, lengthAtOffsetOut: &lengthAtOffset, totalLengthOut: &totalLength, dataPointerOut: &dataPointer) == kCMBlockBufferNoErr,
-                       let ptr = dataPointer {
-                        let count = totalLength / 2
-                        ptr.withMemoryRebound(to: Int16.self, capacity: count) { samples in
-                            for i in 0 ..< count {
-                                let norm = Double(samples[i]) / 32768.0
+                    let totalBytes = CMBlockBufferGetDataLength(blockBuffer)
+                    let sampleCountInBuf = totalBytes / 2
+                    if sampleCountInBuf > 0 {
+                        var pcm = [Int16](repeating: 0, count: sampleCountInBuf)
+                        let status = pcm.withUnsafeMutableBytes { rawBuf -> OSStatus in
+                            guard let base = rawBuf.baseAddress else { return kCMBlockBufferBadPointerParameterErr }
+                            return CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: sampleCountInBuf * 2, destination: base)
+                        }
+                        if status == kCMBlockBufferNoErr {
+                            for i in 0 ..< sampleCountInBuf {
+                                let norm = Double(pcm[i]) / 32768.0
                                 sampleAccumSq += norm * norm
                                 sampleCount += 1
                                 if sampleCount >= windowSamples {

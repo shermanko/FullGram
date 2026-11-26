@@ -215,7 +215,11 @@ final class FullGramScreenshotEditorController: UIViewController {
                 height: abs(clamped.y - start.y)
             )
             self.activePreviewLayer?.path = UIBezierPath(roundedRect: rect, cornerRadius: 6.0).cgPath
-        case .ended, .cancelled:
+        case .cancelled, .failed:
+            self.activePreviewLayer?.removeFromSuperlayer()
+            self.activePreviewLayer = nil
+            self.activeDragStart = nil
+        case .ended:
             self.activePreviewLayer?.removeFromSuperlayer()
             self.activePreviewLayer = nil
             guard let start = self.activeDragStart else { return }

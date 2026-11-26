@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import CoreImage
+import CoreText
 import CoreVideo
 import Vision
 import Display
@@ -13,6 +14,7 @@ final class FullGramRoundVideoMask {
     private let faceRequest = VNDetectFaceRectanglesRequest()
     private var faces: [CGRect] = []
     private var frameIndex = 0
+    private var emptyDetectionCount = 0
     private var cachedEmojiImage: CIImage?
     private var cachedMascotImage: CIImage?
     private var cachedScaledMascot: (size: CGFloat, image: CIImage)?
@@ -41,8 +43,14 @@ final class FullGramRoundVideoMask {
                 height: box.height * height
             ).insetBy(dx: -box.width * width * 0.18, dy: -box.height * height * 0.25)
         }
-        if !found.isEmpty || self.frameIndex % 30 == 0 {
+        if !found.isEmpty {
+            self.emptyDetectionCount = 0
             self.faces = found
+        } else {
+            self.emptyDetectionCount += 1
+            if self.emptyDetectionCount >= 8 {
+                self.faces = []
+            }
         }
     }
 
@@ -51,15 +59,33 @@ final class FullGramRoundVideoMask {
         if let cached = self.cachedEmojiImage, abs(cached.extent.width - side) < 2.0 {
             return cached
         }
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1.0
-        let image = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { _ in
-            ("😎" as NSString).draw(
-                in: CGRect(x: 0.0, y: 0.0, width: side, height: side),
-                withAttributes: [.font: UIFont.systemFont(ofSize: side * 0.85)]
-            )
+        let dim = Int(side)
+        guard dim > 0,
+              let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let cgContext = CGContext(
+                  data: nil,
+                  width: dim,
+                  height: dim,
+                  bitsPerComponent: 8,
+                  bytesPerRow: dim * 4,
+                  space: colorSpace,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else {
+            return nil
         }
-        self.cachedEmojiImage = image.cgImage.map { CIImage(cgImage: $0) }
+        let ctFont = CTFontCreateWithName("AppleColorEmoji" as CFString, side * 0.78, nil)
+        let attrs: [NSAttributedString.Key: Any] = [
+            NSAttributedString.Key(kCTFontAttributeName as String): ctFont
+        ]
+        let attrStr = NSAttributedString(string: "😎", attributes: attrs)
+        let line = CTLineCreateWithAttributedString(attrStr)
+        let bounds = CTLineGetImageBounds(line, cgContext)
+        cgContext.textPosition = CGPoint(
+            x: (side - bounds.width) * 0.5 - bounds.minX,
+            y: (side - bounds.height) * 0.5 - bounds.minY
+        )
+        CTLineDraw(line, cgContext)
+        self.cachedEmojiImage = cgContext.makeImage().map { CIImage(cgImage: $0) }
         return self.cachedEmojiImage
     }
 

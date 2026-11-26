@@ -757,7 +757,13 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
 
     let controller = ItemListController(context: context, state: signal)
     pushImpl = { [weak controller] c in controller?.push(c) }
-    presentNativeImpl = { [weak controller] vc in controller?.present(vc, animated: true) }
+    presentNativeImpl = { [weak controller] vc in
+        if let pop = vc.popoverPresentationController, let view = controller?.view {
+            pop.sourceView = view
+            pop.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1.0, height: 1.0)
+        }
+        controller?.present(vc, animated: true)
+    }
     return controller
 }
 

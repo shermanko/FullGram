@@ -45,10 +45,10 @@ enum FullGramLyricsFetcher {
         var artist = rawArtist?.replacingOccurrences(of: "_", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         if let featRegex {
             let tns = title as NSString
-            title = featRegex.stringByReplacingMatches(title, range: NSRange(location: 0, length: tns.length), withTemplate: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            title = featRegex.stringByReplacingMatches(in: title, range: NSRange(location: 0, length: tns.length), withTemplate: "").trimmingCharacters(in: .whitespacesAndNewlines)
             if let a = artist {
                 let ans = a as NSString
-                artist = featRegex.stringByReplacingMatches(a, range: NSRange(location: 0, length: ans.length), withTemplate: "").trimmingCharacters(in: .whitespacesAndNewlines)
+                artist = featRegex.stringByReplacingMatches(in: a, range: NSRange(location: 0, length: ans.length), withTemplate: "").trimmingCharacters(in: .whitespacesAndNewlines)
             }
         }
 
@@ -90,6 +90,7 @@ enum FullGramLyricsFetcher {
         self.cacheLock.lock()
         self.lyricsCache.removeValue(forKey: cacheKey)
         self.lyricsCache.removeValue(forKey: rawKey)
+        self.lyricsCacheOrder.removeAll { $0 == cacheKey || $0 == rawKey }
         self.cacheLock.unlock()
     }
 
@@ -298,8 +299,10 @@ enum FullGramLyricsFetcher {
     /// Completely free REST API without API key or rate-limit registration: https://api.lyrics.ovh/v1/{artist}/{title}
     private static func fetchLyricsOvh(title: String, artist: String?) -> Signal<FullGramLyricsResult?, NoError> {
         let artistPart = (artist?.isEmpty == false ? artist! : "Unknown")
-        guard let encodedArtist = artistPart.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-              let encodedTitle = title.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+        var segmentAllowed = CharacterSet.urlPathAllowed
+        segmentAllowed.remove(charactersIn: "/?#")
+        guard let encodedArtist = artistPart.addingPercentEncoding(withAllowedCharacters: segmentAllowed),
+              let encodedTitle = title.addingPercentEncoding(withAllowedCharacters: segmentAllowed),
               let url = URL(string: "https://api.lyrics.ovh/v1/\(encodedArtist)/\(encodedTitle)") else {
             return .single(nil)
         }
@@ -323,8 +326,13 @@ enum FullGramLyricsFetcher {
 
     private static func fetchNetEase(title: String, artist: String?, duration: Double) -> Signal<FullGramLyricsResult?, NoError> {
         let query = [artist ?? "", title].filter { !$0.isEmpty }.joined(separator: " ")
-        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let searchURL = URL(string: "https://music.163.com/api/cloudsearch/pc?s=\(encoded)&type=1&limit=3") else {
+        var components = URLComponents(string: "https://music.163.com/api/cloudsearch/pc")
+        components?.queryItems = [
+            URLQueryItem(name: "s", value: query),
+            URLQueryItem(name: "type", value: "1"),
+            URLQueryItem(name: "limit", value: "3")
+        ]
+        guard let searchURL = components?.url else {
             return .single(nil)
         }
         return Signal { subscriber in

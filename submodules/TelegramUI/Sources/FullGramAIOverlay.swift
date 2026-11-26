@@ -1180,6 +1180,7 @@ final class FullGramAIOverlayCoordinator {
     private var profileSyncDisposable: Disposable?
     private var seenAutoReplyMessageIds = Set<MessageId>()
     private var seenPluginIncomingMessageIds = Set<MessageId>()
+    private var seenAntiScamMessageIds = Set<MessageId>()
     private let coordinatorLaunchTimestamp = Int32(Date().timeIntervalSince1970)
 
     init(context: AccountContext, rootController: TelegramRootController) {
@@ -1344,10 +1345,15 @@ final class FullGramAIOverlayCoordinator {
                 guard let lastMsg = data.messages.last else { continue }
                 let peerId = lastMsg.id.peerId
 
-                // Anti-scam raid & moderation rules monitoring in groups
+                // Anti-scam raid & moderation rules monitoring in groups (deduplicated per message id)
                 if (peerId.namespace == Namespaces.Peer.CloudGroup || peerId.namespace == Namespaces.Peer.CloudChannel),
                    lastMsg.timestamp >= self.coordinatorLaunchTimestamp,
-                   lastMsg.author?.id != selfPeerId {
+                   lastMsg.author?.id != selfPeerId,
+                   self.seenAntiScamMessageIds.insert(lastMsg.id).inserted {
+                    if self.seenAntiScamMessageIds.count > 2000 {
+                        self.seenAntiScamMessageIds.removeAll(keepingCapacity: true)
+                        self.seenAntiScamMessageIds.insert(lastMsg.id)
+                    }
                     for media in lastMsg.media {
                         if let action = media as? TelegramMediaAction {
                             var joinedCount = 0
@@ -1378,7 +1384,7 @@ final class FullGramAIOverlayCoordinator {
                     ) {
                         if FullGramAntiScam.shared.ruleAutoBanInAdminGroups,
                            let authorId = lastMsg.author?.id,
-                           case let .channel(channel) = data.renderedPeer.chatMainPeer,
+                           let channel = data.renderedPeer.chatMainPeer as? TelegramChannel,
                            channel.hasPermission(.banMembers) {
                             let _ = self.context.peerChannelMemberCategoriesContextsManager.updateMemberBannedRights(
                                 engine: self.context.engine,
@@ -1386,7 +1392,7 @@ final class FullGramAIOverlayCoordinator {
                                 memberId: authorId,
                                 bannedRights: TelegramChatBannedRights(flags: [.banReadMessages], untilDate: Int32.max)
                             ).startStandalone()
-                            let title = EnginePeer(.channel(channel)).compactDisplayTitle
+                            let title = EnginePeer(channel).compactDisplayTitle
                             self.postLocalHomeNotification(title: "🛡 Авто-бан в \(title)", body: "\(ruleHit.rule): \(ruleHit.reason)")
                         }
                     }
@@ -1797,7 +1803,7 @@ final class FullGramAIOverlayCoordinator {
             while let next = presenter.presentedViewController, !next.isBeingDismissed {
                 presenter = next
             }
-            if presenter.isBeingDismissed || presenter.isBeingPresented {
+            if presenter.isBeingDismissed || presenter.isBeingPresented || presenter.presentedViewController != nil {
                 if retryCount < 4 {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { [weak self] in
                         self?.presentNativeUIKitController(vc, retryCount: retryCount + 1)
@@ -1909,7 +1915,7 @@ final class FullGramAIOverlayCoordinator {
                 let decision = FullGramPluginManager.shared.processOutgoingMessage(
                     text: commandText,
                     peerId: targetPeerRaw,
-                    isGroup: false,
+                    isGroup: peerId?.namespace == Namespaces.Peer.CloudGroup,
                     isChannel: peerId?.namespace == Namespaces.Peer.CloudChannel,
                     chatStats: chatStats
                 )
@@ -2323,7 +2329,7 @@ private final class FullGramNickClockGUIViewController: UIViewController {
     private let bioTemplateField = UITextField()
     private let styleControl = UISegmentedControl(items: ["Обычный", "Жирный", "Моно", "Контур", "Круг"])
     private let intervalControl = UISegmentedControl(items: ["15с", "30с", "60с", "5м"])
-    private var liveTimer: Timer?
+    private var liveTimer: Foundation.Timer?
 
     private let styleKeys = ["normal", "bold", "mono", "double", "circled"]
     private let intervalValues = [15, 30, 60, 300]
@@ -2981,11 +2987,11 @@ private final class FullGramPluginWebMessageHandler: NSObject, WKScriptMessageHa
         self.owner = owner
     }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        self.owner?.handleScriptMessage(message.body)
+        self.owner?.handleScriptMessage(message)
     }
 }
 
-private final class FullGramPluginWebViewController: UIViewController {
+private final class FullGramPluginWebViewController: UIViewController, WKNavigationDelegate {
     static let allowedHosts: Set<String> = [
         "fullgram.korsakovx.workers.dev"
     ]
@@ -3032,6 +3038,7 @@ private final class FullGramPluginWebViewController: UIViewController {
         config.allowsInlineMediaPlayback = true
 
         let wv = WKWebView(frame: .zero, configuration: config)
+        wv.navigationDelegate = self
         wv.translatesAutoresizingMaskIntoConstraints = false
         wv.isOpaque = false
         wv.backgroundColor = UIColor(red: 0.03, green: 0.04, blue: 0.06, alpha: 1.0)
@@ -3059,8 +3066,21 @@ private final class FullGramPluginWebViewController: UIViewController {
         }
     }
 
-    func handleScriptMessage(_ body: Any) {
-        guard let dict = body as? [String: Any], let action = dict["action"] as? String else { return }
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if let targetURL = navigationAction.request.url, Self.isAllowedURL(targetURL) {
+            decisionHandler(.allow)
+        } else {
+            decisionHandler(.cancel)
+        }
+    }
+
+    func handleScriptMessage(_ message: WKScriptMessage) {
+        guard message.frameInfo.isMainFrame,
+              let frameURL = message.frameInfo.request.url,
+              Self.isAllowedURL(frameURL) else {
+            return
+        }
+        guard let dict = message.body as? [String: Any], let action = dict["action"] as? String else { return }
         switch action {
         case "close":
             self.dismiss(animated: true)

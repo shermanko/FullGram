@@ -554,7 +554,13 @@ public func fullGramEconomyHubController(context: AccountContext) -> ViewControl
     let controller = ItemListController(context: context, state: signal)
     pushImpl = { [weak controller] c in controller?.push(c) }
     presentControllerImpl = { [weak controller] c in controller?.present(c, in: .window(.root)) }
-    presentNativeImpl = { [weak controller] vc in controller?.present(vc, animated: true) }
+    presentNativeImpl = { [weak controller] vc in
+        if let pop = vc.popoverPresentationController, let view = controller?.view {
+            pop.sourceView = view
+            pop.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1.0, height: 1.0)
+        }
+        controller?.present(vc, animated: true)
+    }
     return controller
 }
 
@@ -857,7 +863,13 @@ public func fullGramGiftMarketController(
     let controller = ItemListController(context: context, state: signal)
     pushImpl = { [weak controller] c in controller?.push(c) }
     presentControllerImpl = { [weak controller] c in controller?.present(c, in: .window(.root)) }
-    presentNativeImpl = { [weak controller] vc in controller?.present(vc, animated: true) }
+    presentNativeImpl = { [weak controller] vc in
+        if let pop = vc.popoverPresentationController, let view = controller?.view {
+            pop.sourceView = view
+            pop.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1.0, height: 1.0)
+        }
+        controller?.present(vc, animated: true)
+    }
     return controller
 }
 
@@ -1361,10 +1373,10 @@ public func fullGramGiftUpgradeController(context: AccountContext, ownedGift: Fu
         var entries: [FullGramGiftUpgradeEntry] = [
             .header("\(current.emoji) \(current.title.uppercased())"),
             .statusRow("Статус", current.isUpgraded ? "Уникальный NFT #\(current.nftNumber ?? 1)" : "Обычный подарок (\(current.priceStars) ★)"),
-            .modelRow("Модель", current.isUpgraded ? (current.modelName ?? m.0) : m.0),
-            .backdropRow("Фон (Backdrop)", current.isUpgraded ? (current.backdropName ?? b.name) : b.name),
-            .patternRow("Узор (Symbol)", current.isUpgraded ? (current.patternName ?? p.0) : p.0),
-            .numberRow("Номер экземпляра", "#\(current.isUpgraded ? (current.nftNumber ?? num) : num)")
+            .modelRow("Модель", m.0),
+            .backdropRow("Фон (Backdrop)", b.name),
+            .patternRow("Узор (Symbol)", p.0),
+            .numberRow("Номер экземпляра", "#\(num)")
         ]
 
         if current.canUpgradeToNFT && !current.isUpgraded {

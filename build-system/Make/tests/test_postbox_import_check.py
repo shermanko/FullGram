@@ -6,6 +6,7 @@ Run: python3 -m unittest discover -s build-system/Make/tests -v
 import io
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -27,7 +28,14 @@ class TreeTestCase(unittest.TestCase):
         self.allow_access()
 
     def tearDown(self):
-        shutil.rmtree(self.root)
+        # Git may mark loose objects read-only on Windows. Make temporary test
+        # repositories removable on every supported host without hiding errors
+        # from the test body itself.
+        def remove_readonly(func, path, _exc_info):
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+
+        shutil.rmtree(self.root, onerror=remove_readonly)
 
     def write(self, path, text):
         full = os.path.join(self.root, path)
@@ -174,7 +182,12 @@ class WalkTests(TreeTestCase):
         self.write('submodules/Foo/.build/checkouts/A.swift', 'import Postbox\n')
         self.write('submodules/Foo/.swiftpm/B.swift', 'import Postbox\n')
         self.write('elsewhere/C.swift', 'import Postbox\n')
-        os.symlink(os.path.join(self.root, 'elsewhere'), os.path.join(self.root, 'submodules', 'Linked'))
+        try:
+            os.symlink(os.path.join(self.root, 'elsewhere'), os.path.join(self.root, 'submodules', 'Linked'))
+        except OSError as exc:
+            # Windows requires Developer Mode or SeCreateSymbolicLinkPrivilege.
+            # The walker is still covered on hosts where symlinks are available.
+            self.skipTest(f'symlink creation is unavailable: {exc}')
         self.assertEqual(self.errors(), [])
 
     def test_files_outside_the_scan_roots_are_ignored(self):

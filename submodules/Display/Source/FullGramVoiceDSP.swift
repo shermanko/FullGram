@@ -15,7 +15,8 @@ public final class FullGramVoiceDSP {
     private var lfoPhase: Double = 0.0
     private var grainPhase: Double = 0.0
     private var lpState: Double = 0.0
-    private var warmthState: Double = 0.0
+    private var studioWarmthState: Double = 0.0
+    private var customWarmthState: Double = 0.0
 
     // Noise suppression state
     private var hpPrevX: Double = 0.0
@@ -152,9 +153,9 @@ public final class FullGramVoiceDSP {
 
             // Studio Mic mode: add broadcast vocal warmth + auto-leveler AGC
             if self.noiseMode == .studio {
-                self.warmthState += 0.18 * (y - self.warmthState)
-                let presence = y - self.warmthState
-                y = y + 0.24 * self.warmthState + 0.22 * presence
+                self.studioWarmthState += 0.18 * (y - self.studioWarmthState)
+                let presence = y - self.studioWarmthState
+                y = y + 0.24 * self.studioWarmthState + 0.22 * presence
 
                 if self.envFollower > gateThreshold * 1.2 {
                     let desiredGain = min(2.2, max(0.85, 0.32 / max(0.05, self.envFollower)))
@@ -176,15 +177,15 @@ public final class FullGramVoiceDSP {
             var x = Double(samples[i]) / 32768.0
 
             if abs(warmth) > 0.02 {
-                self.warmthState += 0.16 * (x - self.warmthState)
-                let high = x - self.warmthState
+                self.customWarmthState += 0.16 * (x - self.customWarmthState)
+                let high = x - self.customWarmthState
                 if warmth > 0.0 {
                     // Boost warm low-mids, soften harsh highs
-                    x = x + warmth * 0.65 * self.warmthState - warmth * 0.25 * high
+                    x = x + warmth * 0.65 * self.customWarmthState - warmth * 0.25 * high
                 } else {
                     // Boost crisp radio highs, trim lows
                     let amt = -warmth
-                    x = x + amt * 0.60 * high - amt * 0.30 * self.warmthState
+                    x = x + amt * 0.60 * high - amt * 0.30 * self.customWarmthState
                 }
             }
 
@@ -740,6 +741,14 @@ public final class FullGramCustomBleepRecorder: NSObject {
     private var recorder: AVAudioRecorder?
     private var timer: Timer?
     private var tempURL: URL?
+
+    deinit {
+        self.timer?.invalidate()
+        self.recorder?.stop()
+        if let url = self.tempURL {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
 
     public func toggleRecord() {
         if self.isRecording {

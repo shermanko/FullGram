@@ -217,10 +217,10 @@ private enum FullGramBadgeDeskEntry: ItemListNodeEntry {
         case .nftGrantAction: return 21
         case .nftGrantByIdAction: return 22
         case .nftGrantEconomyAction: return 23
-        case let .nftGrantedItem(idx, _, _, _): return 100 + idx
-        case .nftFooter: return 299
-        case .adminHeader: return 300
-        case .adminToken: return 301
+        case let .nftGrantedItem(idx, _, _, _): return 10_000 + idx
+        case .nftFooter: return 90_000
+        case .adminHeader: return 90_001
+        case .adminToken: return 90_002
         }
     }
 
@@ -349,7 +349,9 @@ func fullGramBadgeDeskController(
     }
     let existing = FullGramBadges.shared.rawAssignment(forPeerId: peerId, username: username)
     let defaultRoleKey: String = useSponsorMode ? (selfTier == .sponsorPlus ? "sponsor_plus" : "sponsor") : "premium"
-    let defaultRole = FullGramBadges.builtInRoles[defaultRoleKey]!
+    let defaultRole = FullGramBadges.builtInRoles[defaultRoleKey]
+        ?? FullGramBadges.builtInRoles["premium"]
+        ?? FullGramBadgeRole(label: "FullGram+", shortLabel: "FG+", emoji: "💎", color: "#AF52DE")
     let baseRoleId: String
     if let existingId = existing?.roleId, FullGramBadges.builtInRoles[existingId] != nil {
         baseRoleId = existingId
@@ -879,7 +881,13 @@ func fullGramBadgeDeskController(
 
     let controller = ItemListController(context: context, state: signal)
     presenter.controller = controller
-    presenter.presentNative = { [weak controller] vc in controller?.present(vc, animated: true) }
+    presenter.presentNative = { [weak controller] vc in
+        if let pop = vc.popoverPresentationController, let view = controller?.view {
+            pop.sourceView = view
+            pop.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1.0, height: 1.0)
+        }
+        controller?.present(vc, animated: true)
+    }
     presenter.presentController = { [weak controller] c in controller?.present(c, in: .window(.root)) }
     presenter.push = { [weak controller] c in controller?.push(c) }
     return controller
@@ -1332,7 +1340,13 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
     }
 
     let controller = ItemListController(context: context, state: signal)
-    presenter.presentNative = { [weak controller] vc in controller?.present(vc, animated: true) }
+    presenter.presentNative = { [weak controller] vc in
+        if let pop = vc.popoverPresentationController, let view = controller?.view {
+            pop.sourceView = view
+            pop.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1.0, height: 1.0)
+        }
+        controller?.present(vc, animated: true)
+    }
     presenter.push = { [weak controller] c in controller?.push(c) }
     return controller
 }

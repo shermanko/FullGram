@@ -189,11 +189,7 @@ public enum FullGramTranslationError: Error {
 }
 
 private enum FullGramCoreKeychain {
-    private static func fallbackKey(service: String, account: String) -> String {
-        return "fullgram.kc.\(service).\(account)"
-    }
-
-    static func read(service: String, account: String) -> Data? {
+    static func readWithStatus(service: String, account: String) -> (data: Data?, status: OSStatus) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -202,10 +198,15 @@ private enum FullGramCoreKeychain {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var result: AnyObject?
-        if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data {
-            return data
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecSuccess, let data = result as? Data {
+            return (data, status)
         }
-        return UserDefaults.standard.data(forKey: fallbackKey(service: service, account: account))
+        return (nil, status)
+    }
+
+    static func read(service: String, account: String) -> Data? {
+        return readWithStatus(service: service, account: account).data
     }
 
     static func write(_ data: Data, service: String, account: String) {
@@ -223,16 +224,10 @@ private enum FullGramCoreKeychain {
             var newItem = query
             newItem[kSecValueData as String] = data
             newItem[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            let addStatus = SecItemAdd(newItem as CFDictionary, nil)
-            if addStatus != errSecSuccess {
-                UserDefaults.standard.set(data, forKey: fallbackKey(service: service, account: account))
-                return
-            }
-        } else if status != errSecSuccess {
-            UserDefaults.standard.set(data, forKey: fallbackKey(service: service, account: account))
-            return
+            _ = SecItemAdd(newItem as CFDictionary, nil)
         }
-        UserDefaults.standard.removeObject(forKey: fallbackKey(service: service, account: account))
+        // Clean up any legacy plaintext fallback entry if present.
+        UserDefaults.standard.removeObject(forKey: "fullgram.kc.\(service).\(account)")
     }
 
     static func delete(service: String, account: String) {
@@ -242,7 +237,7 @@ private enum FullGramCoreKeychain {
             kSecAttrAccount as String: account
         ]
         SecItemDelete(query as CFDictionary)
-        UserDefaults.standard.removeObject(forKey: fallbackKey(service: service, account: account))
+        UserDefaults.standard.removeObject(forKey: "fullgram.kc.\(service).\(account)")
     }
 }
 
@@ -783,8 +778,8 @@ public enum FullGramChatPrivacy {
     private static var unlocked: Set<Int64> = []
     private static var migrated = false
 
-    private static func keychainRead(account: String) -> Data? {
-        return FullGramCoreKeychain.read(service: keychainService, account: account)
+    private static func keychainReadWithStatus(account: String) -> (data: Data?, status: OSStatus) {
+        return FullGramCoreKeychain.readWithStatus(service: keychainService, account: account)
     }
 
     private static func keychainWrite(_ data: Data, account: String) {
@@ -811,13 +806,18 @@ public enum FullGramChatPrivacy {
         }
     }
 
-    private static func loadLocked() -> Set<Int64> {
+    private static func loadLocked() -> (ids: Set<Int64>, authoritative: Bool) {
         migrateFromLegacyDefaultsIfNeededLocked()
-        if let data = keychainRead(account: keychainLockedAccount),
+        let res = keychainReadWithStatus(account: keychainLockedAccount)
+        if res.status == errSecSuccess, let data = res.data,
            let ids = try? JSONDecoder().decode([Int64].self, from: data) {
-            return Set(ids)
+            return (Set(ids), true)
         }
-        return []
+        if res.status == errSecItemNotFound {
+            return ([], true)
+        }
+        // Transient Keychain error (e.g. errSecInteractionNotAllowed): do not cache empty set.
+        return ([], false)
     }
 
     private static func saveLocked(_ value: Set<Int64>) {
@@ -832,12 +832,15 @@ public enum FullGramChatPrivacy {
             defer { lock.unlock() }
             migrateFromLegacyDefaultsIfNeededLocked()
             if let cached = enabledCache { return cached }
-            if let data = keychainRead(account: keychainEnabledAccount), let first = data.first {
+            let res = keychainReadWithStatus(account: keychainEnabledAccount)
+            if res.status == errSecSuccess, let data = res.data, let first = data.first {
                 let val = first != 0
                 enabledCache = val
                 return val
             }
-            enabledCache = true
+            if res.status == errSecItemNotFound {
+                enabledCache = true
+            }
             return true
         }
         set {
@@ -855,8 +858,10 @@ public enum FullGramChatPrivacy {
         defer { lock.unlock() }
         if let cached = lockedCache { return cached }
         let loaded = loadLocked()
-        lockedCache = loaded
-        return loaded
+        if loaded.authoritative {
+            lockedCache = loaded.ids
+        }
+        return loaded.ids
     }
 
     public static func isLocked(_ peerId: Int64) -> Bool {
@@ -866,7 +871,7 @@ public enum FullGramChatPrivacy {
 
     public static func setLocked(_ peerId: Int64, _ value: Bool) {
         lock.lock()
-        var set = lockedCache ?? loadLocked()
+        var set = lockedCache ?? loadLocked().ids
         if value {
             set.insert(peerId)
         } else {
@@ -2885,28 +2890,32 @@ public enum FullGramDesignWatchdog {
     /// automatically rolls back `classicDesign` to `false` so the user is never locked out of settings.
     @discardableResult
     public static func checkOnLaunch() -> Bool {
+        var didRollback = false
         self.lock.lock()
-        defer { self.lock.unlock() }
         let defaults = UserDefaults.standard
         let classicRawKey = "fullgram.extras.classicDesign"
-        guard defaults.bool(forKey: classicRawKey) else {
+        if !defaults.bool(forKey: classicRawKey) {
             defaults.set(false, forKey: self.pendingKey)
             defaults.set(0, forKey: self.launchStreakKey)
-            return false
-        }
-        let pending = defaults.bool(forKey: self.pendingKey)
-        let streak = defaults.integer(forKey: self.launchStreakKey) + 1
-        defaults.set(streak, forKey: self.launchStreakKey)
+        } else {
+            let pending = defaults.bool(forKey: self.pendingKey)
+            let streak = defaults.integer(forKey: self.launchStreakKey) + 1
+            defaults.set(streak, forKey: self.launchStreakKey)
 
-        if pending && streak >= 2 {
-            defaults.set(false, forKey: classicRawKey)
-            defaults.set(false, forKey: self.pendingKey)
-            defaults.set(0, forKey: self.launchStreakKey)
-            defaults.set(true, forKey: self.rolledBackKey)
-            FullGramExtras.shared.classicDesign = false
-            return true
+            if pending && streak >= 2 {
+                defaults.set(false, forKey: classicRawKey)
+                defaults.set(false, forKey: self.pendingKey)
+                defaults.set(0, forKey: self.launchStreakKey)
+                defaults.set(true, forKey: self.rolledBackKey)
+                didRollback = true
+            }
         }
-        return false
+        self.lock.unlock()
+        // Call outside lock so classicDesign setter -> clearPendingClassicDesign() cannot deadlock.
+        if didRollback {
+            FullGramExtras.shared.classicDesign = false
+        }
+        return didRollback
     }
 
     /// Call when Settings / FullGram Settings successfully renders.
@@ -2941,7 +2950,7 @@ public enum FullGramCacheCleaner {
             }
             let now = Date().timeIntervalSince1970
             let minElapsed: TimeInterval = intervalDays > 0 ? TimeInterval(intervalDays) * 86400.0 : 3600.0
-            if extras.lastAutoCacheCleanTimestamp > 0 && (now - extras.lastAutoCacheCleanTimestamp) < minElapsed && maxMB <= 0 {
+            if extras.lastAutoCacheCleanTimestamp > 0 && (now - extras.lastAutoCacheCleanTimestamp) < minElapsed {
                 return 0
             }
         }
@@ -2949,13 +2958,16 @@ public enum FullGramCacheCleaner {
 
         var freedBytes: Int64 = 0
         let fm = FileManager.default
-        let cutoff = intervalDays > 0 ? Date().addingTimeInterval(-TimeInterval(intervalDays) * 86400.0) : Date.distantFuture
+        let cutoff = intervalDays > 0 ? Date().addingTimeInterval(-TimeInterval(intervalDays) * 86400.0) : Date.distantPast
+        let minTempSafetyCutoff = Date().addingTimeInterval(-300.0)
 
         let tmpDir = URL(fileURLWithPath: NSTemporaryDirectory())
         if let tmpItems = try? fm.contentsOfDirectory(at: tmpDir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey], options: []) {
             for url in tmpItems {
                 let vals = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-                let ageOk = force || (vals?.contentModificationDate ?? .distantPast) < cutoff || url.lastPathComponent.hasPrefix("fg_")
+                let modDate = vals?.contentModificationDate ?? .distantPast
+                let isOlderThanSafety = modDate < minTempSafetyCutoff
+                let ageOk = force || (isOlderThanSafety && (modDate < cutoff || url.lastPathComponent.hasPrefix("fg_")))
                 if ageOk {
                     freedBytes += Int64(vals?.fileSize ?? 0)
                     try? fm.removeItem(at: url)

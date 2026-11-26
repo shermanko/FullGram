@@ -437,15 +437,21 @@ public final class FullGramAntiScam {
         if Self.officialTelegramDomains.contains(host) || Self.officialTelegramDomains.contains(where: { host.hasSuffix("." + $0) }) {
             return nil
         }
-        if !forceCheck && self.isWhitelisted(host: host) {
+        if self.isWhitelisted(host: host) {
             return nil
         }
 
         var reasons: [String] = []
         var highRisk = false
 
-        // 1. Userinfo (@) spoofing: https://t.me@evil.com
-        if url.user != nil || (trimmed.contains("@") && (trimmed.components(separatedBy: "@").first?.contains("://") == true)) {
+        // 1. Userinfo (@) spoofing: https://t.me@evil.com (only in authority, not path/query like youtube.com/@channel)
+        let authorityHasAt: Bool = {
+            guard let schemeRange = trimmed.range(of: "://") else { return false }
+            let afterScheme = trimmed[schemeRange.upperBound...]
+            let authorityEnd = afterScheme.firstIndex(where: { $0 == "/" || $0 == "?" || $0 == "#" }) ?? afterScheme.endIndex
+            return afterScheme[..<authorityEnd].contains("@")
+        }()
+        if url.user != nil || authorityHasAt {
             reasons.append("Маскировка реального домена через символ «@»")
             highRisk = true
         }

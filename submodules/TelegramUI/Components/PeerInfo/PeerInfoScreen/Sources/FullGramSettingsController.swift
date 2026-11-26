@@ -850,9 +850,9 @@ public func fullGramBetaActivationController(context: AccountContext) -> ViewCon
     let controller = ItemListController(context: context, state: signal)
     box.pushController = { [weak controller] c in controller?.push(c) }
     box.presentController = { [weak controller] c in controller?.present(c, in: .window(.root)) }
-    box.replaceWithSettings = { [weak controller] in
+    box.replaceWithSettings = { [weak controller, weak box] in
         guard let controller, let nav = controller.navigationController as? NavigationController else {
-            box.push(fullGramSettingsController(context: context))
+            box?.push(fullGramSettingsController(context: context))
             return
         }
         var vcs = nav.viewControllers
@@ -2292,15 +2292,15 @@ private enum FullGramMessageHistoryEntry: ItemListNodeEntry {
         case .dimDeleted:
             return 2
         case .dimLevel:
-            return 7
-        case .saveEdits:
             return 3
-        case .saveForBots:
+        case .saveEdits:
             return 4
-        case .restrictionBypassLink:
+        case .saveForBots:
             return 5
-        case .info:
+        case .restrictionBypassLink:
             return 6
+        case .info:
+            return 7
         case .recordsHeader:
             return 10
         case let .record(index, _, _, _, _):
@@ -3135,9 +3135,9 @@ private enum FullGramSendingEntry: ItemListNodeEntry {
         switch self {
         case .textHeader, .toggle(.quickFormattingBar, _, _), .toggle(.antiCaps, _, _), .toggle(.translateBeforeSend, _, _), .translateLanguage:
             return 0
-        case .mediaHeader, .toggle:
+        case .mediaHeader, .toggle(.audioTrimSpliceBeforeSend, _, _), .toggle(.renameFileBeforeSend, _, _), .toggle(.autoCropScreenshots, _, _), .toggle(.chooseVideoNoteCoverBeforeSend, _, _), .toggle(.editForwardedBeforeSend, _, _), .toggle(.confirmSendBeforePosting, _, _), .toggle(.confirmSendForAllChats, _, _):
             return 1
-        case .queueHeader, .openAudioStudio, .openTransferQueue, .info:
+        case .queueHeader, .toggle(.smartTransferQueue, _, _), .toggle(.autoResumeDownloadsOnReconnect, _, _), .openAudioStudio, .openTransferQueue, .info:
             return 2
         }
     }
@@ -3146,14 +3146,36 @@ private enum FullGramSendingEntry: ItemListNodeEntry {
         switch self {
         case .textHeader:
             return 0
-        case let .toggle(option, _, _):
-            return option.rawValue
+        case .toggle(.quickFormattingBar, _, _):
+            return 1
+        case .toggle(.antiCaps, _, _):
+            return 2
+        case .toggle(.translateBeforeSend, _, _):
+            return 3
         case .translateLanguage:
-            return 15
+            return 4
         case .mediaHeader:
             return 20
+        case .toggle(.audioTrimSpliceBeforeSend, _, _):
+            return 21
+        case .toggle(.renameFileBeforeSend, _, _):
+            return 22
+        case .toggle(.autoCropScreenshots, _, _):
+            return 23
+        case .toggle(.chooseVideoNoteCoverBeforeSend, _, _):
+            return 24
+        case .toggle(.editForwardedBeforeSend, _, _):
+            return 25
+        case .toggle(.confirmSendBeforePosting, _, _):
+            return 26
+        case .toggle(.confirmSendForAllChats, _, _):
+            return 27
         case .queueHeader:
             return 40
+        case .toggle(.smartTransferQueue, _, _):
+            return 41
+        case .toggle(.autoResumeDownloadsOnReconnect, _, _):
+            return 42
         case .openAudioStudio:
             return 45
         case .openTransferQueue:

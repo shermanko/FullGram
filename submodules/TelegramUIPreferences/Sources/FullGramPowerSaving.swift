@@ -73,7 +73,7 @@ public enum FullGramPowerSaving {
     public static let didChangeNotification = Notification.Name("FullGram.PowerSavingDidChange")
 
     private static let cacheLock = NSLock()
-    private static var cachedProfile: Profile?
+    private static nonisolated(unsafe) var cachedProfile: Profile?
 
     private static func key(_ suffix: String) -> String {
         return "fullgram.powerSaving.\(suffix)"
@@ -81,11 +81,10 @@ public enum FullGramPowerSaving {
 
     public static func profile() -> Profile {
         self.cacheLock.lock()
+        defer { self.cacheLock.unlock() }
         if let cached = self.cachedProfile {
-            self.cacheLock.unlock()
             return cached
         }
-        self.cacheLock.unlock()
 
         let d = UserDefaults.standard
         let def = Profile.default
@@ -105,9 +104,7 @@ public enum FullGramPowerSaving {
             onBatteryOnly: onBattery,
             limits: limits
         )
-        self.cacheLock.lock()
         self.cachedProfile = resolved
-        self.cacheLock.unlock()
         return resolved
     }
 
@@ -121,22 +118,19 @@ public enum FullGramPowerSaving {
         )
         self.cacheLock.lock()
         self.cachedProfile = normalized
-        self.cacheLock.unlock()
-
         let d = UserDefaults.standard
         d.set(normalized.mode.rawValue, forKey: key("mode"))
         d.set(normalized.threshold, forKey: key("threshold"))
         d.set(normalized.followLowPowerMode, forKey: key("followLPM"))
         d.set(normalized.onBatteryOnly, forKey: key("onBattery"))
         d.set(normalized.limits.map(\.rawValue).sorted(), forKey: key("limits"))
+        self.cacheLock.unlock()
         NotificationCenter.default.post(name: didChangeNotification, object: nil)
     }
 
     public static func reset() {
         self.cacheLock.lock()
         self.cachedProfile = nil
-        self.cacheLock.unlock()
-
         let d = UserDefaults.standard
         for suffix in ["mode", "threshold", "followLPM", "onBattery", "limits"] {
             d.removeObject(forKey: key(suffix))
@@ -144,6 +138,7 @@ public enum FullGramPowerSaving {
                 d.removeObject(forKey: "fullgram.powerSaving.\(device).\(suffix)")
             }
         }
+        self.cacheLock.unlock()
         NotificationCenter.default.post(name: didChangeNotification, object: nil)
     }
 
@@ -194,14 +189,14 @@ public enum FullGramPowerSaving {
         guard active else {
             return base
         }
-        var result = EnergyUsageSettings.default
-        result.fullTranslucency = !p.limits.contains(.translucency)
-        result.autoplayVideo = !p.limits.contains(.autoplayVideo)
-        result.autoplayGif = !p.limits.contains(.autoplayGif)
-        result.loopStickers = !p.limits.contains(.loopStickers)
-        result.loopEmoji = !p.limits.contains(.loopEmoji)
-        result.autodownloadInBackground = !p.limits.contains(.backgroundDownloads)
-        result.extendBackgroundWork = !p.limits.contains(.backgroundWork)
+        var result = base
+        if p.limits.contains(.translucency) { result.fullTranslucency = false }
+        if p.limits.contains(.autoplayVideo) { result.autoplayVideo = false }
+        if p.limits.contains(.autoplayGif) { result.autoplayGif = false }
+        if p.limits.contains(.loopStickers) { result.loopStickers = false }
+        if p.limits.contains(.loopEmoji) { result.loopEmoji = false }
+        if p.limits.contains(.backgroundDownloads) { result.autodownloadInBackground = false }
+        if p.limits.contains(.backgroundWork) { result.extendBackgroundWork = false }
         return result
     }
 }

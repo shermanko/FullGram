@@ -244,9 +244,13 @@ public enum FullGramFonts {
         guard let fileName = option.fileName else { return nil }
         if fileName.hasPrefix("custom/") {
             let rel = String(fileName.dropFirst("custom/".count))
-            return self.customDirectory().appendingPathComponent(rel)
+            let safeName = URL(fileURLWithPath: rel).lastPathComponent
+            guard !safeName.isEmpty, safeName == rel, !safeName.contains("..") else { return nil }
+            return self.customDirectory().appendingPathComponent(safeName)
         }
-        return cacheDirectory().appendingPathComponent(fileName)
+        let safeName = URL(fileURLWithPath: fileName).lastPathComponent
+        guard !safeName.isEmpty, safeName == fileName, !safeName.contains("..") else { return nil }
+        return cacheDirectory().appendingPathComponent(safeName)
     }
 
     public static func isDownloaded(_ option: Option) -> Bool {
@@ -292,7 +296,12 @@ public enum FullGramFonts {
         }
         let data: Data
         do {
-            data = try Data(contentsOf: sourceURL)
+            if let fileSize = (try? sourceURL.resourceValues(forKeys: [.fileSizeKey]).fileSize), fileSize > 25_000_000 {
+                return .failure(DownloadError.invalidFontFile)
+            }
+            let handle = try FileHandle(forReadingFrom: sourceURL)
+            defer { try? handle.close() }
+            data = try handle.read(upToCount: 25_000_001) ?? Data()
         } catch {
             return .failure(error)
         }
@@ -341,8 +350,11 @@ public enum FullGramFonts {
             records = existing
         }
         if let target = records.first(where: { $0.id == id }) {
-            let fileURL = self.customDirectory().appendingPathComponent(target.fileName)
-            try? FileManager.default.removeItem(at: fileURL)
+            let safeName = URL(fileURLWithPath: target.fileName).lastPathComponent
+            if !safeName.isEmpty && safeName == target.fileName && !safeName.contains("..") {
+                let fileURL = self.customDirectory().appendingPathComponent(safeName)
+                try? FileManager.default.removeItem(at: fileURL)
+            }
         }
         records.removeAll { $0.id == id }
         if let encoded = try? JSONEncoder().encode(records) {
@@ -434,6 +446,10 @@ public enum FullGramFonts {
         let dir = cacheDirectory()
         if let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
             for item in items {
+                // Preserve user-imported custom fonts in the `custom` subdirectory.
+                if item.lastPathComponent == "custom" {
+                    continue
+                }
                 try? FileManager.default.removeItem(at: item)
             }
         }

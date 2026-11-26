@@ -1214,13 +1214,13 @@ public final class FullGramRustVM {
             case "=": return rhs
             case "+=":
                 if case let .string(a) = cur { return .string(a + rhs.asString) }
-                if case .int = cur, case .int = rhs { return .int((cur.asInt ?? 0) + (rhs.asInt ?? 0)) }
+                if case .int = cur, case .int = rhs { return .int((cur.asInt ?? 0) &+ (rhs.asInt ?? 0)) }
                 return .double((cur.asDouble ?? 0.0) + (rhs.asDouble ?? 0.0))
             case "-=":
-                if case .int = cur, case .int = rhs { return .int((cur.asInt ?? 0) - (rhs.asInt ?? 0)) }
+                if case .int = cur, case .int = rhs { return .int((cur.asInt ?? 0) &- (rhs.asInt ?? 0)) }
                 return .double((cur.asDouble ?? 0.0) - (rhs.asDouble ?? 0.0))
             case "*=":
-                if case .int = cur, case .int = rhs { return .int((cur.asInt ?? 0) * (rhs.asInt ?? 0)) }
+                if case .int = cur, case .int = rhs { return .int((cur.asInt ?? 0) &* (rhs.asInt ?? 0)) }
                 return .double((cur.asDouble ?? 0.0) * (rhs.asDouble ?? 0.0))
             case "/=":
                 let d = rhs.asDouble ?? 0.0
@@ -1241,9 +1241,15 @@ public final class FullGramRustVM {
             let obj = try self.eval(objExpr, env: env)
             let key = try self.eval(keyExpr, env: env)
             if case let .table(box) = obj {
-                if case let .int(i) = key, Int(i) >= 0 && Int(i) < box.arrayPart.count {
-                    let cur = box.arrayPart[Int(i)]
-                    box.arrayPart[Int(i)] = combine(cur, op, rhs)
+                if case let .int(i) = key {
+                    if i >= 0 && i < Int64(box.arrayPart.count) {
+                        let idx = Int(i)
+                        let cur = box.arrayPart[idx]
+                        box.arrayPart[idx] = combine(cur, op, rhs)
+                    } else if box.arrayPart.isEmpty {
+                        let cur = box.get(key: key)
+                        box.set(key: key, value: combine(cur, op, rhs))
+                    }
                 } else {
                     let cur = box.get(key: key)
                     box.set(key: key, value: combine(cur, op, rhs))
@@ -1353,24 +1359,30 @@ public final class FullGramRustVM {
             switch op {
             case "+":
                 if case let .string(a) = l { return .string(a + r.asString) }
-                if case .int = l, case .int = r { return .int((l.asInt ?? 0) + (r.asInt ?? 0)) }
+                if case .int = l, case .int = r { return .int((l.asInt ?? 0) &+ (r.asInt ?? 0)) }
                 return .double((l.asDouble ?? 0.0) + (r.asDouble ?? 0.0))
             case "-":
-                if case .int = l, case .int = r { return .int((l.asInt ?? 0) - (r.asInt ?? 0)) }
+                if case .int = l, case .int = r { return .int((l.asInt ?? 0) &- (r.asInt ?? 0)) }
                 return .double((l.asDouble ?? 0.0) - (r.asDouble ?? 0.0))
             case "*":
-                if case .int = l, case .int = r { return .int((l.asInt ?? 0) * (r.asInt ?? 0)) }
+                if case .int = l, case .int = r { return .int((l.asInt ?? 0) &* (r.asInt ?? 0)) }
                 return .double((l.asDouble ?? 0.0) * (r.asDouble ?? 0.0))
             case "/":
                 if case .int = l, case .int = r {
+                    let li = l.asInt ?? 0
                     let ri = r.asInt ?? 0
-                    return ri == 0 ? .int(0) : .int((l.asInt ?? 0) / ri)
+                    if ri == 0 { return .int(0) }
+                    if li == Int64.min && ri == -1 { return .int(Int64.max) }
+                    return .int(li / ri)
                 }
                 let rd = r.asDouble ?? 0.0
                 return rd == 0.0 ? .double(0) : .double((l.asDouble ?? 0.0) / rd)
             case "%":
+                let li = l.asInt ?? 0
                 let ri = r.asInt ?? 0
-                return ri == 0 ? .int(0) : .int((l.asInt ?? 0) % ri)
+                if ri == 0 { return .int(0) }
+                if li == Int64.min && ri == -1 { return .int(0) }
+                return .int(li % ri)
             case "==": return .bool(Self.valuesEqual(l, r))
             case "!=": return .bool(!Self.valuesEqual(l, r))
             case "<": return .bool((l.asDouble ?? 0.0) < (r.asDouble ?? 0.0))
@@ -1380,12 +1392,14 @@ public final class FullGramRustVM {
             case "..":
                 let start = l.asInt ?? 0
                 let end = r.asInt ?? 0
-                guard end > start && (end - start) <= 10_000 else { return .table(FullGramPluginTableBox()) }
+                let (span, overflow) = end.subtractingReportingOverflow(start)
+                guard !overflow && end > start && span <= 10_000 else { return .table(FullGramPluginTableBox()) }
                 return .table(FullGramPluginTableBox(array: (start..<end).map { .int($0) }))
             case "..=":
                 let start = l.asInt ?? 0
                 let end = r.asInt ?? 0
-                guard end >= start && (end - start) <= 10_000 else { return .table(FullGramPluginTableBox()) }
+                let (span, overflow) = end.subtractingReportingOverflow(start)
+                guard !overflow && end >= start && span <= 10_000 else { return .table(FullGramPluginTableBox()) }
                 return .table(FullGramPluginTableBox(array: (start...end).map { .int($0) }))
             default:
                 return .nil
@@ -1406,8 +1420,13 @@ public final class FullGramRustVM {
             let obj = try self.eval(objExpr, env: env)
             let key = try self.eval(idxExpr, env: env)
             if case let .table(box) = obj {
-                if case let .int(i) = key, Int(i) >= 0 && Int(i) < box.arrayPart.count {
-                    return box.arrayPart[Int(i)]
+                if case let .int(i) = key {
+                    if i >= 0 && i < Int64(box.arrayPart.count) {
+                        return box.arrayPart[Int(i)]
+                    }
+                    if !box.arrayPart.isEmpty {
+                        return .nil
+                    }
                 }
                 return box.get(key: key)
             }

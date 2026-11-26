@@ -437,11 +437,22 @@ async function applySponsorChange(env, body, actingUserId) {
   let targetPeerId = rawPeer;
   if (!targetPeerId && cleanUser) {
     const badges = await loadBadges(env);
-    if (badges.usernames && badges.usernames[cleanUser]) {
-      targetPeerId = normalizePeerId(badges.usernames[cleanUser]);
+    const mappedRole = badges.usernames && badges.usernames[cleanUser];
+    if (typeof mappedRole === "string") {
+      const m = mappedRole.match(/^user_(-?\d{1,20})$/);
+      if (m) {
+        targetPeerId = normalizePeerId(m[1]);
+      } else {
+        for (const [uid, r] of Object.entries(badges.users || {})) {
+          if (r === mappedRole && /^-?\d{1,20}$/.test(uid)) {
+            targetPeerId = normalizePeerId(uid);
+            break;
+          }
+        }
+      }
     }
   }
-  if (!targetPeerId) {
+  if (!targetPeerId || !/^-?\d{1,20}$/.test(targetPeerId)) {
     throw new Error("Valid peerId or known @username is required");
   }
   const data = await loadSponsors(env);
@@ -641,11 +652,11 @@ async function applyEconomyChange(env, body, grantedBy) {
 
   if (action === "set_gram") {
     const val = Number(body.amount);
-    if (!Number.isFinite(val) || val < 0) throw new Error("Invalid gram amount");
+    if (!Number.isFinite(val) || val < 0 || val > 1e12) throw new Error("Invalid gram amount");
     userEntry.gramBalance = Math.round(val * 100) / 100;
   } else if (action === "set_stars") {
     const val = Number(body.amount);
-    if (!Number.isFinite(val) || val < 0) throw new Error("Invalid stars amount");
+    if (!Number.isFinite(val) || val < 0 || val > 1e12) throw new Error("Invalid stars amount");
     userEntry.starsBalance = Math.floor(val);
   } else if (action === "grant_username") {
     const clean = String(body.username || "").trim().replace(/^@+/, "").toLowerCase();
@@ -670,11 +681,15 @@ async function applyEconomyChange(env, body, grantedBy) {
   } else if (action === "revoke_username") {
     const clean = String(body.username || "").trim().replace(/^@+/, "").toLowerCase();
     const targetId = String(body.id || "").trim();
-    userEntry.usernames = userEntry.usernames.filter((u) => u.id !== targetId && String(u.username || "").toLowerCase() !== clean);
+    if (!clean && !targetId) throw new Error("Username or id is required");
+    userEntry.usernames = userEntry.usernames.filter((u) =>
+      (!targetId || u.id !== targetId) && (!clean || String(u.username || "").toLowerCase() !== clean)
+    );
   } else if (action === "grant_number") {
     const rawNum = String(body.number || "").trim();
     if (!rawNum) throw new Error("Invalid number");
     const digits = rawNum.replace(/\D/g, "");
+    if (!digits) throw new Error("Invalid number");
     let core = digits.startsWith("888") ? digits.slice(3) : digits;
     if (core.length < 4) core = core.padEnd(8, "0");
     if (core.length > 8) core = core.slice(0, 8);
@@ -694,12 +709,19 @@ async function applyEconomyChange(env, body, grantedBy) {
   } else if (action === "revoke_number") {
     const targetId = String(body.id || "").trim();
     const rawNumber = String(body.number || "").trim();
-    userEntry.numbers = userEntry.numbers.filter((n) => n.id !== targetId && (!rawNumber || String(n.number || "").trim() !== rawNumber));
+    if (!targetId && !rawNumber) throw new Error("Number or id is required");
+    userEntry.numbers = userEntry.numbers.filter((n) =>
+      (!targetId || n.id !== targetId) && (!rawNumber || String(n.number || "").trim() !== rawNumber)
+    );
   } else if (action === "toggle_username") {
     const clean = String(body.username || "").trim().replace(/^@+/, "").toLowerCase();
     const targetId = String(body.id || "").trim();
     const makeActive = body.isActive !== undefined ? Boolean(body.isActive) : null;
     const makePrimary = body.isPrimary !== undefined ? Boolean(body.isPrimary) : null;
+    const hasTarget = userEntry.usernames.some((u) =>
+      (targetId && u.id === targetId) || (clean && String(u.username || "").toLowerCase() === clean)
+    );
+    if (!hasTarget) throw new Error("Username not found");
     userEntry.usernames = userEntry.usernames.map((u) => {
       const match = (targetId && u.id === targetId) || (clean && String(u.username || "").toLowerCase() === clean);
       if (!match) {
@@ -713,6 +735,10 @@ async function applyEconomyChange(env, body, grantedBy) {
     const targetId = String(body.id || "").trim();
     const rawNumber = String(body.number || "").trim();
     const makeActive = body.isActive !== undefined ? Boolean(body.isActive) : null;
+    const hasTarget = userEntry.numbers.some((n) =>
+      (targetId && n.id === targetId) || (rawNumber && String(n.number || "").trim() === rawNumber)
+    );
+    if (!hasTarget) throw new Error("Number not found");
     userEntry.numbers = userEntry.numbers.map((n) => {
       const match = (targetId && n.id === targetId) || (rawNumber && String(n.number || "").trim() === rawNumber);
       if (!match) {
@@ -771,7 +797,11 @@ async function applyEconomyChange(env, body, grantedBy) {
     if (!toPeerId || !/^-?\d{1,20}$/.test(toPeerId) || toPeerId === peerId || !Number.isFinite(amount) || amount <= 0) {
       throw new Error("Invalid transfer parameters");
     }
-    userEntry.gramBalance = Math.max(0, Math.round((userEntry.gramBalance - amount) * 100) / 100);
+    const sourceBalance = Number(userEntry.gramBalance);
+    if (!Number.isFinite(sourceBalance) || amount > sourceBalance + 0.000001) {
+      throw new Error("Insufficient Gram balance");
+    }
+    userEntry.gramBalance = Math.round((sourceBalance - amount) * 100) / 100;
     const dst = eco.users[toPeerId] && typeof eco.users[toPeerId] === "object"
       ? {
           gramBalance: Number(eco.users[toPeerId].gramBalance || 0),
@@ -788,7 +818,11 @@ async function applyEconomyChange(env, body, grantedBy) {
     if (!toPeerId || !/^-?\d{1,20}$/.test(toPeerId) || toPeerId === peerId || !Number.isFinite(amount) || amount <= 0) {
       throw new Error("Invalid transfer parameters");
     }
-    userEntry.starsBalance = Math.max(0, Math.floor(userEntry.starsBalance - amount));
+    const sourceBalance = Number(userEntry.starsBalance);
+    if (!Number.isSafeInteger(sourceBalance) || sourceBalance < amount) {
+      throw new Error("Insufficient Stars balance");
+    }
+    userEntry.starsBalance = sourceBalance - amount;
     const dst = eco.users[toPeerId] && typeof eco.users[toPeerId] === "object"
       ? {
           gramBalance: Number(eco.users[toPeerId].gramBalance || 0),
@@ -1405,6 +1439,15 @@ function renderBetaLandingHtml(code, origin, inviteStatus = null, options = {}) 
         });
       }
 
+      function escHtml(s) {
+        return String(s == null ? "" : s)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
       function showAlert(el, ok, html) {
         if (!el) return;
         el.className = "alert show " + (ok ? "ok" : "err");
@@ -1443,7 +1486,7 @@ function renderBetaLandingHtml(code, origin, inviteStatus = null, options = {}) 
                 showAlert(
                   resultBox,
                   true,
-                  "✅ <b>Бета-доступ активирован для ID " + data.peerId + "!</b><br>Теперь откройте FullGram под этим аккаунтом — функции разблокируются автоматически."
+                  "✅ <b>Бета-доступ активирован для ID " + escHtml(data.peerId) + "!</b><br>Теперь откройте FullGram под этим аккаунтом — функции разблокируются автоматически."
                 );
                 if (statusPill) {
                   statusPill.className = "pill ok";
@@ -1454,7 +1497,7 @@ function renderBetaLandingHtml(code, origin, inviteStatus = null, options = {}) 
                   openAppLink.textContent = "🚀 Открыть FullGram и синхронизировать";
                 }
               } else {
-                showAlert(resultBox, false, "❌ " + ((data && data.error) || "Не удалось активировать код."));
+                showAlert(resultBox, false, "❌ " + escHtml((data && data.error) || "Не удалось активировать код."));
               }
             })
             .catch(function() {
@@ -1483,9 +1526,9 @@ function renderBetaLandingHtml(code, origin, inviteStatus = null, options = {}) 
               checkBtn.disabled = false;
               checkBtn.textContent = "🔍 Проверить статус бета-доступа";
               if (data && data.active) {
-                showAlert(checkResultBox, true, "✅ <b>Доступ активен!</b> Аккаунт <b>" + data.peerId + "</b> состоит в закрытом бета-тесте FullGram.");
+                showAlert(checkResultBox, true, "✅ <b>Доступ активен!</b> Аккаунт <b>" + escHtml(data.peerId) + "</b> состоит в закрытом бета-тесте FullGram.");
               } else {
-                showAlert(checkResultBox, false, "ℹ️ Для аккаунта <b>" + peerId + "</b> бета-доступ ещё не активирован. Перейдите на вкладку «Активация по коду».");
+                showAlert(checkResultBox, false, "ℹ️ Для аккаунта <b>" + escHtml(peerId) + "</b> бета-доступ ещё не активирован. Перейдите на вкладку «Активация по коду».");
               }
             })
             .catch(function() {
@@ -1921,7 +1964,9 @@ function escapeHtml(str) {
   return String(str || "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function adminBotKeyboard() {
@@ -2675,7 +2720,9 @@ export default {
         status: 200,
         headers: {
           "Content-Type": "text/html; charset=utf-8",
-          "Cache-Control": "no-cache"
+          "Cache-Control": "no-cache",
+          "X-Content-Type-Options": "nosniff",
+          "Referrer-Policy": "no-referrer"
         }
       });
     }
@@ -2729,8 +2776,8 @@ export default {
     }
 
     if (request.method === "GET" && path.startsWith("/frames/")) {
-      const fileName = path.slice("/frames/".length).replace(/[^a-zA-Z0-9._-]/g, "");
-      if (!fileName || !env.FULLGRAM_KV) {
+      const fileName = path.slice("/frames/".length).trim();
+      if (!/^[a-zA-Z0-9_-]+\.(?:png|gif)$/.test(fileName) || !env.FULLGRAM_KV) {
         return new Response("Not found", { status: 404 });
       }
       const raw = await env.FULLGRAM_KV.get(`custom_frame:${fileName}`, "arrayBuffer");
@@ -2857,10 +2904,10 @@ export default {
         let peerId = normalizePeerId(body.peerId != null ? String(body.peerId).trim() : "");
         let verifiedUsername = "";
         if (typeof body.initData === "string" && body.initData.trim() && env.TG_BOT_TOKEN) {
-          const verified = await verifyTelegramInitData(body.initData.trim(), env.TG_BOT_TOKEN);
-          if (verified?.user?.id != null) {
-            peerId = normalizePeerId(String(verified.user.id));
-            verifiedUsername = String(verified.user.username || "");
+          const verified = await verifyTelegramInitData(body.initData.trim(), env);
+          if (verified?.uid) {
+            peerId = normalizePeerId(String(verified.uid));
+            verifiedUsername = String(verified.username || "");
           }
         }
         if (!rawCode || !peerId || !/^-?\d{4,20}$/.test(peerId)) {
@@ -2914,7 +2961,9 @@ export default {
         status: 200,
         headers: {
           "Content-Type": "text/html; charset=utf-8",
-          "Cache-Control": "no-store"
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff",
+          "Referrer-Policy": "no-referrer"
         }
       });
     }
@@ -3057,8 +3106,8 @@ export default {
           return jsonResponse({ ok: false, error: "Forbidden" }, 403);
         }
         const b64 = String(body.imageBase64 || "").trim();
-        if (!b64) {
-          return jsonResponse({ ok: false, error: "imageBase64 required" }, 400);
+        if (!b64 || b64.length > 2200000) {
+          return jsonResponse({ ok: false, error: "imageBase64 required (max 1.5 MB)" }, 400);
         }
         const binStr = atob(b64);
         if (binStr.length < 32 || binStr.length > 1600 * 1024) {
@@ -3068,7 +3117,18 @@ export default {
         for (let i = 0; i < binStr.length; i++) {
           bytes[i] = binStr.charCodeAt(i);
         }
-        const ext = String(body.ext || "png").toLowerCase() === "gif" ? "gif" : "png";
+        const isPng =
+          bytes.length >= 8 &&
+          bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
+          bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a;
+        const isGif =
+          bytes.length >= 6 &&
+          bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38 &&
+          (bytes[4] === 0x37 || bytes[4] === 0x39) && bytes[5] === 0x61;
+        if (!isPng && !isGif) {
+          return jsonResponse({ ok: false, error: "Only valid PNG or GIF images are allowed" }, 400);
+        }
+        const ext = isGif ? "gif" : "png";
         const keyId = `u_${requestedPeerId}_${Date.now().toString(36)}.${ext}`;
         await env.FULLGRAM_KV.put(`custom_frame:${keyId}`, bytes.buffer);
         const frameUrl = `${url.origin}/frames/${keyId}`;
@@ -3228,7 +3288,7 @@ export default {
     if (request.method === "GET" && path.startsWith("/scripts/")) {
       const filePart = path.slice("/scripts/".length);
       const id = filePart.replace(/\.(lua|py)$/i, "");
-      if (!id || id.includes("/")) {
+      if (!/^[a-zA-Z0-9_-]{1,64}$/.test(id)) {
         return new Response("Not Found", { status: 404 });
       }
       const builtin = DEFAULT_PLUGINS.plugins.find((p) => p.id === id);
@@ -3243,7 +3303,8 @@ export default {
         status: 200,
         headers: {
           "Content-Type": "text/plain; charset=utf-8",
-          "Cache-Control": "no-store"
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff"
         }
       });
     }
@@ -3260,10 +3321,11 @@ export default {
       }
 
       if (request.method === "GET" && path === "/admin/badge") {
-        const peerId = (url.searchParams.get("peerId") || "").trim();
+        const rawPeerId = (url.searchParams.get("peerId") || "").trim();
+        const peerId = normalizePeerId(rawPeerId);
         const username = (url.searchParams.get("username") || "").trim().replace(/^@+/, "").toLowerCase();
         const badges = await loadBadges(env);
-        let roleId = peerId ? badges.users[peerId] : null;
+        let roleId = peerId ? (badges.users[peerId] || badges.users[rawPeerId]) : null;
         if (!roleId && username) roleId = badges.usernames[username];
         const role = roleId ? badges.roles[roleId] || null : null;
         return jsonResponse({ ok: true, enabled: Boolean(role), roleId, role, roles: badges.roles });

@@ -46,7 +46,7 @@ private final class FullGramAvatarFramesViewController: ViewController, UITextFi
     private var activeTab: CosmeticsTab = .frames
     private var selectedCategory: String = "Все"
     private var searchQuery: String = ""
-    private var searchWorkItem: DispatchWorkItem?
+    private nonisolated(unsafe) var searchWorkItem: DispatchWorkItem?
     private var filteredFrames: [FullGramAvatarFramePreset] = []
     private var filteredEffects: [FullGramProfileEffectPreset] = []
     private var categoryButtons: [(category: String, button: UIButton)] = []

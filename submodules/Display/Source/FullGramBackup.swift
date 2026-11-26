@@ -27,9 +27,19 @@ public enum FullGramBackup {
         "fullgram.privacy.faceIdEnabled",
         "fullgram.privacy.lockedChats",
         "fullgram.plugins.catalogURL",
-        // A crafted backup must not redirect AI traffic (chat text + API key) to a foreign server
-        // or forge the local economy state.
+        // A crafted backup must not redirect AI/badge traffic to a foreign server,
+        // disable Anti-Scam protections, inject prompts/regexes/font paths, or forge economy state.
         "fullgram.ai.endpoint",
+        "fullgram.ai.customPrompt",
+        "fullgram.badges.url",
+        "fullgram.appearance.customFonts",
+        "fullgram.antiscam.enabled",
+        "fullgram.antiscam.checkLinks",
+        "fullgram.antiscam.protectDangerFiles",
+        "fullgram.antiscam.markScamMessages",
+        "fullgram.antiscam.antiOffer",
+        "fullgram.antiscam.antiOtc",
+        "fullgram.antiscam.ruleTemplates",
         "fullgram.economy.state.v1",
         "fullgram.economy.lastSync"
     ]
@@ -42,7 +52,9 @@ public enum FullGramBackup {
         if size > Self.maxBackupBytes {
             throw NSError(domain: "FullGramBackup", code: 1, userInfo: [NSLocalizedDescriptionKey: "Backup file is too large"])
         }
-        let data = try Data(contentsOf: url)
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let data = try handle.read(upToCount: Self.maxBackupBytes + 1) ?? Data()
         if data.count > Self.maxBackupBytes {
             throw NSError(domain: "FullGramBackup", code: 1, userInfo: [NSLocalizedDescriptionKey: "Backup file is too large"])
         }

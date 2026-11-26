@@ -314,7 +314,7 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                         let _ = (params.context.engine.resources.data(id: EngineMediaResource.Id(file.resource.id))
                         |> filter { data in
                             if isArchive {
-                                return data.isComplete || data.size >= minBytesForPreview
+                                return data.isComplete || data.availableSize >= minBytesForPreview
                             }
                             return data.isComplete
                         }

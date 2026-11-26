@@ -99,6 +99,9 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
             let high = u >> 35
             return Int64(bitPattern: (high << 32) | low)
         }
+        if raw == Int64.min {
+            return Int64.max
+        }
         return raw < 0 ? abs(raw) : raw
     }
 
@@ -182,8 +185,15 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
         let cleanedUrl = customFrameUrl?.trimmingCharacters(in: .whitespacesAndNewlines)
         entry.customFrameUrl = (cleanedUrl?.isEmpty == false) ? cleanedUrl : nil
         self.saveLocal(entry, forPeerId: norm)
-        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
-        NotificationCenter.default.post(name: FullGramAvatarFrames.didChangeNotification, object: nil)
+        if Thread.isMainThread {
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+            NotificationCenter.default.post(name: FullGramAvatarFrames.didChangeNotification, object: nil)
+        } else {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+                NotificationCenter.default.post(name: FullGramAvatarFrames.didChangeNotification, object: nil)
+            }
+        }
         self.pushToCloud(peerId: norm, entry: entry)
     }
 
