@@ -17,19 +17,30 @@ enum FullGramProfanityBleep {
         }
         let voiceMode = FullGramVoiceMode.current
         let noiseMode = FullGramNoiseReductionMode.current
+        let requiresVoicePrivacy = voiceMode != .off || noiseMode != .off
         return Signal { subscriber in
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("fullgram_bleep_\(Int64.random(in: 1 ... Int64.max)).ogg")
             guard (try? data.compressedData.write(to: url)) != nil, let decodedSamples = decode(path: url.path) else {
                 try? FileManager.default.removeItem(at: url)
-                subscriber.putNext(data)
+                // Fail closed when voice disguise is enabled so raw voice is never leaked.
+                subscriber.putNext(requiresVoicePrivacy ? nil : data)
                 subscriber.putCompletion()
                 return EmptyDisposable
             }
             try? FileManager.default.removeItem(at: url)
 
-            // Recognize profanity on the clean, natural human voice BEFORE applying voice changer effects.
-            FullGramSpeechBleep.recognizeSamples(decodedSamples, sampleRate: opusSampleRate) { ranges in
-                guard !ranges.isEmpty || voiceMode != .off || noiseMode != .off else {
+            let completionLock = NSLock()
+            var finished = false
+            let emitProcessed: ([ClosedRange<Double>]) -> Void = { ranges in
+                completionLock.lock()
+                if finished {
+                    completionLock.unlock()
+                    return
+                }
+                finished = true
+                completionLock.unlock()
+
+                guard !ranges.isEmpty || requiresVoicePrivacy else {
                     subscriber.putNext(data)
                     subscriber.putCompletion()
                     return
@@ -37,7 +48,7 @@ enum FullGramProfanityBleep {
                 var samples = decodedSamples
                 samples.withUnsafeMutableBufferPointer { buf in
                     guard let base = buf.baseAddress else { return }
-                    if voiceMode != .off || noiseMode != .off {
+                    if requiresVoicePrivacy {
                         let dsp = FullGramVoiceDSP(mode: voiceMode, noiseMode: noiseMode, sampleRate: opusSampleRate)
                         dsp.process(base, count: buf.count)
                     }
@@ -48,28 +59,46 @@ enum FullGramProfanityBleep {
                 if let encoded = encode(samples) {
                     subscriber.putNext(RecordedAudioData(compressedData: encoded, resumeData: nil, duration: data.duration, waveform: data.waveform, trimRange: data.trimRange))
                 } else {
-                    subscriber.putNext(data)
+                    subscriber.putNext(requiresVoicePrivacy ? nil : data)
                 }
                 subscriber.putCompletion()
             }
-            return EmptyDisposable
+
+            let timeoutWork = DispatchWorkItem {
+                // On timeout, still apply Voice Changer / Noise Reduction DSP so real voice is never sent raw.
+                emitProcessed([])
+            }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 12.0, execute: timeoutWork)
+
+            // Recognize profanity on the clean, natural human voice BEFORE applying voice changer effects.
+            FullGramSpeechBleep.recognizeSamples(decodedSamples, sampleRate: opusSampleRate) { ranges in
+                timeoutWork.cancel()
+                emitProcessed(ranges)
+            }
+            return ActionDisposable {
+                timeoutWork.cancel()
+                completionLock.lock()
+                finished = true
+                completionLock.unlock()
+            }
         }
         |> runOn(Queue.concurrentDefaultQueue())
-        |> timeout(12.0, queue: .concurrentDefaultQueue(), alternate: .single(data))
     }
 
     /// OggOpusReader (`op_read`) decodes Opus at 48,000 Hz mono Int16, matching TGOggOpusWriter's 48,000 Hz input rate.
+    /// Capped at 10 minutes (28.8M samples ~ 57 MB) to prevent OOM on very long voice messages.
     private static func decode(path: String) -> [Int16]? {
         guard let reader = OggOpusReader(path: path) else { return nil }
+        let maxSamples = 48_000 * 600
         var result: [Int16] = []
         var buffer = [Int16](repeating: 0, count: 5760)
-        while true {
+        while result.count < maxSamples {
             let capacity = Int32(buffer.count)
             let read = buffer.withUnsafeMutableBytes { raw in
                 reader.read(raw.baseAddress!, bufSize: capacity)
             }
             if read <= 0 { break }
-            let count = min(buffer.count, Int(read))
+            let count = min(buffer.count, min(Int(read), maxSamples - result.count))
             result.append(contentsOf: buffer[0 ..< count])
         }
         return result.isEmpty ? nil : result

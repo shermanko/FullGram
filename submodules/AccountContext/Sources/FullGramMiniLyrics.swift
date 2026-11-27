@@ -86,7 +86,7 @@ public final class FullGramMiniLyrics: @unchecked Sendable {
         guard Self.isEnabled else {
             return
         }
-        let effectiveDuration = duration > 1.0 ? duration : 180.0
+        let effectiveDuration = (duration.isFinite && duration > 1.0 && duration < 86_400.0) ? duration : 180.0
         let now = Date().timeIntervalSince1970
         self.lock.lock()
         let alreadyHave = (self.key == key && !self.lines.isEmpty)
@@ -94,6 +94,9 @@ public final class FullGramMiniLyrics: @unchecked Sendable {
         guard !alreadyHave, !recentlyTried, let fetch = self._fetch else {
             self.lock.unlock()
             return
+        }
+        if self.lastAttemptByKey.count > 200 {
+            self.lastAttemptByKey = self.lastAttemptByKey.filter { now - $0.value < 60.0 }
         }
         self.key = key
         self.lines = []
@@ -103,11 +106,12 @@ public final class FullGramMiniLyrics: @unchecked Sendable {
         self.disposable.set((fetch(title, artist, effectiveDuration)
         |> deliverOnMainQueue).startStrict(next: { [weak self] lines in
             guard let self else { return }
+            let sortedLines = (lines ?? []).sorted { $0.time < $1.time }
             self.lock.lock()
             let matches = (self.key == key)
             if matches {
-                self.lines = lines ?? []
-                if !(lines ?? []).isEmpty {
+                self.lines = sortedLines
+                if !sortedLines.isEmpty {
                     self.lastAttemptByKey.removeValue(forKey: key)
                 }
             }
@@ -120,12 +124,15 @@ public final class FullGramMiniLyrics: @unchecked Sendable {
 
     public func update(title: String, artist: String?, lines: [Line]?) {
         let key = Self.makeKey(title: title, artist: artist)
+        let sortedLines = (lines ?? []).sorted { $0.time < $1.time }
         self.disposable.set(nil)
         self.lock.lock()
         self.key = key
-        self.lines = lines ?? []
+        self.lines = sortedLines
         self.lock.unlock()
-        NotificationCenter.default.post(name: FullGramMiniLyrics.didUpdateNotification, object: nil)
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: FullGramMiniLyrics.didUpdateNotification, object: nil)
+        }
     }
 
     public func line(title: String, artist: String?, at timestamp: Double) -> String? {

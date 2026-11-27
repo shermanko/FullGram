@@ -159,11 +159,12 @@ public enum FullGramPowerSaving {
             if p.followLowPowerMode && isLowPowerMode {
                 return true
             }
-            if p.onBatteryOnly, let isCharging, !isCharging {
-                return true
+            if p.onBatteryOnly, isCharging == true {
+                return false
             }
-            if let batteryLevel, batteryLevel >= 0.0 {
-                let pct = Int((batteryLevel * 100.0).rounded())
+            if let batteryLevel, batteryLevel.isFinite, batteryLevel >= 0.0 {
+                let clamped = min(1.0, max(0.0, batteryLevel))
+                let pct = Int((clamped * 100.0).rounded())
                 if pct <= p.threshold {
                     return true
                 }

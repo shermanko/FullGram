@@ -66,6 +66,9 @@ private final class FullGramChatLockObserverToken {
             controller?.fullGramApplyChatLock(promptImmediately: false)
         }
         self.tokens.append(
+            NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main, using: backgroundHandler)
+        )
+        self.tokens.append(
             NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main, using: backgroundHandler)
         )
         self.tokens.append(

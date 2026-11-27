@@ -56,9 +56,9 @@ public struct FullGramCatalogGift: Codable, Equatable, Sendable {
         self.key = key
         self.title = title
         self.emoji = emoji
-        self.starsPrice = starsPrice
+        self.starsPrice = max(0, starsPrice)
         self.canUpgradeToNFT = canUpgradeToNFT
-        self.upgradeStars = upgradeStars
+        self.upgradeStars = max(0, upgradeStars)
         self.collectionName = collectionName ?? title
         self.suggestedRealGiftIds = suggestedRealGiftIds
     }
@@ -281,11 +281,20 @@ public struct FullGramChatGiftPayload: Codable, Equatable, Sendable {
         return text
     }
 
+    private static func isValidDecoded(_ payload: FullGramChatGiftPayload) -> Bool {
+        if let stars = payload.starsPrice, stars < 0 { return false }
+        if let ton = payload.tonAmount, (!ton.isFinite || ton < 0.0 || ton > 1_000_000_000.0) { return false }
+        if let num = payload.number, num < 1 { return false }
+        return true
+    }
+
     public static func parse(from text: String, entities: [MessageTextEntity]? = nil) -> FullGramChatGiftPayload? {
         if let entities {
             for entity in entities {
                 if case let .TextUrl(url) = entity.type, url.hasPrefix(Self.entityUrlPrefix) {
-                    var b64 = String(url.dropFirst(Self.entityUrlPrefix.count))
+                    let rawTail = String(url.dropFirst(Self.entityUrlPrefix.count))
+                    guard rawTail.count <= 4096 else { continue }
+                    var b64 = rawTail
                         .replacingOccurrences(of: "-", with: "+")
                         .replacingOccurrences(of: "_", with: "/")
                     let rem = b64.count % 4
@@ -293,7 +302,8 @@ public struct FullGramChatGiftPayload: Codable, Equatable, Sendable {
                         b64 += String(repeating: "=", count: 4 - rem)
                     }
                     if let data = Data(base64Encoded: b64),
-                       let decoded = try? JSONDecoder().decode(FullGramChatGiftPayload.self, from: data) {
+                       let decoded = try? JSONDecoder().decode(FullGramChatGiftPayload.self, from: data),
+                       Self.isValidDecoded(decoded) {
                         return decoded
                     }
                 }
@@ -309,10 +319,12 @@ public struct FullGramChatGiftPayload: Codable, Equatable, Sendable {
         } else {
             b64 = String(afterStart).trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        guard let data = Data(base64Encoded: b64) else {
+        guard b64.count <= 4096, let data = Data(base64Encoded: b64),
+              let decoded = try? JSONDecoder().decode(FullGramChatGiftPayload.self, from: data),
+              Self.isValidDecoded(decoded) else {
             return nil
         }
-        return try? JSONDecoder().decode(FullGramChatGiftPayload.self, from: data)
+        return decoded
     }
 
     public static let openCardNotification = Notification.Name("FullGram.OpenChatGiftCard")
@@ -482,10 +494,11 @@ public final class FullGramEconomy: @unchecked Sendable {
 
     @discardableResult
     public func spendGram(_ amount: Double, title: String, subtitle: String) -> Bool {
-        guard amount >= 0.0 else { return false }
+        guard amount.isFinite, amount > 0.0 else { return false }
         self.lock.lock()
         defer { self.lock.unlock() }
-        guard self.state.gramBalance + 0.000001 >= amount else { return false }
+        let tolerance = self.state.gramBalance > 0.0 ? 0.000001 : 0.0
+        guard self.state.gramBalance + tolerance >= amount else { return false }
         self.state.gramBalance = max(0.0, self.state.gramBalance - amount)
         self.appendTxLocked(currency: .gram, amount: amount, isIncoming: false, title: title, subtitle: subtitle)
         self.saveLocked()
@@ -552,7 +565,9 @@ public final class FullGramEconomy: @unchecked Sendable {
         comment: String,
         preUpgrade: Bool
     ) -> FullGramOwnedGift? {
-        let totalCost = catalogGift.starsPrice + (preUpgrade && catalogGift.canUpgradeToNFT ? catalogGift.upgradeStars : 0)
+        let upgradeCost: Int64 = (preUpgrade && catalogGift.canUpgradeToNFT) ? max(0, catalogGift.upgradeStars) : 0
+        let (totalCost, overflow) = max(0, catalogGift.starsPrice).addingReportingOverflow(upgradeCost)
+        guard !overflow, totalCost >= 0 else { return nil }
         self.lock.lock()
         guard self.state.starsBalance >= totalCost else {
             self.lock.unlock()
@@ -1073,7 +1088,8 @@ public final class FullGramEconomy: @unchecked Sendable {
         var req = URLRequest(url: url)
         req.timeoutInterval = 10.0
         req.cachePolicy = .reloadIgnoringLocalCacheData
-        URLSession.shared.dataTask(with: req) { [weak self] data, response, _ in
+        let ephemeral = URLSession(configuration: .ephemeral)
+        ephemeral.dataTask(with: req) { [weak self] data, response, _ in
             guard let self else { return }
             defer {
                 self.lock.lock()
@@ -1081,7 +1097,7 @@ public final class FullGramEconomy: @unchecked Sendable {
                 self.lock.unlock()
             }
             guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode),
-                  let data,
+                  let data, data.count <= 2_000_000,
                   let payload = try? JSONDecoder().decode(CloudEconomyPayload.self, from: data) else {
                 DispatchQueue.main.async { completion?(false) }
                 return

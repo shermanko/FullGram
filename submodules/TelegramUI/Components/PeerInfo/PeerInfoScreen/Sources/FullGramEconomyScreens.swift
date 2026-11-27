@@ -1951,9 +1951,10 @@ private enum FullGramTransactionsEntry: ItemListNodeEntry {
             return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
         case let .txRow(_, tx):
             let sign = tx.isIncoming ? "+" : "-"
+            let safeAmount = tx.amount.isFinite ? max(0.0, min(tx.amount, 1_000_000_000_000.0)) : 0.0
             let amountStr = tx.currency == .stars
-                ? "\(sign)\(Int64(tx.amount)) ★"
-                : "\(sign)\(String(format: "%.2f", tx.amount)) TON"
+                ? "\(sign)\(Int64(safeAmount.rounded())) ★"
+                : "\(sign)\(String(format: "%.2f", safeAmount)) TON"
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: tx.title, label: amountStr, sectionId: self.section, style: .blocks, disclosureStyle: .none, action: {})
         case let .empty(text):
             return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)

@@ -60,6 +60,8 @@ def guess_category(title: str) -> str:
 def main():
     print("Fetching JulesZYTB/discord-collectibles-downloader tree...")
     tree = gh_api_json("repos/JulesZYTB/discord-collectibles-downloader/git/trees/main?recursive=1")
+    if tree.get("truncated"):
+        raise SystemExit("Error: GitHub tree response was truncated; aborting to avoid incomplete cosmetics catalog")
     paths = [x["path"] for x in tree.get("tree", []) if x.get("type") == "blob"]
 
     frames_by_id = {}
@@ -120,6 +122,8 @@ def main():
             label = (item.get("label") or "").strip()
             if not url or not label:
                 continue
+            if not (url.startswith("https://cdn.discordapp.com/") or url.startswith("https://cdn.jsdelivr.net/")):
+                continue
             m = re.search(r"(a_[0-9a-f]{20,40})", url, re.I)
             if m and m.group(1).lower() in existing_hashes:
                 continue
@@ -140,7 +144,9 @@ def main():
     except Exception as e:
         print("Warning: wickstudio fetch failed:", e)
 
-    # 3. Parse Profile_Effects (intro/loop APNG layers)
+    # 3. Parse Profile_Effects (intro/loop APNG layers; prefer Animated subdir)
+    effects_anim = {}
+    effects_fallback = {}
     for p in paths:
         if not p.startswith("discord_collectibles/Profile_Effects/"):
             continue
@@ -148,12 +154,16 @@ def main():
         if len(parts) < 5:
             continue
         title = parts[2].strip()
+        kind = parts[3]
         fname = parts[4]
         if not fname.lower().endswith(".png"):
             continue
         layer_match = re.search(r"_layer_(\d+)_", fname)
         layer_idx = int(layer_match.group(1)) if layer_match else 0
-        effects_map.setdefault(title, []).append((layer_idx, JULES_CDN + encode_path(p)))
+        target_map = effects_anim if kind == "Animated" else effects_fallback
+        target_map.setdefault(title, []).append((layer_idx, JULES_CDN + encode_path(p)))
+    for title in set(effects_anim.keys()) | set(effects_fallback.keys()):
+        effects_map[title] = effects_anim.get(title) or effects_fallback[title]
 
     profile_effects = []
     seen_eids = set()

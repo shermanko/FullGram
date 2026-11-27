@@ -1603,9 +1603,14 @@ private enum FullGramGhostModeEntry: ItemListNodeEntry {
         case .header:
             return 0
         case let .toggle(option, _, _):
-            return option.rawValue
+            switch option {
+            case .markReadAfterSend, .silentSendInGhostMode:
+                return 100 + option.rawValue
+            default:
+                return option.rawValue
+            }
         case .info:
-            return 100
+            return 50
         case .exceptionsHeader:
             return 200
         case .addException:
@@ -3765,12 +3770,15 @@ public func fullGramTranslationSettingsController(context: AccountContext) -> Vi
             )
         },
         editApiKey: { provider in
-            let current = FullGramTranslationKeys.apiKey(for: provider, accountId: accountId)
+            let hasSaved = !FullGramTranslationKeys.apiKey(for: provider, accountId: accountId).isEmpty
             let title = provider == .deepLFree ? "Ключ DeepL API Free" : "Ключ LibreTranslate API"
+            let hint = hasSaved
+                ? "Ключ уже сохранён в Keychain. Введите новый ключ для замены или оставьте пустым для удаления:"
+                : "Ключ хранится локально в защищённой связке ключей устройства (Keychain):"
             promptInput(
                 title,
-                "Ключ хранится локально в защищённой связке ключей устройства (Keychain):",
-                current,
+                hint,
+                "",
                 true,
                 { value in
                     FullGramTranslationKeys.setApiKey(value, for: provider, accountId: accountId)
@@ -4635,7 +4643,15 @@ func fullGramOtherCategoryController(context: AccountContext) -> ViewController 
     }
     let controller = ItemListController(context: context, state: signal)
     pushImpl = { [weak controller] c in controller?.push(c) }
-    presentNativeImpl = { [weak controller] vc in controller?.present(vc, animated: true) }
+    presentNativeImpl = { [weak controller] vc in
+        guard let controller else { return }
+        if let pop = vc.popoverPresentationController, pop.sourceView == nil, pop.barButtonItem == nil {
+            pop.sourceView = controller.view
+            pop.sourceRect = CGRect(x: controller.view.bounds.midX, y: controller.view.bounds.midY, width: 1, height: 1)
+            pop.permittedArrowDirections = []
+        }
+        controller.present(vc, animated: true)
+    }
     return controller
 }
 
@@ -4961,13 +4977,15 @@ public func fullGramBadgesController(context: AccountContext) -> ViewController 
                 tf.autocorrectionType = .no
                 tf.autocapitalizationType = .none
             }
-            alert.addAction(UIAlertAction(title: "Сохранить и обновить", style: .default, handler: { _ in
-                FullGramBadges.shared.badgesURL = alert.textFields?.first?.text ?? ""
+            alert.addAction(UIAlertAction(title: "Сохранить и обновить", style: .default, handler: { [weak alert] _ in
+                FullGramBadges.shared.badgesURL = alert?.textFields?.first?.text ?? ""
                 isRefreshing = true
                 bump()
                 FullGramBadges.shared.refreshNow { _ in
-                    isRefreshing = false
-                    bump()
+                    DispatchQueue.main.async {
+                        isRefreshing = false
+                        bump()
+                    }
                 }
             }))
             alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
@@ -4978,21 +4996,23 @@ public func fullGramBadgesController(context: AccountContext) -> ViewController 
             isRefreshing = true
             bump()
             FullGramBadges.shared.refreshNow { result in
-                isRefreshing = false
-                bump()
-                let title: String
-                let msg: String
-                switch result {
-                case let .success(count):
-                    title = "Бейджи обновлены"
-                    msg = "Загружено записей: \(count)"
-                case let .failure(err):
-                    title = "Ошибка обновления"
-                    msg = err.localizedDescription
+                DispatchQueue.main.async {
+                    isRefreshing = false
+                    bump()
+                    let title: String
+                    let msg: String
+                    switch result {
+                    case let .success(count):
+                        title = "Бейджи обновлены"
+                        msg = "Загружено записей: \(count)"
+                    case let .failure(err):
+                        title = "Ошибка обновления"
+                        msg = err.localizedDescription
+                    }
+                    let alert = UIAlertController(title: title, message: msg, preferredStyle: .alert)
+                    alert.addAction(UIAlertAction(title: "OK", style: .default))
+                    presentNativeImpl?(alert)
                 }
-                let alert = UIAlertController(title: title, message: msg, preferredStyle: .alert)
-                alert.addAction(UIAlertAction(title: "OK", style: .default))
-                presentNativeImpl?(alert)
             }
         }
     )
@@ -5036,7 +5056,15 @@ public func fullGramBadgesController(context: AccountContext) -> ViewController 
     }
 
     let controller = ItemListController(context: context, state: signal)
-    presentNativeImpl = { [weak controller] vc in controller?.present(vc, animated: true) }
+    presentNativeImpl = { [weak controller] vc in
+        guard let controller else { return }
+        if let pop = vc.popoverPresentationController, pop.sourceView == nil, pop.barButtonItem == nil {
+            pop.sourceView = controller.view
+            pop.sourceRect = CGRect(x: controller.view.bounds.midX, y: controller.view.bounds.midY, width: 1, height: 1)
+            pop.permittedArrowDirections = []
+        }
+        controller.present(vc, animated: true)
+    }
     return controller
 }
 

@@ -662,7 +662,10 @@ private struct LuaParser {
         case .false: self.pos += 1; return .bool(false)
         case let .number(val, isInt):
             self.pos += 1
-            return isInt ? .int(Int64(val)) : .double(val)
+            if isInt, let exact = Int64(exactly: val) {
+                return .int(exact)
+            }
+            return .double(val)
         case let .string(s): self.pos += 1; return .string(s)
         case let .ident(id): self.pos += 1; return .ident(id)
         case .lParen:
@@ -876,7 +879,12 @@ public final class FullGramLuaVM {
                 while (stepV > 0 && cur <= endV) || (stepV < 0 && cur >= endV) {
                     try self.tick()
                     let loopEnv = LuaEnv(parent: env)
-                    let val: FullGramPluginValue = cur == cur.rounded() ? .int(Int64(cur)) : .double(cur)
+                    let val: FullGramPluginValue
+                    if cur.isFinite, cur == cur.rounded(), let exact = Int64(exactly: cur) {
+                        val = .int(exact)
+                    } else {
+                        val = .double(cur)
+                    }
                     loopEnv.setLocal(name, val)
                     do {
                         _ = try self.execBlock(body, env: loopEnv)
@@ -1317,7 +1325,8 @@ public final class FullGramLuaVM {
                     if args.count == 2 {
                         box.arrayPart.append(args[1])
                     } else if let idx = args[1].asInt {
-                        let pos = max(0, min(box.arrayPart.count, Int(idx) - 1))
+                        let clamped = max(Int64(1), min(Int64(box.arrayPart.count + 1), idx))
+                        let pos = Int(clamped - 1)
                         box.arrayPart.insert(args[2], at: pos)
                     }
                 }
@@ -1325,7 +1334,13 @@ public final class FullGramLuaVM {
             },
             "remove": .function { args in
                 if !args.isEmpty, case let .table(box) = args[0], !box.arrayPart.isEmpty {
-                    let idx = args.count > 1 ? max(0, min(box.arrayPart.count - 1, Int(args[1].asInt ?? 1) - 1)) : box.arrayPart.count - 1
+                    let idx: Int
+                    if args.count > 1, let rawIdx = args[1].asInt {
+                        let clamped = max(Int64(1), min(Int64(box.arrayPart.count), rawIdx))
+                        idx = Int(clamped - 1)
+                    } else {
+                        idx = box.arrayPart.count - 1
+                    }
                     return box.arrayPart.remove(at: idx)
                 }
                 return .nil

@@ -626,8 +626,8 @@ private struct RsParser {
         var tailExpr: RsExpr? = nil
         while !self.check(.rBrace) && !self.check(.eof) {
             if self.match(.semi) { continue }
-            let isControlFlow = self.check(.if) || self.check(.while) || self.check(.for) || self.check(.loop) || self.check(.match)
-            let isDeclOrJump = self.check(.let) || self.check(.return) || self.check(.break) || self.check(.continue) || self.check(.fn) || self.check(.const) || self.check(.static) || self.check(.pub) || self.check(.use) || self.check(.struct) || self.check(.enum)
+            let isControlFlow = self.check(.if) || self.check(.match)
+            let isDeclOrJump = self.check(.let) || self.check(.return) || self.check(.break) || self.check(.continue) || self.check(.while) || self.check(.for) || self.check(.loop) || self.check(.fn) || self.check(.const) || self.check(.static) || self.check(.pub) || self.check(.use) || self.check(.struct) || self.check(.enum)
             if isDeclOrJump {
                 if let s = try self.parseTopLevelOrStmt() {
                     stmts.append(s)

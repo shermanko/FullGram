@@ -204,8 +204,10 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
         let cleaned = effectId?.trimmingCharacters(in: .whitespacesAndNewlines)
         entry.profileEffectId = (cleaned?.isEmpty == false) ? cleaned : nil
         self.saveLocal(entry, forPeerId: norm)
-        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
-        NotificationCenter.default.post(name: FullGramProfileEffects.didChangeNotification, object: nil)
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+            NotificationCenter.default.post(name: FullGramProfileEffects.didChangeNotification, object: nil)
+        }
         self.pushToCloud(peerId: norm, entry: entry)
     }
 
@@ -217,8 +219,10 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
         entry.nickColor = (cleaned?.isEmpty == false) ? cleaned : nil
         entry.nickGlow = entry.nickColor != nil ? glowEnabled : false
         self.saveLocal(entry, forPeerId: norm)
-        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
-        NotificationCenter.default.post(name: FullGramNicknameStyle.didChangeNotification, object: nil)
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+            NotificationCenter.default.post(name: FullGramNicknameStyle.didChangeNotification, object: nil)
+        }
         self.pushToCloud(peerId: norm, entry: entry)
     }
 
@@ -325,6 +329,12 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
             }
         }
         let finalPayloadData = preparedData
+        guard finalPayloadData.count <= 1_600 * 1024 else {
+            DispatchQueue.main.async {
+                completion?(.failure(NSError(domain: "FullGramCloudCosmetics", code: 413, userInfo: [NSLocalizedDescriptionKey: "Frame file exceeds 1.5 MB limit"])))
+            }
+            return
+        }
         guard let uploadURL = URL(string: FullGramAdmin.workerBaseURL + "/cosmetics/upload-frame") else {
             completion?(.failure(NSError(domain: "FullGramCloudCosmetics", code: 400, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])))
             return
@@ -359,7 +369,7 @@ public final class FullGramCloudCosmetics: @unchecked Sendable {
                     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                     if status == 401 && !didRetry {
                         FullGramAdmin.shared.clearClientSession()
-                        self.uploadCustomFrame(peerId: norm, data: data, isGif: isGif, didRetry: true, completion: completion)
+                        self.uploadCustomFrame(peerId: norm, data: finalPayloadData, isGif: isGif, didRetry: true, completion: completion)
                         return
                     }
                     if let error {

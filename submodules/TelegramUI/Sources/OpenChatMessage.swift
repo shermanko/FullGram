@@ -311,6 +311,7 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                         }
                         let fetchDisposable = messageMediaFileInteractiveFetched(context: params.context, message: params.message, file: file, userInitiated: true).startStandalone()
                         let minBytesForPreview: Int64 = isArchive ? 4096 : 0
+                        weak var weakNavigationController = params.navigationController
                         let _ = (params.context.engine.resources.data(id: EngineMediaResource.Id(file.resource.id))
                         |> filter { data in
                             if isArchive {
@@ -319,22 +320,29 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                             return data.isComplete
                         }
                         |> take(1)
-                        |> deliverOnMainQueue).startStandalone(next: { data in
+                        |> map { data -> (String, Bool) in
+                            var shouldStopFetch = false
                             if isArchive && !data.isComplete {
                                 let previewURL = URL(fileURLWithPath: data.path)
                                 let parsed = FullGramArchiveParser.parse(url: previewURL)
                                 if !parsed.entries.isEmpty {
-                                    fetchDisposable.dispose()
+                                    shouldStopFetch = true
                                 }
                             }
-                            let fileURL = URL(fileURLWithPath: data.path)
+                            return (data.path, shouldStopFetch)
+                        }
+                        |> deliverOnMainQueue).startStandalone(next: { path, shouldStopFetch in
+                            if shouldStopFetch {
+                                fetchDisposable.dispose()
+                            }
+                            let fileURL = URL(fileURLWithPath: path)
                             let viewer: ViewController
                             if isArchive {
                                 viewer = FullGramArchivePreviewController(fileURL: fileURL, fileName: resolvedName)
                             } else {
                                 viewer = FullGramDocumentViewerController(fileURL: fileURL, fileName: resolvedName, canShare: canShare)
                             }
-                            if let navigationController = params.navigationController {
+                            if let navigationController = weakNavigationController {
                                 navigationController.pushViewController(viewer)
                             } else {
                                 params.present(viewer, nil, .window(.root))

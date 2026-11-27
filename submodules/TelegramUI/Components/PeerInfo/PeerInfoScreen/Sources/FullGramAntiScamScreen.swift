@@ -289,12 +289,21 @@ private enum FullGramAntiScamEntry: ItemListNodeEntry {
         case .extraHeader: return 20
         case let .extraToggle(opt, _, _): return 20 + opt.rawValue
         case .rulesHeader: return 50
-        case let .ruleToggle(opt, _, _): return 50 + opt.rawValue
-        case .ruleTemplatesLink: return 80
-        case .ruleNewAccountIdLink: return 81
-        case .ruleMassJoinLink: return 82
-        case .ruleEventsLink: return 83
-        case .rulesInfo: return 84
+        case let .ruleToggle(opt, _, _):
+            switch opt {
+            case .ruleBanByTemplates: return 51
+            case .ruleBanByLinks: return 53
+            case .ruleBanNewAccounts: return 54
+            case .ruleNewAccountRequireNoAvatar: return 56
+            case .ruleBanMassJoins: return 57
+            case .ruleAutoBanInAdminGroups: return 59
+            default: return 65 + opt.rawValue
+            }
+        case .ruleTemplatesLink: return 52
+        case .ruleNewAccountIdLink: return 55
+        case .ruleMassJoinLink: return 58
+        case .ruleEventsLink: return 60
+        case .rulesInfo: return 61
         case .toolsHeader: return 100
         case .manualCheck: return 101
         case .clearWhitelist: return 102

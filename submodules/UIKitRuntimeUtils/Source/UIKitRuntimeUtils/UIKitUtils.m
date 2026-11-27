@@ -3,12 +3,14 @@
 #import <ObjCRuntimeUtils/RuntimeUtils.h>
 
 #import <objc/runtime.h>
+#include <math.h>
+#include <stdatomic.h>
 
 #if TARGET_IPHONE_SIMULATOR
 UIKIT_EXTERN float UIAnimationDragCoefficient();
 #endif
 
-static double fullGramSlowMotionFactorValue = 1.0;
+static _Atomic double fullGramSlowMotionFactorValue = 1.0;
 
 @interface UIView (FullGramSlowMotion)
 @end
@@ -16,18 +18,21 @@ static double fullGramSlowMotionFactorValue = 1.0;
 @implementation UIView (FullGramSlowMotion)
 
 + (void)_fg_animateWithDuration:(NSTimeInterval)duration delay:(NSTimeInterval)delay options:(UIViewAnimationOptions)options animations:(void (^)(void))animations completion:(void (^ _Nullable)(BOOL))completion {
-    [self _fg_animateWithDuration:duration * fullGramSlowMotionFactorValue delay:delay * fullGramSlowMotionFactorValue options:options animations:animations completion:completion];
+    double factor = atomic_load_explicit(&fullGramSlowMotionFactorValue, memory_order_relaxed);
+    [self _fg_animateWithDuration:duration * factor delay:delay * factor options:options animations:animations completion:completion];
 }
 
 + (void)_fg_animateWithDuration:(NSTimeInterval)duration delay:(NSTimeInterval)delay usingSpringWithDamping:(CGFloat)dampingRatio initialSpringVelocity:(CGFloat)velocity options:(UIViewAnimationOptions)options animations:(void (^)(void))animations completion:(void (^ _Nullable)(BOOL))completion {
-    [self _fg_animateWithDuration:duration * fullGramSlowMotionFactorValue delay:delay * fullGramSlowMotionFactorValue usingSpringWithDamping:dampingRatio initialSpringVelocity:velocity / fullGramSlowMotionFactorValue options:options animations:animations completion:completion];
+    double factor = atomic_load_explicit(&fullGramSlowMotionFactorValue, memory_order_relaxed);
+    [self _fg_animateWithDuration:duration * factor delay:delay * factor usingSpringWithDamping:dampingRatio initialSpringVelocity:velocity / factor options:options animations:animations completion:completion];
 }
 
 @end
 
 void fullGramSetAnimationSlowMotionFactor(double factor) {
-    fullGramSlowMotionFactorValue = MAX(1.0, MIN(20.0, factor));
-    if (fullGramSlowMotionFactorValue > 1.0) {
+    double clamped = isfinite(factor) ? MAX(1.0, MIN(20.0, factor)) : 1.0;
+    atomic_store_explicit(&fullGramSlowMotionFactorValue, clamped, memory_order_relaxed);
+    if (clamped > 1.0) {
         static dispatch_once_t onceToken;
         dispatch_once(&onceToken, ^{
             [RuntimeUtils swizzleClassMethodOfClass:[UIView class] currentSelector:@selector(animateWithDuration:delay:options:animations:completion:) newSelector:@selector(_fg_animateWithDuration:delay:options:animations:completion:)];
@@ -37,14 +42,15 @@ void fullGramSetAnimationSlowMotionFactor(double factor) {
 }
 
 double fullGramAnimationSlowMotionFactor(void) {
-    return fullGramSlowMotionFactorValue;
+    return atomic_load_explicit(&fullGramSlowMotionFactorValue, memory_order_relaxed);
 }
 
 double animationDurationFactorImpl() {
+    double factor = atomic_load_explicit(&fullGramSlowMotionFactorValue, memory_order_relaxed);
 #if TARGET_IPHONE_SIMULATOR
-    return (double)UIAnimationDragCoefficient() * fullGramSlowMotionFactorValue;
+    return (double)UIAnimationDragCoefficient() * factor;
 #endif
-    return fullGramSlowMotionFactorValue;
+    return factor;
 }
 
 @interface CASpringAnimation ()

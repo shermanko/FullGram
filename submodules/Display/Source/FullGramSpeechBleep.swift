@@ -499,14 +499,16 @@ public enum FullGramSpeechBleep {
 
         var samples: [Float] = []
         while reader.status == .reading, let sampleBuffer = output.copyNextSampleBuffer() {
+            defer { CMSampleBufferInvalidate(sampleBuffer) }
             guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { continue }
             let length = CMBlockBufferGetDataLength(blockBuffer)
-            guard length > 0 else { continue }
             let count = length / MemoryLayout<Float>.size
+            guard count > 0 else { continue }
+            let byteCount = count * MemoryLayout<Float>.size
             var chunk = [Float](repeating: 0.0, count: count)
             chunk.withUnsafeMutableBytes { raw in
                 if let base = raw.baseAddress {
-                    CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length, destination: base)
+                    CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: byteCount, destination: base)
                 }
             }
             samples.append(contentsOf: chunk)
@@ -561,8 +563,9 @@ public enum FullGramSpeechBleep {
             return Float(tone * decay * env * 0.52)
         case .dolphin:
             let clip = preloadedClip ?? []
-            if !clip.isEmpty {
-                let pos = Int((Double(index) / max(1.0, sampleRate)) * 48000.0) % clip.count
+            if !clip.isEmpty && index >= 0 && sampleRate.isFinite && sampleRate > 0 {
+                let rawPos = Int((Double(index) / max(1.0, sampleRate)) * 48000.0)
+                let pos = ((rawPos % clip.count) + clip.count) % clip.count
                 return clip[pos] * Float(env)
             }
             let burstEnv = abs(sin(.pi * progress * 3.0))
@@ -570,8 +573,9 @@ public enum FullGramSpeechBleep {
             return Float(sin(2.0 * .pi * carrierFreq * t) * burstEnv * env * 0.44)
         case .duck:
             let clip = preloadedClip ?? []
-            if !clip.isEmpty {
-                let pos = Int((Double(index) / max(1.0, sampleRate)) * 48000.0) % clip.count
+            if !clip.isEmpty && index >= 0 && sampleRate.isFinite && sampleRate > 0 {
+                let rawPos = Int((Double(index) / max(1.0, sampleRate)) * 48000.0)
+                let pos = ((rawPos % clip.count) + clip.count) % clip.count
                 return clip[pos] * Float(env)
             }
             let quackEnv = sin(.pi * min(1.0, progress * 1.15))
@@ -589,7 +593,7 @@ public enum FullGramSpeechBleep {
     }
 
     public static func applyBleep(to samples: UnsafeMutablePointer<Int16>, count: Int, sampleRate: Double, ranges: [ClosedRange<TimeInterval>], sound: FullGramBleepSound) {
-        guard sound != .off, !ranges.isEmpty else { return }
+        guard sound != .off, count > 0, sampleRate.isFinite, sampleRate > 0, sampleRate <= 384_000.0, !ranges.isEmpty else { return }
         let preloadedClip: [Float]?
         switch sound {
         case .dolphin:

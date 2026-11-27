@@ -230,7 +230,7 @@ enum FullGramLyricsFetcher {
             if let artist, !artist.isEmpty {
                 query.append(URLQueryItem(name: "artist_name", value: artist))
             }
-            if duration > 1.0 {
+            if duration.isFinite && duration > 1.0 && duration < Double(Int.max / 2) {
                 query.append(URLQueryItem(name: "duration", value: String(Int(duration.rounded()))))
             }
             components.queryItems = query
@@ -402,9 +402,10 @@ enum FullGramLyricsFetcher {
 
         entries.sort { $0.0 < $1.0 }
         var lines: [FullGramLyricsLine] = []
+        let safeDuration = duration.isFinite ? duration : 0.0
         for idx in entries.indices {
             let start = entries[idx].0
-            let end = idx + 1 < entries.count ? max(start + 0.3, entries[idx + 1].0) : max(start + 3.0, duration)
+            let end = idx + 1 < entries.count ? max(start + 0.3, entries[idx + 1].0) : max(start + 3.0, safeDuration)
             let wordsText = entries[idx].1.split(separator: " ").map(String.init)
             let span = max(0.3, end - start)
             let wordDur = span / Double(max(1, wordsText.count))
@@ -650,7 +651,8 @@ final class FullGramLyricsOverlayView: UIView {
     func load(title: String, artist: String?, duration: Double) {
         self.currentTitle = title
         self.currentArtist = artist
-        self.currentDuration = duration
+        self.currentDuration = duration.isFinite ? duration : 0.0
+        self.currentResult = .empty
         self.headerLabel.text = [artist, title].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " — ")
         self.statusLabel.text = "Поиск текста..."
         self.statusLabel.isHidden = false

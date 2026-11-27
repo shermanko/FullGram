@@ -64,17 +64,27 @@ public enum FullGramAIKeychain {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
         let resolved: String
-        if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+        let shouldCache: Bool
+        if status == errSecSuccess,
            let data = result as? Data,
            let str = String(data: data, encoding: .utf8) {
             resolved = str
-        } else {
+            shouldCache = true
+        } else if status == errSecItemNotFound {
             resolved = ""
+            shouldCache = true
+        } else {
+            // Transient Keychain error (e.g. errSecInteractionNotAllowed): do not poison cache.
+            resolved = ""
+            shouldCache = false
         }
-        self.cacheLock.lock()
-        self.cachedKeys[provider] = resolved
-        self.cacheLock.unlock()
+        if shouldCache {
+            self.cacheLock.lock()
+            self.cachedKeys[provider] = resolved
+            self.cacheLock.unlock()
+        }
         return resolved
     }
 
@@ -495,7 +505,12 @@ public final class FullGramAIStore {
             return (cleanedText, nil)
         }
 
-        let peerId = (dict["peer_id"] as? NSNumber)?.int64Value
+        let peerId: Int64?
+        if let n = dict["peer_id"] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() {
+            peerId = n.int64Value
+        } else {
+            peerId = nil
+        }
         let text = (dict["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let settingKey = dict["setting_key"] as? String
         let settingValue = dict["setting_value"] as? Bool

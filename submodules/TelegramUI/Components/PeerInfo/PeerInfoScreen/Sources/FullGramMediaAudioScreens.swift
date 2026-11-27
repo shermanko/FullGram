@@ -1298,7 +1298,10 @@ private final class FullGramMixerUIViewController: UIViewController {
 }
 
 private final class FullGramMixerContainerController: FullGramHostedViewController<FullGramMixerUIViewController> {
+    private let onChanged: () -> Void
+
     init(context: AccountContext, onChanged: @escaping () -> Void) {
+        self.onChanged = onChanged
         super.init(context: context, title: "Микшер") { theme in
             FullGramMixerUIViewController(theme: theme, onChanged: onChanged)
         }
@@ -1312,6 +1315,7 @@ private final class FullGramMixerContainerController: FullGramHostedViewControll
     @objc private func resetTapped() {
         if let flat = FullGramMixer.presets.first {
             FullGramMixer.apply(preset: flat)
+            self.onChanged()
         }
     }
 }

@@ -570,9 +570,9 @@ private final class FullGramAvatarFramesViewController: ViewController, UITextFi
                     tf.text = existingUrl
                 }
             }
-            alert.addAction(UIAlertAction(title: "Применить", style: .default, handler: { [weak self] _ in
+            alert.addAction(UIAlertAction(title: "Применить", style: .default, handler: { [weak self, weak alert] _ in
                 guard let self else { return }
-                let raw = alert.textFields?.first?.text ?? ""
+                let raw = alert?.textFields?.first?.text ?? ""
                 FullGramAvatarFrames.setCustomURLFrame(urlString: raw, forPeerId: self.selfPeerId)
                 self.rebuildCategoryBar()
                 self.applyFilter()
@@ -586,6 +586,11 @@ private final class FullGramAvatarFramesViewController: ViewController, UITextFi
             FullGramDiscordCosmeticsCatalog.shared.refreshNow { _ in }
         }))
         sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+        if let pop = sheet.popoverPresentationController {
+            pop.sourceView = self.view
+            pop.sourceRect = CGRect(x: self.view.bounds.midX, y: self.view.bounds.midY, width: 1, height: 1)
+            pop.permittedArrowDirections = []
+        }
         self.context.sharedContext.applicationBindings.presentNativeController(sheet)
     }
 

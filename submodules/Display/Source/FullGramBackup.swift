@@ -31,15 +31,31 @@ public enum FullGramBackup {
         // disable Anti-Scam protections, inject prompts/regexes/font paths, or forge economy state.
         "fullgram.ai.endpoint",
         "fullgram.ai.customPrompt",
+        "fullgram.ai.provider",
+        "fullgram.ai.model",
+        "fullgram.ai.allowReadCurrentChat",
+        "fullgram.ai.allowReadChatList",
+        "fullgram.ai.allowDraftInsert",
         "fullgram.badges.url",
         "fullgram.appearance.customFonts",
+        "fullgram.appearance.slowMotion",
         "fullgram.antiscam.enabled",
         "fullgram.antiscam.checkLinks",
+        "fullgram.antiscam.warnShorteners",
         "fullgram.antiscam.protectDangerFiles",
         "fullgram.antiscam.markScamMessages",
         "fullgram.antiscam.antiOffer",
         "fullgram.antiscam.antiOtc",
         "fullgram.antiscam.ruleTemplates",
+        "fullgram.antiscam.ruleBanByTemplates",
+        "fullgram.antiscam.ruleBanByLinks",
+        "fullgram.antiscam.ruleBanNewAccounts",
+        "fullgram.antiscam.ruleNewAccountMinId",
+        "fullgram.antiscam.ruleNewAccountRequireNoAvatar",
+        "fullgram.antiscam.ruleBanMassJoins",
+        "fullgram.antiscam.ruleMassJoinLimit",
+        "fullgram.antiscam.ruleMassJoinWindow",
+        "fullgram.antiscam.ruleAutoBanInAdminGroups",
         "fullgram.economy.state.v1",
         "fullgram.economy.lastSync"
     ]
@@ -79,6 +95,7 @@ public enum FullGramBackup {
                     bools[key] = n.boolValue
                 } else {
                     let d = n.doubleValue
+                    guard d.isFinite else { continue }
                     if d == d.rounded() && abs(d) < Double(Int.max / 2) {
                         ints[key] = n.intValue
                     } else {
@@ -90,7 +107,10 @@ public enum FullGramBackup {
             } else if let arr = value as? [String] {
                 stringArrays[key] = arr
             } else if let numArr = value as? [NSNumber] {
-                floatArrays[key] = numArr.map { $0.floatValue }
+                let floats = numArr.map { $0.floatValue }.filter { $0.isFinite }
+                if floats.count == numArr.count {
+                    floatArrays[key] = floats
+                }
             }
         }
 
@@ -155,7 +175,10 @@ public enum FullGramBackup {
         var count = 0
         let defaults = UserDefaults.standard
         let isAllowedKey: (String) -> Bool = { key in
-            Self.trackedPrefixes.contains(where: { key.hasPrefix($0) }) && !Self.excludedPrivacyKeys.contains(key)
+            Self.trackedPrefixes.contains(where: { key.hasPrefix($0) })
+                && !Self.excludedPrivacyKeys.contains(key)
+                && !key.hasPrefix("fullgram.appearance.fontPS.")
+                && (key != Self.antiScamWhitelistKey || allowAntiScamWhitelist)
         }
         for (k, v) in payload.boolDefaults where isAllowedKey(k) {
             defaults.set(v, forKey: k)
@@ -185,6 +208,7 @@ public enum FullGramBackup {
         }
 
         FullGramThemeColors.invalidateCache()
+        FullGramAntiScam.shared.invalidateCache()
 
         var importedPlugins = 0
         for plugin in payload.plugins.prefix(Self.maxImportedPlugins) where plugin.code.utf8.count <= Self.maxPluginCodeBytes {

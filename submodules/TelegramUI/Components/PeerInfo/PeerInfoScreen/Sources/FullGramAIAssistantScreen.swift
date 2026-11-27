@@ -2,9 +2,9 @@ import Foundation
 import UIKit
 import Display
 import AsyncDisplayKit
-import SwiftSignalKit
+@preconcurrency import SwiftSignalKit
 import TelegramCore
-import AccountContext
+@preconcurrency import AccountContext
 import ItemListUI
 import PresentationDataUtils
 import TelegramPresentationData
@@ -642,21 +642,23 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
             guard !wasTesting else { return }
             bump()
             FullGramAIStore.shared.testConnection { result in
-                _ = testingState.swap(false)
-                bump()
-                let title: String
-                let message: String
-                switch result {
-                case let .success(reply):
-                    title = "Подключение работает"
-                    message = "Ответ модели: «\(reply)»"
-                case let .failure(error):
-                    title = "Ошибка подключения"
-                    message = error.localizedDescription
+                DispatchQueue.main.async {
+                    _ = testingState.swap(false)
+                    bump()
+                    let title: String
+                    let message: String
+                    switch result {
+                    case let .success(reply):
+                        title = "Подключение работает"
+                        message = "Ответ модели: «\(reply)»"
+                    case let .failure(error):
+                        title = "Ошибка подключения"
+                        message = error.localizedDescription
+                    }
+                    let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+                    alert.addAction(UIAlertAction(title: "OK", style: .default))
+                    presentNativeImpl?(alert)
                 }
-                let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-                alert.addAction(UIAlertAction(title: "OK", style: .default))
-                presentNativeImpl?(alert)
             }
         },
         toggleAllowReadChat: { val in

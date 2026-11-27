@@ -610,8 +610,6 @@ private final class AudioPlayerRendererContext {
   
             if self.forAudioVideoMessage && !self.ambient {
                 AudioUnitSetParameter(equalizerAudioUnit, kAUNBandEQParam_GlobalGain, kAudioUnitScope_Global, 0, self.forceAudioToSpeaker ? 0.0 : 12.0, 0)
-            } else if self.soundMuted {
-                AudioUnitSetParameter(equalizerAudioUnit, kAUNBandEQParam_GlobalGain, kAudioUnitScope_Global, 0, 0.0, 0)
             } else {
                 var bandCount = UInt32(FullGramMixer.frequencies.count)
                 AudioUnitSetProperty(equalizerAudioUnit, kAUNBandEQProperty_NumberOfBands, kAudioUnitScope_Global, 0, &bandCount, UInt32(MemoryLayout<UInt32>.size))

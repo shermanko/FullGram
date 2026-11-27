@@ -7,13 +7,35 @@ import DeviceModel
 import Camera
 import Display
 
+private final class FullGramRoundVideoFrameRateOverrideBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Double?
+
+    func get() -> Double? {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.value
+    }
+
+    func set(_ newValue: Double?) {
+        self.lock.lock()
+        self.value = newValue
+        self.lock.unlock()
+    }
+}
+
+private let fullGramRoundVideoFrameRateOverrideBox = FullGramRoundVideoFrameRateOverrideBox()
+
 var roundVideoCaptureFrameRate: Double {
-    if let override = fullGramRoundVideoFrameRateOverride {
+    if let override = fullGramRoundVideoFrameRateOverrideBox.get() {
         return override
     }
     return Double(FullGramRoundVideoSettings.fps)
 }
-var fullGramRoundVideoFrameRateOverride: Double?
+var fullGramRoundVideoFrameRateOverride: Double? {
+    get { fullGramRoundVideoFrameRateOverrideBox.get() }
+    set { fullGramRoundVideoFrameRateOverrideBox.set(newValue) }
+}
 
 enum RoundVideoCaptureProfile: Int, CaseIterable {
     // Budget tiers: rear uses 16:9, front uses 4:3 to retain its field of view.
@@ -44,10 +66,19 @@ private func selectRoundVideoCaptureFormat(
     requiresMultiCam: Bool,
     preferStabilization: Bool,
     preferMediumProfile: Bool,
-    maximumProfile: RoundVideoCaptureProfile = .high
+    maximumProfile: RoundVideoCaptureProfile = .high,
+    updateGlobalOverride: Bool = true
 ) -> Int? {
-    fullGramRoundVideoFrameRateOverride = nil
-    func eligibleIndices() -> [Int] {
+    let preferredFps = Double(FullGramRoundVideoSettings.fps)
+    var targetFps = preferredFps
+    if updateGlobalOverride {
+        if requiresMultiCam, let currentOverride = fullGramRoundVideoFrameRateOverride {
+            targetFps = min(targetFps, currentOverride)
+        } else {
+            fullGramRoundVideoFrameRateOverride = nil
+        }
+    }
+    func eligibleIndices(for fps: Double) -> [Int] {
         return candidates.indices.filter { index in
             let candidate = candidates[index]
             guard let profile = candidate.profile, profile.rawValue >= maximumProfile.rawValue else {
@@ -55,13 +86,16 @@ private func selectRoundVideoCaptureFormat(
             }
             return candidate.isNV12
                 && (!requiresMultiCam || candidate.supportsMultiCam)
-                && candidate.frameRateRanges.contains(where: { $0.contains(roundVideoCaptureFrameRate) })
+                && candidate.frameRateRanges.contains(where: { $0.contains(fps) })
         }
     }
-    var eligible = eligibleIndices()
-    if eligible.isEmpty, roundVideoCaptureFrameRate > 30.0 {
-        fullGramRoundVideoFrameRateOverride = 30.0
-        eligible = eligibleIndices()
+    var eligible = eligibleIndices(for: targetFps)
+    if eligible.isEmpty, targetFps > 30.0 {
+        targetFps = 30.0
+        if updateGlobalOverride {
+            fullGramRoundVideoFrameRateOverride = 30.0
+        }
+        eligible = eligibleIndices(for: targetFps)
     }
     return eligible.min { lhsIndex, rhsIndex in
         let lhs = candidates[lhsIndex]
@@ -98,7 +132,8 @@ func roundVideoCaptureFormat(
     for device: AVCaptureDevice,
     requiresMultiCam: Bool,
     mode: NeoCameraImpl.RoundVideoMode,
-    maximumProfile: RoundVideoCaptureProfile = .high
+    maximumProfile: RoundVideoCaptureProfile = .high,
+    updateGlobalOverride: Bool = true
 ) -> AVCaptureDevice.Format? {
     let formats = device.formats
     let candidates = formats.map { format -> RoundVideoCaptureFormatCandidate in
@@ -123,7 +158,8 @@ func roundVideoCaptureFormat(
         requiresMultiCam: requiresMultiCam,
         preferStabilization: mode != .vga && device.position == .back,
         preferMediumProfile: device.position == .front,
-        maximumProfile: mode == .vga ? .vga : maximumProfile
+        maximumProfile: mode == .vga ? .vga : maximumProfile,
+        updateGlobalOverride: updateGlobalOverride
     ) else {
         return nil
     }
@@ -142,7 +178,7 @@ private func supportsDualCameraCapture(forRoundVideo: Bool, mode: NeoCameraImpl.
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) else {
             return false
         }
-        return roundVideoCaptureFormat(for: device, requiresMultiCam: true, mode: mode) != nil
+        return roundVideoCaptureFormat(for: device, requiresMultiCam: true, mode: mode, updateGlobalOverride: false) != nil
     }
 }
 

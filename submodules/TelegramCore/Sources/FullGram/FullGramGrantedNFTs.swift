@@ -205,7 +205,15 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
         for (k, list) in payload.users {
             if let id = Int64(k) {
                 let norm = Self.normalizedTelegramId(for: id)
-                mapped[norm] = list
+                if var existing = mapped[norm] {
+                    let seenIds = Set(existing.map { $0.id })
+                    for item in list where !seenIds.contains(item.id) {
+                        existing.append(item)
+                    }
+                    mapped[norm] = existing
+                } else {
+                    mapped[norm] = list
+                }
             }
         }
         self.localUsersById = mapped
@@ -523,11 +531,31 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
     }
 
     public func transferBySlugLocal(fromPeerId: Int64, toPeerId: Int64, slug: String) -> FullGramGrantedNFT? {
-        guard let item = self.removeBySlugLocal(peerId: fromPeerId, slug: slug) else { return nil }
-        var transferred = item
+        let normFrom = Self.normalizedTelegramId(for: fromPeerId)
+        let normTo = Self.normalizedTelegramId(for: toPeerId)
+        self.lock.lock()
+        var found: FullGramGrantedNFT?
+        if var list = self.localUsersById[normFrom],
+           let idx = list.firstIndex(where: { $0.slug.caseInsensitiveCompare(slug) == .orderedSame }) {
+            found = list.remove(at: idx)
+            self.localUsersById[normFrom] = list
+        }
+        guard var transferred = found else {
+            self.lock.unlock()
+            return nil
+        }
         transferred.pinned = true
         transferred.hidden = false
-        self.appendLocal(peerId: toPeerId, nft: transferred)
+        var dstList = self.localUsersById[normTo] ?? []
+        dstList.removeAll { $0.id == transferred.id }
+        dstList.insert(transferred, at: 0)
+        self.localUsersById[normTo] = dstList
+        self.saveLocalItemsLocked()
+        self.rebuildCombinedLocked()
+        self.lock.unlock()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        }
         return transferred
     }
 
@@ -843,9 +871,10 @@ func fullGramResolveUniqueGift(
     } else {
         // Fallback: parse "FullGram-<giftId>-<number>" directly
         let parts = slug.split(separator: "-")
-        guard parts.count >= 3,
-              let gid = Int64(parts[1]),
-              let num = Int32(parts[2]) else {
+        guard parts.count == 3,
+              parts[0].caseInsensitiveCompare("FullGram") == .orderedSame,
+              let gid = Int64(parts[1]), gid > 0,
+              let num = Int32(parts[2]), num >= 1 else {
             return .fail(.invalidSlug)
         }
         resolvedItem = FullGramGrantedNFT(

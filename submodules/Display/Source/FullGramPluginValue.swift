@@ -96,7 +96,8 @@ public struct FullGramPluginMetadata: Codable, Equatable {
                 let lower = val.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
                 let digits = lower.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
                 if let parsed = Int(digits), parsed > 0 {
-                    let seconds = lower.hasSuffix("m") ? parsed * 60 : parsed
+                    let clampedParsed = min(parsed, 3600)
+                    let seconds = lower.hasSuffix("m") ? min(clampedParsed, 60) * 60 : clampedParsed
                     backgroundInterval = min(3600, max(5, seconds))
                     if explicitBackgroundFlag == nil {
                         backgroundEnabled = true

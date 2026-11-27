@@ -55,7 +55,8 @@ final class FullGramRoundVideoMask {
     }
 
     private func emojiOverlay(size: CGFloat) -> CIImage? {
-        let side = max(24.0, (size / 4.0).rounded() * 4.0)
+        guard size.isFinite, size > 0.0 else { return nil }
+        let side = min(512.0, max(24.0, (size / 4.0).rounded() * 4.0))
         if let cached = self.cachedEmojiImage, abs(cached.extent.width - side) < 2.0 {
             return cached
         }
@@ -90,7 +91,8 @@ final class FullGramRoundVideoMask {
     }
 
     private func mascotOverlay(size: CGFloat) -> CIImage? {
-        let targetSide = max(24.0, (size / 4.0).rounded() * 4.0)
+        guard size.isFinite, size > 0.0 else { return nil }
+        let targetSide = min(512.0, max(24.0, (size / 4.0).rounded() * 4.0))
         if let scaled = self.cachedScaledMascot, abs(scaled.size - targetSide) < 2.0 {
             return scaled.image
         }

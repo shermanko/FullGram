@@ -60,10 +60,12 @@ enum FullGramUserLyrics {
         switch result {
         case let .synced(lines):
             return lines.map { line in
-                let totalSec = max(0.0, line.time)
-                let mins = Int(totalSec) / 60
-                let secs = totalSec - Double(mins * 60)
-                return String(format: "[%02d:%05.2f] %@", mins, secs, line.text)
+                let totalSec = line.time.isFinite ? max(0.0, min(line.time, 86_400.0)) : 0.0
+                let totalCs = Int((totalSec * 100.0).rounded())
+                let mins = totalCs / 6000
+                let secs = (totalCs % 6000) / 100
+                let cs = totalCs % 100
+                return String(format: "[%02d:%02d.%02d] %@", mins, secs, cs, line.text)
             }.joined(separator: "\n")
         case let .plain(text):
             return text

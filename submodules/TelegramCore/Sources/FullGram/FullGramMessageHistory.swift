@@ -171,7 +171,7 @@ public struct FullGramMessageHistoryState: Codable, Equatable {
                 self.records.removeAll()
                 self.nextId = 1
             } else {
-                self.nextId = maximum + 1
+                self.nextId = max(0, maximum) + 1
             }
         }
     }
@@ -490,7 +490,7 @@ private func fullGramHistoryPeerAllowsArchiving(transaction: Transaction, peerId
     case let data as CachedChannelData:
         timeout = data.autoremoveTimeout
     default:
-        return true
+        return false
     }
     if case .known(nil) = timeout {
         return true
@@ -498,7 +498,7 @@ private func fullGramHistoryPeerAllowsArchiving(transaction: Transaction, peerId
     if case let .known(value?) = timeout {
         return value.effectiveValue == 0
     }
-    return true
+    return false
 }
 
 private func fullGramHistoryHasExpiringAttribute(_ attributes: [MessageAttribute]) -> Bool {
@@ -576,7 +576,7 @@ private func fullGramCaptureAttachments(
     var attachments: [FullGramArchivedAttachment] = []
     for item in mediaList {
         if let image = item as? TelegramMediaImage,
-           let representation = image.representations.max(by: { ($0.dimensions.width * $0.dimensions.height) < ($1.dimensions.width * $1.dimensions.height) }),
+           let representation = image.representations.max(by: { (Int64($0.dimensions.width) * Int64($0.dimensions.height)) < (Int64($1.dimensions.width) * Int64($1.dimensions.height)) }),
            let path = mediaBox.completedResourcePath(representation.resource),
            let saved = store.copy(source: path, displayName: "photo.jpg") {
             attachments.append(saved)

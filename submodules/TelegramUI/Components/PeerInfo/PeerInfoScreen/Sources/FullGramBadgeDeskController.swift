@@ -382,6 +382,8 @@ func fullGramBadgeDeskController(
     }
 
     let presenter = FullGramBadgeDeskPresenterBox()
+    let nftTick = ValuePromise<Int>(0, ignoreRepeated: false)
+    let nftCounter = Atomic<Int>(value: 0)
 
     let promptAdminToken: ((() -> Void)?) -> Void = { onSaved in
         let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
@@ -498,8 +500,6 @@ func fullGramBadgeDeskController(
         }
     }
 
-    let nftTick = ValuePromise<Int>(0, ignoreRepeated: false)
-    let nftCounter = Atomic<Int>(value: 0)
     let nftObserver = NotificationCenter.default.addObserver(
         forName: FullGramGrantedNFTStore.didChangeNotification,
         object: nil,
@@ -1262,29 +1262,31 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
         removeMarketPlugin: {
             let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
             FullGramPluginManager.shared.fetchRemoteCatalog { res in
-                switch res {
-                case let .failure(err):
-                    showAlert(ru ? "Ошибка" : "Error", err.localizedDescription)
-                case let .success(catalog):
-                    guard !catalog.plugins.isEmpty else {
-                        showAlert(ru ? "Маркет пуст" : "Market is empty", ru ? "В маркете сейчас нет плагинов." : "No plugins in market.")
-                        return
-                    }
-                    let sheet = UIAlertController(title: ru ? "Удалить из маркета" : "Delete from market", message: nil, preferredStyle: .actionSheet)
-                    for item in catalog.plugins {
-                        sheet.addAction(UIAlertAction(title: "\(item.name) (\(item.id))", style: .destructive, handler: { _ in
-                            FullGramAdmin.shared.deleteMarketPlugin(id: item.id) { delRes in
-                                switch delRes {
-                                case .success:
-                                    showAlert(ru ? "Удалено" : "Deleted", item.name)
-                                case let .failure(err):
-                                    showAlert(ru ? "Ошибка" : "Error", err.localizedDescription)
+                DispatchQueue.main.async {
+                    switch res {
+                    case let .failure(err):
+                        showAlert(ru ? "Ошибка" : "Error", err.localizedDescription)
+                    case let .success(catalog):
+                        guard !catalog.plugins.isEmpty else {
+                            showAlert(ru ? "Маркет пуст" : "Market is empty", ru ? "В маркете сейчас нет плагинов." : "No plugins in market.")
+                            return
+                        }
+                        let sheet = UIAlertController(title: ru ? "Удалить из маркета" : "Delete from market", message: nil, preferredStyle: .actionSheet)
+                        for item in catalog.plugins {
+                            sheet.addAction(UIAlertAction(title: "\(item.name) (\(item.id))", style: .destructive, handler: { _ in
+                                FullGramAdmin.shared.deleteMarketPlugin(id: item.id) { delRes in
+                                    switch delRes {
+                                    case .success:
+                                        showAlert(ru ? "Удалено" : "Deleted", item.name)
+                                    case let .failure(err):
+                                        showAlert(ru ? "Ошибка" : "Error", err.localizedDescription)
+                                    }
                                 }
-                            }
-                        }))
+                            }))
+                        }
+                        sheet.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
+                        presenter.presentNative?(sheet)
                     }
-                    sheet.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
-                    presenter.presentNative?(sheet)
                 }
             }
         },

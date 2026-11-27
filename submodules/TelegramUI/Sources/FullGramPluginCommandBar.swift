@@ -58,7 +58,7 @@ final class FullGramPluginCommandBarView: UIView {
         }
         if pluginsEnabled {
             commands.append(contentsOf: FullGramPluginManager.shared.availableCommands().filter {
-                prefix.isEmpty || $0.command.hasPrefix(prefix)
+                prefix.isEmpty || $0.command.lowercased().hasPrefix(prefix)
             })
         }
         guard !commands.isEmpty else {

@@ -133,11 +133,13 @@ public final class FullGramAntiScam {
     public var ruleMassJoinWindowSeconds: Int {
         get {
             let v = self.defaults.integer(forKey: self.prefix + "ruleMassJoinWindow")
-            return v >= 5 ? v : 30
+            return v >= 5 ? min(3600, v) : 30
         }
         set {
-            self.defaults.set(max(5, newValue), forKey: self.prefix + "ruleMassJoinWindow")
-            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+            self.defaults.set(min(3600, max(5, newValue)), forKey: self.prefix + "ruleMassJoinWindow")
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+            }
         }
     }
 
@@ -179,13 +181,22 @@ public final class FullGramAntiScam {
         set {
             if let data = try? JSONEncoder().encode(Array(newValue.prefix(60))) {
                 self.defaults.set(data, forKey: self.prefix + "ruleEvents")
-                NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+                }
             }
         }
     }
 
     public func clearRuleEvents() {
         self.ruleEvents = []
+    }
+
+    public func invalidateCache() {
+        self.whitelistLock.lock()
+        self.boolCache.removeAll()
+        self.cachedLowerWhitelist = nil
+        self.whitelistLock.unlock()
     }
 
     private let raidLock = NSLock()
@@ -205,17 +216,23 @@ public final class FullGramAntiScam {
         }
         self.recentRuleEventKeys[dedupKey] = now
         var list = self.ruleEvents
-        list.insert(RuleEvent(timestamp: Int32(now), chatPeerId: chatPeerId, authorId: authorId, ruleName: ruleName, detail: detail), at: 0)
-        self.ruleEvents = list
+        list.insert(RuleEvent(timestamp: Int32(clamping: Int64(now)), chatPeerId: chatPeerId, authorId: authorId, ruleName: ruleName, detail: detail), at: 0)
+        if let data = try? JSONEncoder().encode(Array(list.prefix(60))) {
+            self.defaults.set(data, forKey: self.prefix + "ruleEvents")
+        }
         self.raidLock.unlock()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        }
         self.recordDetection()
     }
 
     public func recordMemberJoin(chatPeerId: Int64, userId: Int64, timestamp: Int32) -> String? {
         guard self.isEnabled && self.ruleBanMassJoins else { return nil }
-        let window = Int32(self.ruleMassJoinWindowSeconds)
+        let window = Int64(min(3600, max(5, self.ruleMassJoinWindowSeconds)))
         let limit = self.ruleMassJoinLimit
-        let cutoff = timestamp - window
+        let cutoff64 = Int64(timestamp) - window
+        let cutoff = Int32(clamping: cutoff64)
 
         self.raidLock.lock()
         var arr = self.joinTimestampsByChat[chatPeerId] ?? []
@@ -224,10 +241,26 @@ public final class FullGramAntiScam {
         if arr.isEmpty {
             self.joinTimestampsByChat.removeValue(forKey: chatPeerId)
         } else {
-            if self.joinTimestampsByChat.count > 128 {
-                self.joinTimestampsByChat = self.joinTimestampsByChat.filter { !($0.value.isEmpty) }
-            }
             self.joinTimestampsByChat[chatPeerId] = arr
+            if self.joinTimestampsByChat.count > 128 {
+                for (k, v) in self.joinTimestampsByChat {
+                    let fresh = v.filter { $0 >= cutoff }
+                    if fresh.isEmpty {
+                        self.joinTimestampsByChat.removeValue(forKey: k)
+                    } else {
+                        self.joinTimestampsByChat[k] = fresh
+                    }
+                }
+                if self.joinTimestampsByChat.count > 128 {
+                    let oldestKeys = self.joinTimestampsByChat
+                        .sorted { ($0.value.last ?? 0) < ($1.value.last ?? 0) }
+                        .prefix(self.joinTimestampsByChat.count - 128)
+                        .map { $0.key }
+                    for k in oldestKeys {
+                        self.joinTimestampsByChat.removeValue(forKey: k)
+                    }
+                }
+            }
         }
         let count = arr.count
         self.raidLock.unlock()
@@ -254,12 +287,17 @@ public final class FullGramAntiScam {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if self.ruleBanByTemplates, !trimmed.isEmpty {
-            let normalized = Self.normalize(trimmed)
+            let bounded = trimmed.count > 2000 ? String(trimmed.prefix(2000)) : trimmed
+            let normalized = Self.normalize(bounded)
             for tpl in self.ruleCustomTemplates where !tpl.isEmpty {
                 if tpl.hasPrefix("/"), tpl.hasSuffix("/"), tpl.count > 2 {
                     let pattern = String(tpl.dropFirst().dropLast())
+                    // Guard against catastrophic backtracking (ReDoS): cap pattern length and reject nested quantifiers.
+                    guard pattern.count <= 128, !pattern.contains("++"), !pattern.contains("**"), !pattern.contains(")+"), !pattern.contains(")*") else {
+                        continue
+                    }
                     if let rx = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
-                       rx.firstMatch(in: trimmed, range: NSRange(location: 0, length: (trimmed as NSString).length)) != nil {
+                       rx.firstMatch(in: bounded, range: NSRange(location: 0, length: (bounded as NSString).length)) != nil {
                         let reason = "Совпадение с шаблоном \(tpl)"
                         self.recordRuleEvent(chatPeerId: chatPeerId, authorId: authorRawId, ruleName: "Шаблон", detail: reason)
                         return ("Бан по шаблону", reason)
@@ -280,7 +318,7 @@ public final class FullGramAntiScam {
                 if (host == "t.me" || host == "telegram.me") && link.contains("+") {
                     return true
                 }
-                return !Self.officialTelegramDomains.contains(host) || link.contains("joinchat")
+                return !Self.officialTelegramDomains.contains(host) || link.lowercased().contains("joinchat")
             }
             if let first = suspiciousLinks.first {
                 let reason = "Запрещённая ссылка: \(first)"
@@ -354,8 +392,12 @@ public final class FullGramAntiScam {
 
     public func recordDetection() {
         self.raidLock.lock()
-        self.blockedCount += 1
+        let next = self.defaults.integer(forKey: self.prefix + "blockedCount") + 1
+        self.defaults.set(next, forKey: self.prefix + "blockedCount")
         self.raidLock.unlock()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
+        }
     }
 
     private func bool(_ key: String, default fallback: Bool) -> Bool {

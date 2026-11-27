@@ -388,9 +388,9 @@ public final class FullGramAdmin: @unchecked Sendable {
                 return
             }
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            let parsed = data.flatMap { try? JSONSerialization.jsonObject(with: $0, options: []) as? [String: Any] } ?? [:]
-            guard (200 ..< 300).contains(status), (parsed["ok"] as? Bool ?? true) else {
-                let message = (parsed["error"] as? String) ?? "HTTP \(status)"
+            let parsedObj = data.flatMap { try? JSONSerialization.jsonObject(with: $0, options: []) as? [String: Any] }
+            guard (200 ..< 300).contains(status), let parsed = parsedObj, (parsed["ok"] as? Bool ?? true) else {
+                let message = (parsedObj?["error"] as? String) ?? "HTTP \(status)"
                 let err = NSError(domain: "FullGramAdmin", code: status, userInfo: [NSLocalizedDescriptionKey: message])
                 DispatchQueue.main.async { completion(.failure(err)) }
                 return
@@ -1044,9 +1044,9 @@ public final class FullGramAdmin: @unchecked Sendable {
                         DispatchQueue.main.async { completion(.failure(error)) }
                         return
                     }
-                    let parsed = data.flatMap { try? JSONSerialization.jsonObject(with: $0, options: []) as? [String: Any] } ?? [:]
-                    guard (200 ..< 300).contains(status), (parsed["ok"] as? Bool ?? true) else {
-                        let msg = (parsed["error"] as? String) ?? "HTTP \(status)"
+                    let parsedObj = data.flatMap { try? JSONSerialization.jsonObject(with: $0, options: []) as? [String: Any] }
+                    guard (200 ..< 300).contains(status), let parsed = parsedObj, (parsed["ok"] as? Bool ?? true) else {
+                        let msg = (parsedObj?["error"] as? String) ?? "HTTP \(status)"
                         DispatchQueue.main.async {
                             completion(.failure(NSError(domain: "FullGramAdmin", code: status, userInfo: [NSLocalizedDescriptionKey: msg])))
                         }
@@ -1263,7 +1263,15 @@ public final class FullGramBetaAccess: @unchecked Sendable {
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
-        SecItemAdd(attrs as CFDictionary, nil)
+        let status = SecItemAdd(attrs as CFDictionary, nil)
+        if status == errSecDuplicateItem {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: self.keychainService,
+                kSecAttrAccount as String: account
+            ]
+            SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        }
     }
 
     private func deleteKeychain(_ account: String) {

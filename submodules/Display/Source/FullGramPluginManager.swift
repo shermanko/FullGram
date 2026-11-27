@@ -143,10 +143,12 @@ public enum FullGramPluginTimeHelper {
         let jFmt = DateFormatter.dateFormat(fromTemplate: "j", options: 0, locale: Locale.current) ?? "HH"
         let is24h = !jFmt.contains("a")
 
+        let ts = date.timeIntervalSince1970
+        let safeTs = ts.isFinite ? max(-62_135_596_800.0, min(253_402_300_799.0, ts)) : 0.0
         return [
-            "timestamp": .double(date.timeIntervalSince1970),
-            "unix": .int(Int64(date.timeIntervalSince1970)),
-            "unix_ms": .int(Int64(date.timeIntervalSince1970 * 1000.0)),
+            "timestamp": .double(safeTs),
+            "unix": .int(Int64(safeTs)),
+            "unix_ms": .int(Int64((safeTs * 1000.0).rounded())),
             "hm": .string(hm),
             "hms": .string(hms),
             "formatted": .string(formatted),
@@ -278,9 +280,9 @@ public final class FullGramPluginManager {
     public static let officialCatalogURL = "https://fullgram.korsakovx.workers.dev/plugins.json"
 
     private struct DeviceSnapshot {
-        var model: String = UIDevice.current.model
-        var systemName: String = UIDevice.current.systemName
-        var systemVersion: String = UIDevice.current.systemVersion
+        var model: String = "iPhone"
+        var systemName: String = "iOS"
+        var systemVersion: String = ""
         var batteryLevel: Int = -1
         var batteryState: String = "unknown"
         var isCharging: Bool = false
@@ -903,15 +905,22 @@ public final class FullGramPluginManager {
     }
 
     private func reloadRuntimeLocked() {
-        for old in self.cachedOrderedPlugins where old.hasUnloadHook {
-            self.invokeLifecycleHook(plugin: old, name: "on_unload", args: [])
-        }
+        let oldUnloadPlugins = self.cachedOrderedPlugins.filter { $0.hasUnloadHook }
         self.loaded.removeAll()
         self.cachedOrderedPlugins.removeAll()
         self.cachedRenderPlugins.removeAll()
         self.hasRenderHooks = false
         guard self.isSystemEnabled else {
             self.syncBackgroundSchedulerLocked()
+            if !oldUnloadPlugins.isEmpty {
+                // Invoke lifecycle hooks outside self.lock to prevent AB-BA deadlock with self.vmLock.
+                self.backgroundQueue.async { [weak self] in
+                    guard let self else { return }
+                    for old in oldUnloadPlugins {
+                        self.invokeLifecycleHook(plugin: old, name: "on_unload", args: [])
+                    }
+                }
+            }
             return
         }
 
@@ -927,10 +936,20 @@ public final class FullGramPluginManager {
         }
         self.hasRenderHooks = anyRender
 
-        for plugin in self.cachedOrderedPlugins where plugin.hasLoadHook {
-            self.invokeLifecycleHook(plugin: plugin, name: "on_load", args: [])
-        }
+        let newLoadPlugins = self.cachedOrderedPlugins.filter { $0.hasLoadHook }
         self.syncBackgroundSchedulerLocked()
+        if !oldUnloadPlugins.isEmpty || !newLoadPlugins.isEmpty {
+            // Invoke lifecycle hooks outside self.lock to prevent AB-BA deadlock with self.vmLock.
+            self.backgroundQueue.async { [weak self] in
+                guard let self else { return }
+                for old in oldUnloadPlugins {
+                    self.invokeLifecycleHook(plugin: old, name: "on_unload", args: [])
+                }
+                for plugin in newLoadPlugins {
+                    self.invokeLifecycleHook(plugin: plugin, name: "on_load", args: [])
+                }
+            }
+        }
     }
 
     // MARK: - Profile Cache, Nickname Management & Telegram Bridge
@@ -1582,8 +1601,23 @@ public final class FullGramPluginManager {
     ) -> (status: Int, body: String?, error: String?) {
         guard let url = URL(string: urlString),
               let scheme = url.scheme?.lowercased(),
-              scheme == "https" || scheme == "http" else {
+              scheme == "https" || scheme == "http",
+              let host = url.host?.lowercased(), !host.isEmpty else {
             return (0, nil, "Invalid URL")
+        }
+        if host == "localhost"
+            || host == "::1"
+            || host == "[::1]"
+            || host == "0.0.0.0"
+            || host.hasSuffix(".local")
+            || host.hasPrefix("127.")
+            || host.hasPrefix("10.")
+            || host.hasPrefix("169.254.")
+            || host.hasPrefix("192.168.")
+            || host.hasPrefix("fc")
+            || host.hasPrefix("fd") {
+            self.appendLog(pluginId: pluginId, message: "BLOCKED: SSRF to private host \(host)")
+            return (0, nil, "Private/local network hosts are blocked")
         }
         if Thread.isMainThread {
             self.appendLog(pluginId: pluginId, message: "WARN: \(method) \(urlString) blocked on main thread")
@@ -1616,7 +1650,8 @@ public final class FullGramPluginManager {
             }
         }
 
-        let task = URLSession.shared.dataTask(with: request) { data, response, error in
+        let ephemeralSession = URLSession(configuration: .ephemeral)
+        let task = ephemeralSession.dataTask(with: request) { data, response, error in
             boxLock.lock()
             respStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
             if let error {
@@ -1776,6 +1811,7 @@ public final class FullGramPluginManager {
 
         let makeStorageSet: (String) -> ([FullGramPluginValue]) -> FullGramPluginValue = { prefix in
             return { args in
+                guard !isSandboxTest else { return .bool(false) }
                 let key = args.first?.asString ?? ""
                 guard !key.isEmpty else { return .bool(false) }
                 let val = args.count > 1 ? args[1] : .nil
@@ -1799,6 +1835,7 @@ public final class FullGramPluginManager {
         let storageGetFn = makeStorageGet(storagePrefix)
         let storageSetFn = makeStorageSet(storagePrefix)
         let storageDeleteFn: ([FullGramPluginValue]) -> FullGramPluginValue = { args in
+            guard !isSandboxTest else { return .bool(false) }
             let key = args.first?.asString ?? ""
             guard !key.isEmpty else { return .bool(false) }
             UserDefaults.standard.removeObject(forKey: storagePrefix + key)
@@ -1972,7 +2009,7 @@ public final class FullGramPluginManager {
             return .bool(true)
         }
         let emitEventFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
-            guard let self else { return .int(0) }
+            guard let self, !isSandboxTest else { return .int(0) }
             let eventName = args.first?.asString.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !eventName.isEmpty else { return .int(0) }
             let payload = args.count > 1 ? args[1] : .nil

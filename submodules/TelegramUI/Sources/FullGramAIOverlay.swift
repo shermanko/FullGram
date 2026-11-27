@@ -101,7 +101,9 @@ private enum FullGramAITelegramContextBuilder {
         let store = FullGramAIStore.shared
         var signals: [Signal<String, NoError>] = []
 
-        if let peerId = targetPeerId, store.allowReadCurrentChat {
+        if let peerId = targetPeerId,
+           store.allowReadCurrentChat,
+           (!FullGramChatPrivacy.isLocked(peerId.toInt64()) || FullGramChatPrivacy.isUnlocked(peerId.toInt64())) {
             let peerSignal = context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
             let recentSignal = context.account.postbox.aroundMessageHistoryViewForLocation(
                 .peer(peerId: peerId, threadId: nil),
@@ -258,6 +260,9 @@ private enum FullGramAITelegramContextBuilder {
 
                 for entry in view.entries.reversed() {
                     if case let .MessageEntry(data) = entry, let mainPeer = data.renderedPeer.chatMainPeer {
+                        if FullGramChatPrivacy.isLocked(mainPeer.id.toInt64()) && !FullGramChatPrivacy.isUnlocked(mainPeer.id.toInt64()) {
+                            continue
+                        }
                         totalChats += 1
                         if mainPeer is TelegramUser {
                             privateChats += 1
@@ -1400,7 +1405,13 @@ final class FullGramAIOverlayCoordinator {
 
                 guard let unreadCount = data.readState?.state.count, unreadCount > 0 else { continue }
                 guard lastMsg.flags.contains(.Incoming) else { continue }
+                if FullGramChatPrivacy.isLocked(peerId.toInt64()) && !FullGramChatPrivacy.isUnlocked(peerId.toInt64()) {
+                    continue
+                }
 
+                if self.seenPluginIncomingMessageIds.count > 2000 {
+                    self.seenPluginIncomingMessageIds.removeAll(keepingCapacity: true)
+                }
                 if lastMsg.timestamp >= self.coordinatorLaunchTimestamp &&
                    peerId != selfPeerId &&
                    self.seenPluginIncomingMessageIds.insert(lastMsg.id).inserted {
@@ -1432,6 +1443,9 @@ final class FullGramAIOverlayCoordinator {
                     }
                 }
 
+                if self.seenAutoReplyMessageIds.count > 2000 {
+                    self.seenAutoReplyMessageIds.removeAll(keepingCapacity: true)
+                }
                 guard self.seenAutoReplyMessageIds.insert(lastMsg.id).inserted else { continue }
                 let peerRaw = peerId.toInt64()
                 guard settings.canReply(to: peerRaw) else { continue }
@@ -2100,33 +2114,40 @@ final class FullGramAIOverlayCoordinator {
 
         case .sendMessage:
             guard let peerId = targetPeer, let text = action.text, !text.isEmpty else { return }
-            let alert = UIAlertController(
-                title: "Подтвердите отправку",
-                message: "ИИ просит отправить сообщение:\n\n«\(text)»",
-                preferredStyle: .alert
-            )
-            alert.addAction(UIAlertAction(title: "Отправить", style: .default, handler: { [weak self] _ in
+            let isCrossChat = (self.currentPeerId != nil && self.currentPeerId != peerId)
+            let _ = (self.context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
+            |> deliverOnMainQueue).start(next: { [weak self] peer in
                 guard let self else { return }
-                let _ = enqueueMessages(account: self.context.account, peerId: peerId, messages: [
-                    EnqueueMessage.message(
-                        text: text,
-                        attributes: [],
-                        inlineStickers: [:],
-                        mediaReference: nil,
-                        threadId: nil,
-                        replyToMessageId: nil,
-                        replyToStoryId: nil,
-                        localGroupingKey: nil,
-                        correlationId: nil,
-                        bubbleUpEmojiOrStickersets: []
-                    )
-                ]).startStandalone()
-                store.updateActionStatus(messageId: messageId, status: .applied)
-            }))
-            alert.addAction(UIAlertAction(title: "Отмена", style: .cancel, handler: { _ in
-                store.updateActionStatus(messageId: messageId, status: .cancelled)
-            }))
-            self.presentNativeUIKitController(alert)
+                let destTitle = peer?.compactDisplayTitle ?? "ID \(peerId.id._internalGetInt64Value())"
+                let crossWarn = isCrossChat ? "\n⚠️ Внимание: другой чат (не текущий)!" : ""
+                let alert = UIAlertController(
+                    title: "Подтвердите отправку",
+                    message: "Получатель: \(destTitle)\(crossWarn)\n\n«\(text)»",
+                    preferredStyle: .alert
+                )
+                alert.addAction(UIAlertAction(title: "Отправить", style: .default, handler: { [weak self] _ in
+                    guard let self else { return }
+                    let _ = enqueueMessages(account: self.context.account, peerId: peerId, messages: [
+                        EnqueueMessage.message(
+                            text: text,
+                            attributes: [],
+                            inlineStickers: [:],
+                            mediaReference: nil,
+                            threadId: nil,
+                            replyToMessageId: nil,
+                            replyToStoryId: nil,
+                            localGroupingKey: nil,
+                            correlationId: nil,
+                            bubbleUpEmojiOrStickersets: []
+                        )
+                    ]).startStandalone()
+                    store.updateActionStatus(messageId: messageId, status: .applied)
+                }))
+                alert.addAction(UIAlertAction(title: "Отмена", style: .cancel, handler: { _ in
+                    store.updateActionStatus(messageId: messageId, status: .cancelled)
+                }))
+                self.presentNativeUIKitController(alert)
+            })
 
         case .openChat:
             guard let peerId = targetPeer, let nav = self.rootController else { return }
@@ -2174,6 +2195,9 @@ func fullGramBuildChatStatsSignal(
     peerId: PeerId,
     chatTitle: String
 ) -> Signal<[String: FullGramPluginValue]?, NoError> {
+    if FullGramChatPrivacy.isLocked(peerId.toInt64()) && !FullGramChatPrivacy.isUnlocked(peerId.toInt64()) {
+        return .single(nil)
+    }
     let firstSignal = context.account.postbox.aroundMessageHistoryViewForLocation(
         .peer(peerId: peerId, threadId: nil),
         anchor: .lowerBound,
@@ -3054,9 +3078,29 @@ private final class FullGramPluginWebViewController: UIViewController, WKNavigat
             wv.bottomAnchor.constraint(equalTo: self.view.bottomAnchor)
         ])
 
+        let closeBtn = UIButton(type: .system)
+        closeBtn.translatesAutoresizingMaskIntoConstraints = false
+        closeBtn.setTitle("✕", for: .normal)
+        closeBtn.setTitleColor(.white, for: .normal)
+        closeBtn.titleLabel?.font = .systemFont(ofSize: 16, weight: .bold)
+        closeBtn.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        closeBtn.layer.cornerRadius = 17
+        closeBtn.addTarget(self, action: #selector(self.nativeCloseTapped), for: .touchUpInside)
+        self.view.addSubview(closeBtn)
+        NSLayoutConstraint.activate([
+            closeBtn.topAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            closeBtn.trailingAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            closeBtn.widthAnchor.constraint(equalToConstant: 34),
+            closeBtn.heightAnchor.constraint(equalToConstant: 34)
+        ])
+
         var req = URLRequest(url: self.url)
         req.cachePolicy = .reloadIgnoringLocalCacheData
         wv.load(req)
+    }
+
+    @objc private func nativeCloseTapped() {
+        self.dismiss(animated: true)
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -3085,11 +3129,12 @@ private final class FullGramPluginWebViewController: UIViewController, WKNavigat
         case "close":
             self.dismiss(animated: true)
         case "shareChat":
-            guard let currentURL = self.webView?.url, Self.isAllowedURL(currentURL) else {
+            guard let currentURL = self.webView?.url, Self.isAllowedURL(currentURL), self.presentedViewController == nil else {
                 return
             }
-            if let text = dict["text"] as? String, !text.isEmpty {
-                let preview = String(text.prefix(240))
+            if let rawText = dict["text"] as? String, !rawText.isEmpty {
+                let text = String(rawText.prefix(4000))
+                let preview = text.count > 240 ? String(text.prefix(240)) + "… (\(text.count) симв.)" : text
                 let alert = UIAlertController(
                     title: "Отправить в чат?",
                     message: preview,

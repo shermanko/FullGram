@@ -379,7 +379,8 @@ private enum FullGramOfficeTextExtractor {
                 ?? (try? String(contentsOf: url, encoding: .windowsCP1251))
                 ?? ""
         }
-        guard let data = try? Data(contentsOf: url) else { return "" }
+        let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        guard fileSize <= 32 * 1024 * 1024, let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return "" }
         let entries = FullGramArchiveParser.parseZipEntries(data: data)
         if ext == "docx" {
             guard let docEntry = entries.first(where: { $0.name == "word/document.xml" }),
@@ -1030,7 +1031,8 @@ public final class FullGramAudioTrimSpliceController: ViewController, UITableVie
         if let initialURL {
             let safeURL = fullGramEnsureExtensionURL(for: initialURL, preferredFileName: title, fallbackExtension: isVideoCircle ? "mp4" : "m4a")
             let asset = AVURLAsset(url: safeURL)
-            let dur = max(0.5, CMTimeGetSeconds(asset.duration))
+            let rawDur = CMTimeGetSeconds(asset.duration)
+            let dur = rawDur.isFinite ? max(0.5, rawDur) : 0.5
             self.segments = [AudioSegment(url: safeURL, title: title, duration: dur, trimStart: 0.0, trimEnd: dur)]
         }
         if onSendOriginal != nil {
@@ -1168,7 +1170,8 @@ public final class FullGramAudioTrimSpliceController: ViewController, UITableVie
     }
 
     private static func fmt(_ seconds: TimeInterval) -> String {
-        let total = max(0, Int(seconds.rounded()))
+        let safe = seconds.isFinite ? max(0.0, min(seconds, 86_400.0)) : 0.0
+        let total = Int(safe.rounded())
         return String(format: "%02d:%02d", total / 60, total % 60)
     }
 
@@ -1257,7 +1260,8 @@ public final class FullGramAudioTrimSpliceController: ViewController, UITableVie
     public func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         for url in urls {
             let asset = AVURLAsset(url: url)
-            let dur = max(0.5, CMTimeGetSeconds(asset.duration))
+            let rawDur = CMTimeGetSeconds(asset.duration)
+            let dur = rawDur.isFinite ? max(0.5, rawDur) : 0.5
             self.segments.append(AudioSegment(url: url, title: url.lastPathComponent, duration: dur, trimStart: 0.0, trimEnd: dur))
         }
         if !self.segments.isEmpty && self.selectedIndex >= self.segments.count {

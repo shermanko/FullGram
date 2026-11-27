@@ -119,21 +119,34 @@ public enum FullGramPlayerNightLook {
         }
     }
 
+    private static func postChange() {
+        if Thread.isMainThread {
+            NotificationCenter.default.post(name: didChangeNotification, object: nil)
+        } else {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: didChangeNotification, object: nil)
+            }
+        }
+    }
+
     public static func reset() {
         let d = UserDefaults.standard
         for k in [enabledKey, modeKey, startHourKey, endHourKey, strengthKey, tintKey] {
             d.removeObject(forKey: k)
         }
-        NotificationCenter.default.post(name: didChangeNotification, object: nil)
+        self.postChange()
     }
 
     public static func isNightHour(_ hour: Int, start: Int = FullGramPlayerNightLook.startHour, end: Int = FullGramPlayerNightLook.endHour) -> Bool {
-        if start == end {
+        let h = ((hour % 24) + 24) % 24
+        let s = ((start % 24) + 24) % 24
+        let e = ((end % 24) + 24) % 24
+        if s == e {
             return true
-        } else if start < end {
-            return hour >= start && hour < end
+        } else if s < e {
+            return h >= s && h < e
         } else {
-            return hour >= start || hour < end
+            return h >= s || h < e
         }
     }
 

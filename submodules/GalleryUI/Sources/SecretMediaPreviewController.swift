@@ -665,36 +665,55 @@ public final class SecretMediaPreviewController: ViewController {
 
     private func fullGramAutoSaveMediaToPhotos(message: Message, tempFilePath: String?) {
         let mediaBox = self.context.account.postbox.mediaBox
-        if let path = tempFilePath, FileManager.default.fileExists(atPath: path) {
-            let url = URL(fileURLWithPath: path)
-            PHPhotoLibrary.shared().performChanges({
-                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
-            }, completionHandler: nil)
-            return
-        }
+        var videoSourcePath: String?
+        var videoExt: String = "mp4"
+        var imageSourcePath: String?
+
         for media in message.media {
-            if let image = media as? TelegramMediaImage,
-               let representation = image.representations.last,
-               let path = mediaBox.completedResourcePath(representation.resource),
-               let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-               let uiImage = UIImage(data: data) {
+            if let file = media as? TelegramMediaFile {
+                let ext = (file.fileName as NSString?)?.pathExtension
+                if let ext = ext, !ext.isEmpty {
+                    videoExt = ext
+                }
+                if let path = tempFilePath, FileManager.default.fileExists(atPath: path) {
+                    videoSourcePath = path
+                } else if let path = mediaBox.completedResourcePath(file.resource) {
+                    videoSourcePath = path
+                }
+                break
+            } else if let image = media as? TelegramMediaImage,
+                      let representation = image.representations.last,
+                      let path = mediaBox.completedResourcePath(representation.resource) {
+                imageSourcePath = path
+                break
+            }
+        }
+        if videoSourcePath == nil, imageSourcePath == nil, let path = tempFilePath, FileManager.default.fileExists(atPath: path) {
+            videoSourcePath = path
+        }
+
+        if let sourcePath = videoSourcePath {
+            let safeExt = videoExt
+            DispatchQueue.global(qos: .utility).async {
+                let tempURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("fullgram_\(UUID().uuidString).\(safeExt)")
+                guard (try? FileManager.default.copyItem(at: URL(fileURLWithPath: sourcePath), to: tempURL)) != nil else {
+                    return
+                }
+                PHPhotoLibrary.shared().performChanges({
+                    PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: tempURL)
+                }, completionHandler: { _, _ in
+                    try? FileManager.default.removeItem(at: tempURL)
+                })
+            }
+        } else if let sourcePath = imageSourcePath {
+            DispatchQueue.global(qos: .utility).async {
+                guard let data = try? Data(contentsOf: URL(fileURLWithPath: sourcePath)),
+                      let uiImage = UIImage(data: data) else {
+                    return
+                }
                 PHPhotoLibrary.shared().performChanges({
                     PHAssetChangeRequest.creationRequestForAsset(from: uiImage)
                 }, completionHandler: nil)
-                return
-            } else if let file = media as? TelegramMediaFile,
-                      let path = mediaBox.completedResourcePath(file.resource) {
-                let ext = (file.fileName as NSString?)?.pathExtension
-                let safeExt = (ext?.isEmpty == false) ? ext! : "mp4"
-                let tempURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("fullgram_\(UUID().uuidString).\(safeExt)")
-                if (try? FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: tempURL)) != nil {
-                    PHPhotoLibrary.shared().performChanges({
-                        PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: tempURL)
-                    }, completionHandler: { _, _ in
-                        try? FileManager.default.removeItem(at: tempURL)
-                    })
-                }
-                return
             }
         }
     }

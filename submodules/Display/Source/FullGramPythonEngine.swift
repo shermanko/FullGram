@@ -717,7 +717,10 @@ private struct PyParser {
         case .false: self.pos += 1; return .bool(false)
         case let .number(val, isInt):
             self.pos += 1
-            return isInt ? .int(Int64(val)) : .double(val)
+            if isInt, let exact = Int64(exactly: val) {
+                return .int(exact)
+            }
+            return .double(val)
         case let .string(s): self.pos += 1; return .string(s)
         case let .fString(s): self.pos += 1; return .fString(s)
         case let .ident(id): self.pos += 1; return .ident(id)
@@ -1136,11 +1139,19 @@ public final class FullGramPythonVM {
             arr.reverse()
             return .nil
         case "sort":
-            arr.sort {
-                if let a = $0.asDouble, let b = $1.asDouble, a.isFinite && b.isFinite {
+            arr.sort { lhs, rhs in
+                let la = lhs.asDouble.flatMap { $0.isFinite ? $0 : nil }
+                let lb = rhs.asDouble.flatMap { $0.isFinite ? $0 : nil }
+                switch (la, lb) {
+                case let (a?, b?):
                     return a < b
+                case (.some, .none):
+                    return true
+                case (.none, .some):
+                    return false
+                case (.none, .none):
+                    return lhs.asString < rhs.asString
                 }
-                return $0.asString < $1.asString
             }
             return .nil
         default:
@@ -1406,7 +1417,9 @@ public final class FullGramPythonVM {
             var guardCount = 0
             while ((step > 0 && cur < stop) || (step < 0 && cur > stop)) && guardCount < 10_000 {
                 res.append(.int(Int64(cur)))
-                cur += step
+                let (next, overflow) = cur.addingReportingOverflow(step)
+                if overflow { break }
+                cur = next
                 guardCount += 1
             }
             return .list(res)
@@ -1426,11 +1439,19 @@ public final class FullGramPythonVM {
         self.globalEnv.set("sorted", .function { [weak self] args in
             guard let self else { return .list([]) }
             let items = self.iterableItems(args.first ?? .nil)
-            return .list(items.sorted {
-                if let a = $0.asDouble, let b = $1.asDouble, a.isFinite && b.isFinite {
+            return .list(items.sorted { lhs, rhs in
+                let la = lhs.asDouble.flatMap { $0.isFinite ? $0 : nil }
+                let lb = rhs.asDouble.flatMap { $0.isFinite ? $0 : nil }
+                switch (la, lb) {
+                case let (a?, b?):
                     return a < b
+                case (.some, .none):
+                    return true
+                case (.none, .some):
+                    return false
+                case (.none, .none):
+                    return lhs.asString < rhs.asString
                 }
-                return $0.asString < $1.asString
             })
         })
         self.globalEnv.set("abs", .function { args in

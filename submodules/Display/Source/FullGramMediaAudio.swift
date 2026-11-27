@@ -537,8 +537,13 @@ public final class FullGramAutoResponderSettings {
     }
 
     public func markReplied(to peerId: Int64) {
+        let now = Date().timeIntervalSince1970
+        let cooldown = Double(self.cooldownSeconds)
         self.lock.lock()
-        self.lastRepliedByPeer[peerId] = Date().timeIntervalSince1970
+        if self.lastRepliedByPeer.count > 256 {
+            self.lastRepliedByPeer = self.lastRepliedByPeer.filter { (now - $0.value) < cooldown }
+        }
+        self.lastRepliedByPeer[peerId] = now
         self.lock.unlock()
         self.totalRepliesSent += 1
     }

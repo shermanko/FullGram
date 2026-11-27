@@ -661,7 +661,8 @@ public final class SharedAccountContextImpl: SharedAccountContext {
             FullGramGrantedNFTStore.shared.refreshIfNeeded(maxAge: 20.0)
             FullGramDiscordCosmeticsCatalog.shared.refreshIfNeeded(maxAge: 21600.0)
         }
-        self.automaticMediaDownloadSettingsDisposable.set(self._automaticMediaDownloadSettings.get().start(next: { [weak self] next in
+        self.automaticMediaDownloadSettingsDisposable.set((self._automaticMediaDownloadSettings.get()
+        |> deliverOnMainQueue).start(next: { [weak self] next in
             if let strongSelf = self {
                 strongSelf.currentAutomaticMediaDownloadSettings = next
                 

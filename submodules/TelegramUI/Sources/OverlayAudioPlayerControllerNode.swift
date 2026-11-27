@@ -786,6 +786,11 @@ final class OverlayAudioPlayerControllerNode: ViewControllerTracingNode, ASGestu
             alert.addAction(UIAlertAction(title: "Выключить таймер", style: .destructive) { _ in FullGramSleepTimer.shared.set(mode: .off) })
         }
         alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
+        if let popover = alert.popoverPresentationController {
+            popover.sourceView = self.view
+            popover.sourceRect = CGRect(x: self.bounds.midX, y: self.bounds.midY, width: 1.0, height: 1.0)
+            popover.permittedArrowDirections = []
+        }
         self.getParentController()?.present(alert, animated: true)
     }
     

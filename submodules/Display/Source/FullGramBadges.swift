@@ -161,10 +161,6 @@ public final class FullGramBadges {
 
         let normId = FullGramCloudCosmetics.normalizedPeerId(peerId)
         var matchedRoleId = self.usersById[normId] ?? self.usersById[peerId]
-        if matchedRoleId == nil, peerId < 0, peerId != Int64.min {
-            let raw = abs(peerId)
-            matchedRoleId = self.usersById[raw]
-        }
         if matchedRoleId == nil, let rawName = username, !rawName.isEmpty {
             let clean = rawName.trimmingCharacters(in: CharacterSet(charactersIn: "@ ")).lowercased()
             matchedRoleId = self.usersByName[clean]

@@ -621,7 +621,7 @@ public enum FullGramAvatarFrames {
         var seen = Set<String>()
         var urls: [URL] = []
         let appendUnique: (String) -> Void = { s in
-            guard !s.isEmpty, !seen.contains(s), let u = URL(string: s) else { return }
+            guard !s.isEmpty, !seen.contains(s), let u = URL(string: s), u.scheme?.lowercased() == "https" else { return }
             seen.insert(s)
             urls.append(u)
         }
@@ -909,6 +909,12 @@ public enum FullGramProfileEffects {
         let token = safeId.isEmpty ? "effect" : safeId
         return self.cacheDirectory().appendingPathComponent("\(token)_layer\(layerIndex).png")
     }
+
+    public static func cachedThumbnailURL(effectId: String) -> URL {
+        let safeId = String(effectId.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "-" ? Character($0) : "_" })
+        let token = safeId.isEmpty ? "effect" : safeId
+        return self.cacheDirectory().appendingPathComponent("\(token)_thumb.png")
+    }
 }
 
 // MARK: - APNG / GIF декодер (общий для рамок и анимаций профиля)
@@ -976,8 +982,8 @@ public final class FullGramAnimatedImageDecoder {
     }()
 
     private static func removeCorruptCachedFileIfNeeded(_ url: URL) {
-        let framesPath = FullGramAvatarFrames.cacheDirectory().standardizedFileURL.path
-        let effectsPath = FullGramProfileEffects.cacheDirectory().standardizedFileURL.path
+        let framesPath = FullGramAvatarFrames.cacheDirectory().standardizedFileURL.path + "/"
+        let effectsPath = FullGramProfileEffects.cacheDirectory().standardizedFileURL.path + "/"
         let targetPath = url.standardizedFileURL.path
         if targetPath.hasPrefix(framesPath) || targetPath.hasPrefix(effectsPath) {
             try? FileManager.default.removeItem(at: url)
@@ -1012,7 +1018,7 @@ public final class FullGramAnimatedImageDecoder {
         var seen = Set<String>()
         var urls: [URL] = []
         let appendUnique: (String) -> Void = { str in
-            guard !str.isEmpty, !seen.contains(str), let u = URL(string: str) else { return }
+            guard !str.isEmpty, !seen.contains(str), let u = URL(string: str), u.scheme?.lowercased() == "https" else { return }
             seen.insert(str)
             urls.append(u)
         }
@@ -1147,7 +1153,7 @@ public final class FullGramAnimatedImageDecoder {
         }
         let orderedIndices: [Int] = layerURLs.count > 1 ? [1, 0] : (layerURLs.isEmpty ? [] : [0])
         guard !orderedIndices.isEmpty else { return }
-        let thumbDiskURL = FullGramProfileEffects.cacheDirectory().appendingPathComponent("\(effectId)_thumb.png")
+        let thumbDiskURL = FullGramProfileEffects.cachedThumbnailURL(effectId: effectId)
         self.ioQueue.async {
             if FileManager.default.fileExists(atPath: thumbDiskURL.path),
                let img = self.decodeStaticThumbnail(url: thumbDiskURL, cacheKey: cacheKey, maxPixelSize: maxPixelSize) {
@@ -1270,7 +1276,7 @@ public final class FullGramAnimatedImageDecoder {
         }
 
         let token = UUID()
-        let thumbDiskURL = FullGramProfileEffects.cacheDirectory().appendingPathComponent("\(effectId)_thumb.png")
+        let thumbDiskURL = FullGramProfileEffects.cachedThumbnailURL(effectId: effectId)
         self.ioQueue.async {
             guard !self.isCancelled(token) else { return }
             if FileManager.default.fileExists(atPath: thumbDiskURL.path) {
@@ -1434,23 +1440,25 @@ public final class FullGramAnimatedImageDecoder {
         index: Int,
         maxPixelSize: Int
     ) -> CGImage? {
-        let directOpts: [CFString: Any] = [
-            kCGImageSourceShouldCacheImmediately: true
-        ]
-        if let rawImg = CGImageSourceCreateImageAtIndex(source, index, directOpts as CFDictionary) {
-            let scaled = self.downscaledCGImage(rawImg, maxPixelSize: maxPixelSize)
-            if self.isImageVisiblyOpaque(scaled) {
-                return scaled
+        let safeMax = max(32, min(maxPixelSize, 1024))
+        // Inspect header dimensions first to block PNG/GIF decompression bombs before decoding pixels.
+        if let props = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any] {
+            let pw = (props[kCGImagePropertyPixelWidth] as? Int) ?? 0
+            let ph = (props[kCGImagePropertyPixelHeight] as? Int) ?? 0
+            if pw > 8192 || ph > 8192 || Int64(pw) * Int64(ph) > 25_000_000 {
+                return nil
             }
         }
         let thumbOptions: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            kCGImageSourceThumbnailMaxPixelSize: safeMax,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceShouldCacheImmediately: true
         ]
-        return CGImageSourceCreateThumbnailAtIndex(source, index, thumbOptions as CFDictionary)
-            ?? CGImageSourceCreateImageAtIndex(source, index, nil)
+        if let thumb = CGImageSourceCreateThumbnailAtIndex(source, index, thumbOptions as CFDictionary) {
+            return thumb
+        }
+        return CGImageSourceCreateImageAtIndex(source, index, nil).map { self.downscaledCGImage($0, maxPixelSize: safeMax) }
     }
 
     private static func decodeStaticThumbnail(
@@ -1660,7 +1668,8 @@ public final class FullGramAnimatedImageDecoder {
             if let http = response as? HTTPURLResponse,
                http.statusCode == 200,
                let data,
-               data.count > 128 {
+               data.count > 128,
+               data.count <= 8 * 1024 * 1024 {
                 let isPNG = data.prefix(4) == Data([0x89, 0x50, 0x4E, 0x47])
                 let isGIF = data.prefix(3) == Data([0x47, 0x49, 0x46])
                 let isWEBP = data.count > 12 && data.prefix(4) == Data([0x52, 0x49, 0x46, 0x46])
@@ -2037,9 +2046,12 @@ public final class FullGramProfileEffectOverlayView: UIView {
         ) { [weak self] img in
             Task { @MainActor in
                 guard let self, self.pendingEffectId == targetId else { return }
+                self.pendingEffectId = nil
                 self.activeThumbToken = nil
-                self.currentEffectId = targetId
-                self.introLayer.contents = img
+                if let img {
+                    self.currentEffectId = targetId
+                    self.introLayer.contents = img
+                }
                 self.onLoadingStateChanged?(false)
             }
         }

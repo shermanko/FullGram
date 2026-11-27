@@ -226,6 +226,8 @@ final class RoundVideoFrameProcessor {
     static var outputWidth: Int { return FullGramRoundVideoSettings.resolution }
     static var outputHeight: Int { return FullGramRoundVideoSettings.resolution }
 
+    private let outputWidth: Int
+    private let outputHeight: Int
     private let device: MTLDevice
     private let mediaQueue: DispatchQueue
     private let commandQueue: MTLCommandQueue
@@ -273,13 +275,15 @@ final class RoundVideoFrameProcessor {
             return nil
         }
 
+        let instanceOutputWidth = Self.outputWidth
+        let instanceOutputHeight = Self.outputHeight
         let poolAttributes: [String: Any] = [
             kCVPixelBufferPoolMinimumBufferCountKey as String: 4
         ]
         let pixelBufferAttributes: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferWidthKey as String: Self.outputWidth,
-            kCVPixelBufferHeightKey as String: Self.outputHeight,
+            kCVPixelBufferWidthKey as String: instanceOutputWidth,
+            kCVPixelBufferHeightKey as String: instanceOutputHeight,
             kCVPixelBufferMetalCompatibilityKey as String: true,
             kCVPixelBufferIOSurfacePropertiesKey as String: [:] as NSDictionary
         ]
@@ -293,6 +297,8 @@ final class RoundVideoFrameProcessor {
             return nil
         }
 
+        self.outputWidth = instanceOutputWidth
+        self.outputHeight = instanceOutputHeight
         self.device = device
         self.mediaQueue = mediaQueue
         self.commandQueue = commandQueue
@@ -465,8 +471,8 @@ final class RoundVideoFrameProcessor {
             Self.dispatch(
                 encoder: compositeEncoder,
                 pipelineState: decoration.compositePipelineState,
-                width: Self.outputWidth,
-                height: Self.outputHeight
+                width: self.outputWidth,
+                height: self.outputHeight
             )
             compositeEncoder.endEncoding()
         } else {
@@ -483,8 +489,8 @@ final class RoundVideoFrameProcessor {
             Self.dispatch(
                 encoder: encoder,
                 pipelineState: self.plainPipelineState,
-                width: Self.outputWidth,
-                height: Self.outputHeight
+                width: self.outputWidth,
+                height: self.outputHeight
             )
             encoder.endEncoding()
         }
@@ -500,7 +506,7 @@ final class RoundVideoFrameProcessor {
         self.isRendering = true
         statistics.renderSubmitted += 1
         statistics.pendingRenders += 1
-        if self.mode == .hdLanczos, min(primaryInputY.width, primaryInputY.height) > Self.outputWidth || (secondary != nil && min(secondaryInputY.width, secondaryInputY.height) > Self.outputWidth) {
+        if self.mode == .hdLanczos, min(primaryInputY.width, primaryInputY.height) > self.outputWidth || (secondary != nil && min(secondaryInputY.width, secondaryInputY.height) > self.outputWidth) {
             statistics.lanczosFrames += 1
         }
         if self.decoration != nil {
@@ -633,8 +639,8 @@ final class RoundVideoFrameProcessor {
             pixelBuffer,
             nil,
             .bgra8Unorm,
-            Self.outputWidth,
-            Self.outputHeight,
+            self.outputWidth,
+            self.outputHeight,
             0,
             &texture
         ) == kCVReturnSuccess else {

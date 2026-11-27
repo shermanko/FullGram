@@ -792,14 +792,24 @@ async function applyEconomyChange(env, body, grantedBy) {
   } else if (action === "transfer_gram") {
     const toPeerId = normalizePeerId(body.toPeerId != null ? String(body.toPeerId).trim() : "");
     const amount = Number(body.amount);
-    if (!toPeerId || !/^-?\d{1,20}$/.test(toPeerId) || toPeerId === peerId || !Number.isFinite(amount) || amount <= 0) {
+    const amountCents = Math.round(amount * 100);
+    if (
+      !toPeerId ||
+      !/^-?\d{1,20}$/.test(toPeerId) ||
+      toPeerId === peerId ||
+      !Number.isFinite(amount) ||
+      !Number.isSafeInteger(amountCents) ||
+      amountCents < 1 ||
+      Math.abs(amount * 100 - amountCents) > 1e-6
+    ) {
       throw new Error("Invalid transfer parameters");
     }
     const sourceBalance = Number(userEntry.gramBalance);
-    if (!Number.isFinite(sourceBalance) || amount > sourceBalance + 0.000001) {
+    const sourceCents = Math.round(sourceBalance * 100);
+    if (!Number.isFinite(sourceBalance) || !Number.isSafeInteger(sourceCents) || amountCents > sourceCents) {
       throw new Error("Insufficient Gram balance");
     }
-    userEntry.gramBalance = Math.round((sourceBalance - amount) * 100) / 100;
+    userEntry.gramBalance = (sourceCents - amountCents) / 100;
     const dst = eco.users[toPeerId] && typeof eco.users[toPeerId] === "object"
       ? {
           gramBalance: Number(eco.users[toPeerId].gramBalance || 0),
@@ -808,7 +818,8 @@ async function applyEconomyChange(env, body, grantedBy) {
           numbers: Array.isArray(eco.users[toPeerId].numbers) ? [...eco.users[toPeerId].numbers] : []
         }
       : { gramBalance: 0, starsBalance: 0, usernames: [], numbers: [] };
-    dst.gramBalance = Math.round((dst.gramBalance + amount) * 100) / 100;
+    const dstCents = Math.round((Number.isFinite(dst.gramBalance) ? dst.gramBalance : 0) * 100);
+    dst.gramBalance = (dstCents + amountCents) / 100;
     eco.users[toPeerId] = dst;
   } else if (action === "transfer_stars") {
     const toPeerId = normalizePeerId(body.toPeerId != null ? String(body.toPeerId).trim() : "");
@@ -938,12 +949,15 @@ async function redeemBetaInvite(env, rawCode, rawPeerId, opts = {}) {
     return { ok: false, status: 400, error: "Требуется корректный код приглашения и ID аккаунта." };
   }
   const [inv, usersData] = await Promise.all([loadBetaInvites(env), loadBetaUsers(env)]);
-  let matchedCode = inv.invites[code] ? code : null;
+  const invitesMap = inv.invites && typeof inv.invites === "object" ? inv.invites : {};
+  let matchedCode = Object.hasOwn(invitesMap, code) ? code : null;
   if (!matchedCode) {
     const lower = code.toLowerCase();
-    matchedCode = Object.keys(inv.invites || {}).find((k) => k.toLowerCase() === lower) || null;
+    matchedCode = Object.keys(invitesMap).find((k) => k.toLowerCase() === lower) || null;
   }
-  const entry = matchedCode ? inv.invites[matchedCode] : null;
+  const entry = matchedCode && Object.hasOwn(invitesMap, matchedCode) && invitesMap[matchedCode] && typeof invitesMap[matchedCode] === "object"
+    ? invitesMap[matchedCode]
+    : null;
   const now = Math.floor(Date.now() / 1000);
   if (!entry || entry.revoked) {
     return { ok: false, status: 403, error: "Ссылка приглашения недействительна или отозвана." };
@@ -1838,14 +1852,15 @@ async function applyBadgeChange(env, body) {
     ? body.color.trim()
     : null;
 
-  const baseRole = badges.roles[requestedRole] || DEFAULT_BADGES.roles.premium;
+  const hasRequestedRole = Boolean(requestedRole && Object.hasOwn(badges.roles, requestedRole) && badges.roles[requestedRole] && typeof badges.roles[requestedRole] === "object");
+  const baseRole = hasRequestedRole ? badges.roles[requestedRole] : DEFAULT_BADGES.roles.premium;
   const hasOverrides = Boolean(
     customEmojiId ||
     (label && label !== baseRole.label) ||
     (shortLabel && shortLabel !== (baseRole.shortLabel || baseRole.label)) ||
     (emoji && emoji !== baseRole.emoji) ||
     (color && color.toUpperCase() !== String(baseRole.color || "").toUpperCase()) ||
-    !badges.roles[requestedRole]
+    !hasRequestedRole
   );
 
   let assignedRoleId = requestedRole || "premium";
@@ -2281,14 +2296,19 @@ async function handleTelegramWebhook(request, env, origin) {
     }
     if (data.startsWith("beta_revoke:")) {
       const target = data.slice("beta_revoke:".length).trim();
+      const normTarget = /^-?\d{1,20}$/.test(target) ? normalizePeerId(target) : target;
       const [inv, usr] = await Promise.all([loadBetaInvites(env), loadBetaUsers(env)]);
       let ok = false;
-      if (inv.invites[target]) {
+      if (Object.hasOwn(inv.invites, target)) {
         inv.invites[target].revoked = true;
         await saveBetaInvites(env, inv);
         ok = true;
       }
-      if (usr.users[target]) {
+      if (Object.hasOwn(usr.users, normTarget)) {
+        usr.users[normTarget].revoked = true;
+        await saveBetaUsers(env, usr);
+        ok = true;
+      } else if (normTarget !== target && Object.hasOwn(usr.users, target)) {
         usr.users[target].revoked = true;
         await saveBetaUsers(env, usr);
         ok = true;
@@ -2512,14 +2532,19 @@ async function handleTelegramWebhook(request, env, origin) {
         await sendTelegramMessage(env, chatId, "Формат: /beta_revoke <code_или_peerId>");
         return jsonResponse({ ok: true });
       }
+      const normTarget = /^-?\d{1,20}$/.test(target) ? normalizePeerId(target) : target;
       const [inv, usr] = await Promise.all([loadBetaInvites(env), loadBetaUsers(env)]);
       let ok = false;
-      if (inv.invites[target]) {
+      if (Object.hasOwn(inv.invites, target)) {
         inv.invites[target].revoked = true;
         await saveBetaInvites(env, inv);
         ok = true;
       }
-      if (usr.users[target]) {
+      if (Object.hasOwn(usr.users, normTarget)) {
+        usr.users[normTarget].revoked = true;
+        await saveBetaUsers(env, usr);
+        ok = true;
+      } else if (normTarget !== target && Object.hasOwn(usr.users, target)) {
         usr.users[target].revoked = true;
         await saveBetaUsers(env, usr);
         ok = true;
@@ -2659,43 +2684,50 @@ export default {
 
     if (request.method === "POST" && path === "/auth/session") {
       try {
+        if (!env.FULLGRAM_KV) {
+          return jsonResponse({ ok: false, error: "Session storage unavailable" }, 503);
+        }
         const body = await request.json();
         const peerId = normalizePeerId(body.peerId ?? body.userId ?? "");
         const deviceSecret = String(body.deviceSecret || "").trim();
-        if (!peerId || deviceSecret.length < 16) {
-          return jsonResponse({ ok: false, error: "Valid peerId and deviceSecret (min 16 chars) required" }, 400);
+        if (!peerId || !/^-?\d{1,20}$/.test(peerId) || deviceSecret.length < 16) {
+          return jsonResponse({ ok: false, error: "Valid numeric peerId and deviceSecret (min 16 chars) required" }, 400);
         }
         const secretHash = await sha256Hex(deviceSecret);
-        if (env.FULLGRAM_KV) {
-          const kvKey = `fg_device_session:${peerId}`;
-          let entry = { hashes: [] };
-          const raw = await env.FULLGRAM_KV.get(kvKey);
-          if (raw) {
-            try {
-              const parsed = JSON.parse(raw);
-              if (Array.isArray(parsed.hashes)) entry.hashes = parsed.hashes;
-            } catch {}
-          }
-          if (!entry.hashes.includes(secretHash)) {
-            // Privileged accounts (owner / sponsors) must not be claimable by anyone who merely knows their id:
-            // registering a NEW device requires cryptographic proof (Telegram initData or a bot-issued fg1 token).
-            const privileged = isAdminUserId(peerId, env) || Boolean(await getSponsorTier(env, peerId));
-            if (privileged) {
-              const proof = await authenticateRequest(request, env);
-              if (!proof || normalizePeerId(String(proof.uid || "")) !== peerId) {
-                return jsonResponse({ ok: false, error: "New device for a privileged account requires /auth proof from the admin bot" }, 403);
-              }
+        const kvKey = `fg_device_session:${peerId}`;
+        let entry = { hashes: [], privilegedHashes: [] };
+        const raw = await env.FULLGRAM_KV.get(kvKey);
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed.hashes)) entry.hashes = parsed.hashes;
+            if (Array.isArray(parsed.privilegedHashes)) entry.privilegedHashes = parsed.privilegedHashes;
+          } catch {}
+        }
+        const privileged = isAdminUserId(peerId, env) || Boolean(await getSponsorTier(env, peerId));
+        if (privileged) {
+          if (!entry.privilegedHashes.includes(secretHash)) {
+            const proof = await authenticateRequest(request, env);
+            if (!proof || normalizePeerId(String(proof.uid || "")) !== peerId) {
+              return jsonResponse({ ok: false, error: "New device for a privileged account requires /auth proof from the admin bot" }, 403);
             }
-            if (isAdminUserId(peerId, env) && entry.hashes.length >= 4) {
-              // Keep owner device slots bounded while permitting legitimate reinstalls on fresh non-admin accounts.
-              entry.hashes = entry.hashes.slice(-3);
-            } else if (entry.hashes.length >= 6) {
-              entry.hashes = entry.hashes.slice(-5);
+            if (entry.privilegedHashes.length >= 4) {
+              entry.privilegedHashes = entry.privilegedHashes.slice(-3);
             }
-            entry.hashes.push(secretHash);
+            entry.privilegedHashes.push(secretHash);
+            if (!entry.hashes.includes(secretHash)) {
+              entry.hashes.push(secretHash);
+            }
             entry.updatedAt = new Date().toISOString();
             await env.FULLGRAM_KV.put(kvKey, JSON.stringify(entry));
           }
+        } else if (!entry.hashes.includes(secretHash)) {
+          if (entry.hashes.length >= 6) {
+            entry.hashes = entry.hashes.slice(-5);
+          }
+          entry.hashes.push(secretHash);
+          entry.updatedAt = new Date().toISOString();
+          await env.FULLGRAM_KV.put(kvKey, JSON.stringify(entry));
         }
         const issued = await issueSessionToken(peerId, "user", env, 30 * 24 * 60 * 60);
         return jsonResponse({
@@ -2926,7 +2958,7 @@ export default {
       let entry = null;
       if (code) {
         const inv = await loadBetaInvites(env);
-        entry = inv.invites && inv.invites[code] ? inv.invites[code] : null;
+        entry = inv.invites && Object.hasOwn(inv.invites, code) && inv.invites[code] && typeof inv.invites[code] === "object" ? inv.invites[code] : null;
         const now = Math.floor(Date.now() / 1000);
         const maxUses = entry ? (entry.maxUses || 1) : 0;
         const uses = entry ? (entry.uses || 0) : 0;
@@ -2992,7 +3024,7 @@ export default {
           return jsonResponse({ ok: true, active: true, peerId, isOwner: true, receipt });
         }
         const usersData = await loadBetaUsers(env);
-        const userRec = usersData.users[peerId];
+        const userRec = Object.hasOwn(usersData.users, peerId) ? usersData.users[peerId] : null;
         if (!userRec || userRec.revoked) {
           return jsonResponse({ ok: true, active: false });
         }
@@ -3000,6 +3032,8 @@ export default {
           userRec.deviceHash = deviceHash;
           usersData.users[peerId] = userRec;
           await saveBetaUsers(env, usersData);
+        } else if (!timingSafeEqual(String(userRec.deviceHash), deviceHash)) {
+          return jsonResponse({ ok: true, active: false, error: "Device mismatch" });
         }
         let receipt = typeof body.receipt === "string" ? body.receipt.trim() : "";
         const existingVerified = receipt ? await verifyBetaReceipt(receipt, env) : null;
@@ -3115,9 +3149,11 @@ export default {
           return jsonResponse({ ok: false, error: "Only valid PNG or GIF images are allowed" }, 400);
         }
         const ext = isGif ? "gif" : "png";
-        const keyId = `u_${requestedPeerId}_${Date.now().toString(36)}.${ext}`;
+        const otherExt = isGif ? "png" : "gif";
+        const keyId = `u_${requestedPeerId}.${ext}`;
         await env.FULLGRAM_KV.put(`custom_frame:${keyId}`, bytes.buffer);
-        const frameUrl = `${url.origin}/frames/${keyId}`;
+        await env.FULLGRAM_KV.delete(`custom_frame:u_${requestedPeerId}.${otherExt}`).catch(() => {});
+        const frameUrl = `${url.origin}/frames/${keyId}?v=${Date.now().toString(36)}`;
         const user = await applyCosmeticChange(env, { peerId: requestedPeerId, frameId: "custom", customFrameUrl: frameUrl });
         return jsonResponse({ ok: true, url: frameUrl, user });
       } catch (err) {
@@ -3143,6 +3179,9 @@ export default {
         const targetPeerId = normalizePeerId(requestedRaw || selfPeerId);
         if (!targetPeerId || !/^-?\d{1,20}$/.test(targetPeerId)) {
           return jsonResponse({ ok: false, error: "Invalid target peerId" }, 400);
+        }
+        if (!auth.isAdmin && isAdminUserId(targetPeerId, env)) {
+          return jsonResponse({ ok: false, error: "Forbidden: cannot modify admin account" }, 403);
         }
         if (!auth.isAdmin && sponsorTier !== "plus" && targetPeerId !== selfPeerId) {
           return jsonResponse({ ok: false, error: "Forbidden: Sponsor+ access required to manage badges for other users" }, 403);
@@ -3199,6 +3238,9 @@ export default {
         if (!canManageAny && targetPeerId !== selfPeerId) {
           return jsonResponse({ ok: false, error: "Forbidden: can only manage your own economy items" }, 403);
         }
+        if (!auth.isAdmin && targetPeerId !== selfPeerId && isAdminUserId(targetPeerId, env)) {
+          return jsonResponse({ ok: false, error: "Forbidden: cannot modify admin account" }, 403);
+        }
         const act = String(body.action || "").trim().toLowerCase();
         const selfAllowedActions = new Set([
           "revoke_username",
@@ -3231,6 +3273,10 @@ export default {
       }
       try {
         const body = await request.json();
+        const targetPeerId = normalizePeerId(body.peerId != null ? String(body.peerId).trim() : String(auth.uid));
+        if (!auth.isAdmin && isAdminUserId(targetPeerId, env)) {
+          return jsonResponse({ ok: false, error: "Forbidden: cannot modify admin account" }, 403);
+        }
         const result = await applyEconomyChange(env, body, auth.uid);
         return jsonResponse({ ok: true, ...result });
       } catch (err) {
@@ -3256,6 +3302,9 @@ export default {
         const targetPeerId = normalizePeerId(requestedRaw || selfPeerId);
         if (!targetPeerId || !/^-?\d{1,20}$/.test(targetPeerId)) {
           return jsonResponse({ ok: false, error: "Invalid target peerId" }, 400);
+        }
+        if (!auth.isAdmin && isAdminUserId(targetPeerId, env)) {
+          return jsonResponse({ ok: false, error: "Forbidden: cannot modify admin account" }, 403);
         }
         if (!auth.isAdmin && sponsorTier !== "plus" && targetPeerId !== selfPeerId) {
           return jsonResponse({ ok: false, error: "Forbidden: Sponsor+ access required to grant NFTs to other users" }, 403);

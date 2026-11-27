@@ -395,6 +395,53 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
         }
         return
     }
+    let runAntiScamAndOpen: () -> Void = {
+        if let verdict = FullGramAntiScam.shared.inspectURL(url) {
+            FullGramAntiScam.shared.recordDetection()
+            let reasonText = verdict.reasons.map { "• " + $0 }.joined(separator: "\n")
+            let hostLine = verdict.host.map { "\nДомен: \($0)\n" } ?? "\n"
+            var actions: [TextAlertAction] = [
+                TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_Cancel, action: {}),
+                TextAlertAction(type: .destructiveAction, title: "Открыть один раз", action: {
+                    openCheckedExternalUrl(context: context, urlContext: urlContext, url: url, forceExternal: forceExternal, presentationData: presentationData, navigationController: navigationController, dismissInput: dismissInput)
+                })
+            ]
+            if let host = verdict.host {
+                actions.append(TextAlertAction(type: .genericAction, title: "Доверять домену", action: {
+                    FullGramAntiScam.shared.addWhitelistedDomain(host)
+                    openCheckedExternalUrl(context: context, urlContext: urlContext, url: url, forceExternal: forceExternal, presentationData: presentationData, navigationController: navigationController, dismissInput: dismissInput)
+                }))
+            }
+            let alert = textAlertController(
+                context: context,
+                title: verdict.severity == .high ? "Анти-скам: опасная ссылка" : "Анти-скам: проверьте ссылку",
+                text: "\(verdict.summary)\(hostLine)\n\(reasonText)",
+                actions: actions
+            )
+            context.sharedContext.presentGlobalController(alert, nil)
+            return
+        }
+        openCheckedExternalUrl(context: context, urlContext: urlContext, url: url, forceExternal: forceExternal, presentationData: presentationData, navigationController: navigationController, dismissInput: dismissInput)
+    }
+    let runOTCAndAntiScamAndOpen: () -> Void = {
+        if let otcText = FullGramAntiScam.shared.inspectOTCUrl(url) {
+            FullGramAntiScam.shared.recordDetection()
+            let alert = textAlertController(
+                context: context,
+                title: "Анти-OTC",
+                text: otcText,
+                actions: [
+                    TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_Cancel, action: {}),
+                    TextAlertAction(type: .destructiveAction, title: "Продолжить", action: {
+                        runAntiScamAndOpen()
+                    })
+                ]
+            )
+            context.sharedContext.presentGlobalController(alert, nil)
+            return
+        }
+        runAntiScamAndOpen()
+    }
     // A login part hides the host a link opens (see `externalUrlWithLoginPart`). Every external link leaves through
     // here, whoever opens it, so here it is confirmed, unless a prompt that showed the real host was just accepted.
     if let loginPartUrl = externalUrlWithLoginPart(url), !consumeLoginPartConfirmation(loginPartUrl) {
@@ -404,60 +451,21 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
             updatedPresentationData: .single(presentationData),
             displayUrl: urlRemovingLoginPart(loginPartUrl).absoluteString,
             open: {
-                openCheckedExternalUrl(context: context, urlContext: urlContext, url: url, forceExternal: forceExternal, presentationData: presentationData, navigationController: navigationController, dismissInput: dismissInput)
+                runOTCAndAntiScamAndOpen()
             }
         )
         context.sharedContext.presentGlobalController(controller, nil)
         return
     }
-    if let otcText = FullGramAntiScam.shared.inspectOTCUrl(url) {
-        FullGramAntiScam.shared.recordDetection()
-        let alert = textAlertController(
-            context: context,
-            title: "Анти-OTC",
-            text: otcText,
-            actions: [
-                TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_Cancel, action: {}),
-                TextAlertAction(type: .destructiveAction, title: "Продолжить", action: {
-                    openCheckedExternalUrl(context: context, urlContext: urlContext, url: url, forceExternal: forceExternal, presentationData: presentationData, navigationController: navigationController, dismissInput: dismissInput)
-                })
-            ]
-        )
-        context.sharedContext.presentGlobalController(alert, nil)
-        return
-    }
-    if let verdict = FullGramAntiScam.shared.inspectURL(url) {
-        FullGramAntiScam.shared.recordDetection()
-        let reasonText = verdict.reasons.map { "• " + $0 }.joined(separator: "\n")
-        let hostLine = verdict.host.map { "\nДомен: \($0)\n" } ?? "\n"
-        var actions: [TextAlertAction] = [
-            TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_Cancel, action: {}),
-            TextAlertAction(type: .destructiveAction, title: "Открыть один раз", action: {
-                openCheckedExternalUrl(context: context, urlContext: urlContext, url: url, forceExternal: forceExternal, presentationData: presentationData, navigationController: navigationController, dismissInput: dismissInput)
-            })
-        ]
-        if let host = verdict.host {
-            actions.append(TextAlertAction(type: .genericAction, title: "Доверять домену", action: {
-                FullGramAntiScam.shared.addWhitelistedDomain(host)
-                openCheckedExternalUrl(context: context, urlContext: urlContext, url: url, forceExternal: forceExternal, presentationData: presentationData, navigationController: navigationController, dismissInput: dismissInput)
-            }))
-        }
-        let alert = textAlertController(
-            context: context,
-            title: verdict.severity == .high ? "Анти-скам: опасная ссылка" : "Анти-скам: проверьте ссылку",
-            text: "\(verdict.summary)\(hostLine)\n\(reasonText)",
-            actions: actions
-        )
-        context.sharedContext.presentGlobalController(alert, nil)
-        return
-    }
-    openCheckedExternalUrl(context: context, urlContext: urlContext, url: url, forceExternal: forceExternal, presentationData: presentationData, navigationController: navigationController, dismissInput: dismissInput)
+    runOTCAndAntiScamAndOpen()
 }
 
 private func openCheckedExternalUrl(context: AccountContext, urlContext: OpenURLContext, url: String, forceExternal: Bool, presentationData: PresentationData, navigationController: NavigationController?, dismissInput: @escaping () -> Void) {
     let cleanTargetUrl: String = {
         guard FullGramExtras.shared.autoCleanCopiedLinks,
               var comps = URLComponents(string: url),
+              let scheme = comps.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
               let items = comps.queryItems, !items.isEmpty else {
             return url
         }

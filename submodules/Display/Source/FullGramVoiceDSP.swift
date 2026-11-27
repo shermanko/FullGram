@@ -318,6 +318,7 @@ public final class FullGramVoiceDSP {
     // MARK: - Direct Spec-Compliant RIFF/WAVE PCM16 Helpers
 
     public static func writeWAV16Mono(samples: [Int16], sampleRate: Int, to url: URL) -> Bool {
+        guard sampleRate > 0, sampleRate <= 384_000, samples.count <= Int(UInt32.max / 2) - 44 else { return false }
         let numChannels: UInt16 = 1
         let bitsPerSample: UInt16 = 16
         let byteRate = UInt32(sampleRate) * UInt32(numChannels) * UInt32(bitsPerSample / 8)
@@ -378,7 +379,7 @@ public final class FullGramVoiceDSP {
                     if c0 == 0x66 && c1 == 0x6D && c2 == 0x74 && c3 == 0x20 && bodyEnd - bodyStart >= 16 {
                         audioFormat = readUInt16LE(raw, bodyStart)
                         channels = max(1, readUInt16LE(raw, bodyStart + 2))
-                        sampleRate = max(8000, readUInt32LE(raw, bodyStart + 4))
+                        sampleRate = min(384_000, max(8000, readUInt32LE(raw, bodyStart + 4)))
                         bitsPerSample = readUInt16LE(raw, bodyStart + 14)
                     } else if c0 == 0x64 && c1 == 0x61 && c2 == 0x74 && c3 == 0x61 {
                         let byteLen = bodyEnd - bodyStart
@@ -525,7 +526,10 @@ public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
         }
     }
 
+    private var sessionToken: UInt64 = 0
+
     public func stop() {
+        self.sessionToken &+= 1
         self.countdownTimer?.invalidate()
         self.countdownTimer = nil
         self.recorder?.stop()
@@ -625,12 +629,16 @@ public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
         let voiceMode = FullGramVoiceMode.current
         let noiseMode = FullGramNoiseReductionMode.current
         let bleepSound = FullGramBleepSound.current
+        let capturedToken = self.sessionToken
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
             guard let loaded = FullGramVoiceDSP.readWAV16Mono(from: rawURL), !loaded.samples.isEmpty else {
-                self.cleanupFiles()
-                self.state = .error("Пустая запись")
+                DispatchQueue.main.async {
+                    guard self.sessionToken == capturedToken else { return }
+                    self.cleanupFiles()
+                    self.state = .error("Пустая запись")
+                }
                 return
             }
             let samples = loaded.samples
@@ -639,11 +647,18 @@ public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
             let finalizeAndPlay: ([Int16]) -> Void = { finalSamples in
                 let outURL = FileManager.default.temporaryDirectory.appendingPathComponent("fg_voice_test_out_\(UUID().uuidString).wav")
                 guard FullGramVoiceDSP.writeWAV16Mono(samples: finalSamples, sampleRate: Int(sampleRate.rounded()), to: outURL) else {
-                    self.cleanupFiles()
-                    self.state = .error("Не удалось сохранить тест")
+                    DispatchQueue.main.async {
+                        guard self.sessionToken == capturedToken else { return }
+                        self.cleanupFiles()
+                        self.state = .error("Не удалось сохранить тест")
+                    }
                     return
                 }
                 DispatchQueue.main.async {
+                    guard self.sessionToken == capturedToken else {
+                        try? FileManager.default.removeItem(at: outURL)
+                        return
+                    }
                     self.processedURL = outURL
                     self.playFile(at: outURL)
                 }

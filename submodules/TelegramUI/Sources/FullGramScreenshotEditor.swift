@@ -198,6 +198,8 @@ final class FullGramScreenshotEditorController: UIViewController {
         )
         switch gesture.state {
         case .began:
+            self.activePreviewLayer?.removeFromSuperlayer()
+            self.activePreviewLayer = nil
             self.activeDragStart = clamped
             let layer = CAShapeLayer()
             layer.strokeColor = UIColor.systemYellow.cgColor
@@ -272,9 +274,16 @@ final class FullGramScreenshotEditorController: UIViewController {
     }
 
     private func renderExportImage() -> UIImage {
-        let renderer = UIGraphicsImageRenderer(bounds: self.canvasContainer.bounds)
+        self.activePreviewLayer?.removeFromSuperlayer()
+        self.activePreviewLayer = nil
+        self.activeDragStart = nil
+        let bounds = self.canvasContainer.bounds
+        guard bounds.width > 0.0, bounds.height > 0.0 else {
+            return self.sourceImage
+        }
+        let renderer = UIGraphicsImageRenderer(bounds: bounds)
         return renderer.image { _ in
-            self.canvasContainer.drawHierarchy(in: self.canvasContainer.bounds, afterScreenUpdates: true)
+            self.canvasContainer.drawHierarchy(in: bounds, afterScreenUpdates: true)
         }
     }
 
@@ -373,7 +382,7 @@ enum FullGramScreenshotPrompt {
 
         pill.onTap = { [weak pill, weak controller] in
             pill?.removeFromSuperview()
-            guard let controller else { return }
+            guard let controller, controller.presentedViewController == nil else { return }
             let editor = FullGramScreenshotEditorController(image: screenshot)
             let nav = UINavigationController(rootViewController: editor)
             nav.modalPresentationStyle = .fullScreen

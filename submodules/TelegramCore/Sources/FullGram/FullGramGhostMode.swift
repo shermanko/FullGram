@@ -305,15 +305,19 @@ public enum FullGramTranslationRequest {
         guard !rawEndpoint.isEmpty else {
             return .fail(.missingEndpoint)
         }
-        let normalizedPath: String
-        if rawEndpoint.lowercased().hasSuffix("/translate") {
-            normalizedPath = rawEndpoint
-        } else if rawEndpoint.hasSuffix("/") {
-            normalizedPath = rawEndpoint + "translate"
-        } else {
-            normalizedPath = rawEndpoint + "/translate"
+        guard var components = URLComponents(string: rawEndpoint),
+              components.scheme?.lowercased() == "https",
+              components.host != nil else {
+            return .fail(.invalidEndpoint)
         }
-        guard let url = URL(string: normalizedPath), url.scheme?.lowercased() == "https", url.host != nil else {
+        if !components.path.lowercased().hasSuffix("/translate") {
+            if components.path.hasSuffix("/") {
+                components.path += "translate"
+            } else {
+                components.path += "/translate"
+            }
+        }
+        guard let url = components.url else {
             return .fail(.invalidEndpoint)
         }
         var payload: [String: String] = [
@@ -871,7 +875,18 @@ public enum FullGramChatPrivacy {
 
     public static func setLocked(_ peerId: Int64, _ value: Bool) {
         lock.lock()
-        var set = lockedCache ?? loadLocked().ids
+        var set: Set<Int64>
+        if let cached = lockedCache {
+            set = cached
+        } else {
+            let loaded = loadLocked()
+            guard loaded.authoritative else {
+                // Fail closed on transient Keychain error so we never wipe other locked chats.
+                lock.unlock()
+                return
+            }
+            set = loaded.ids
+        }
         if value {
             set.insert(peerId)
         } else {
@@ -881,8 +896,10 @@ public enum FullGramChatPrivacy {
         lockedCache = set
         saveLocked(set)
         lock.unlock()
-        NotificationCenter.default.post(name: didChangeNotification, object: nil)
-        NotificationCenter.default.post(name: FullGramExtras.didChangeNotification, object: legacyLockedKey)
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: didChangeNotification, object: nil)
+            NotificationCenter.default.post(name: FullGramExtras.didChangeNotification, object: legacyLockedKey)
+        }
     }
 
     public static func isUnlocked(_ peerId: Int64) -> Bool {
@@ -2359,7 +2376,7 @@ public enum FullGramLinkCleaner {
                 }
             } else if FullGramExtras.shared.autoCropScreenshots,
                       let image = newMediaReference?.media as? TelegramMediaImage,
-                      let largestRep = image.representations.max(by: { $0.dimensions.width * $0.dimensions.height < $1.dimensions.width * $1.dimensions.height }),
+                      let largestRep = image.representations.max(by: { Int64($0.dimensions.width) * Int64($0.dimensions.height) < Int64($1.dimensions.width) * Int64($1.dimensions.height) }),
                       let localRef = largestRep.resource as? LocalFileReferenceMediaResource,
                       FileManager.default.fileExists(atPath: localRef.localFilePath),
                       let rawData = try? Data(contentsOf: URL(fileURLWithPath: localRef.localFilePath), options: .mappedIfSafe),
@@ -2971,7 +2988,7 @@ public enum FullGramCacheCleaner {
                 let vals = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
                 let modDate = vals?.contentModificationDate ?? .distantPast
                 let isOlderThanSafety = modDate < minTempSafetyCutoff
-                let ageOk = force || (isOlderThanSafety && (modDate < cutoff || url.lastPathComponent.hasPrefix("fg_")))
+                let ageOk = isOlderThanSafety && (force || modDate < cutoff || url.lastPathComponent.hasPrefix("fg_"))
                 if ageOk {
                     freedBytes += Int64(vals?.fileSize ?? 0)
                     try? fm.removeItem(at: url)
@@ -2985,7 +3002,15 @@ public enum FullGramCacheCleaner {
             if let enumerator = fm.enumerator(at: cachesDir, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey], options: [.skipsHiddenFiles]) {
                 for case let url as URL in enumerator {
                     let name = url.lastPathComponent
-                    if name.hasPrefix("fullgram_") || name.hasSuffix(".sqlite") || name.hasSuffix(".db") {
+                    if name.hasPrefix("fullgram_")
+                        || name.hasSuffix(".sqlite")
+                        || name.hasSuffix(".sqlite-wal")
+                        || name.hasSuffix(".sqlite-shm")
+                        || name.hasSuffix(".sqlite-journal")
+                        || name.hasSuffix(".db")
+                        || name.hasSuffix(".db-wal")
+                        || name.hasSuffix(".db-shm")
+                        || name.hasSuffix(".db-journal") {
                         continue
                     }
                     guard let vals = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]),

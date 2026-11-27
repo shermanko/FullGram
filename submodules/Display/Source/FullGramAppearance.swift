@@ -453,13 +453,17 @@ public enum FullGramFonts {
                 try? FileManager.default.removeItem(at: item)
             }
         }
+        let remoteIds = Set(options.filter { $0.isRemote }.map { $0.id })
         self.lock.lock()
-        self.registeredIds.removeAll()
+        self.registeredIds.subtract(remoteIds)
         self.lock.unlock()
         if let current = options.first(where: { $0.id == selectedId }), current.isRemote {
             selectedId = "system"
+            reloadActiveFont()
         } else {
-            NotificationCenter.default.post(name: didChangeNotification, object: nil)
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: didChangeNotification, object: nil)
+            }
         }
     }
 
@@ -498,11 +502,12 @@ public enum FullGramAnimationSpeed {
     public static var factor: Double {
         get {
             let value = UserDefaults.standard.double(forKey: key)
-            return value >= 1.0 ? value : 1.0
+            return value.isFinite ? min(20.0, max(1.0, value)) : 1.0
         }
         set {
-            UserDefaults.standard.set(max(1.0, min(20.0, newValue)), forKey: key)
-            fullGramSetAnimationSlowMotionFactor(FullGramAnimationSpeed.factor)
+            let clamped = newValue.isFinite ? max(1.0, min(20.0, newValue)) : 1.0
+            UserDefaults.standard.set(clamped, forKey: key)
+            fullGramSetAnimationSlowMotionFactor(clamped)
         }
     }
 

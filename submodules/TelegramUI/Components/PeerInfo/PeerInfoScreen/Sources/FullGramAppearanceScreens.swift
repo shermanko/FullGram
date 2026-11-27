@@ -749,8 +749,14 @@ private enum FullGramDesignEntry: ItemListNodeEntry {
     var stableId: Int32 {
         switch self {
         case .header: return 0
-        case let .toggle(opt, _, _): return opt.rawValue
-        case .flatColor: return 10
+        case let .toggle(opt, _, _):
+            switch opt {
+            case .profileNFTBubbles: return 1
+            case .removeGlass: return 2
+            case .classicDesign: return 4
+            case .glowingReactions: return 5
+            }
+        case .flatColor: return 3
         case .slowMotion: return 20
         case .debugSettings: return 25
         case .info: return 30
