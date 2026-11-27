@@ -282,7 +282,7 @@ public struct FullGramChatGiftPayload: Codable, Equatable, Sendable {
     }
 
     private static func isValidDecoded(_ payload: FullGramChatGiftPayload) -> Bool {
-        if let stars = payload.starsPrice, stars < 0 { return false }
+        if payload.starsPrice < 0 { return false }
         if let ton = payload.tonAmount, (!ton.isFinite || ton < 0.0 || ton > 1_000_000_000.0) { return false }
         if let num = payload.number, num < 1 { return false }
         return true

@@ -531,14 +531,34 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
     }
 
     public func transferBySlugLocal(fromPeerId: Int64, toPeerId: Int64, slug: String) -> FullGramGrantedNFT? {
-        let normFrom = Self.normalizedTelegramId(for: fromPeerId)
         let normTo = Self.normalizedTelegramId(for: toPeerId)
         self.lock.lock()
         var found: FullGramGrantedNFT?
-        if var list = self.localUsersById[normFrom],
-           let idx = list.firstIndex(where: { $0.slug.caseInsensitiveCompare(slug) == .orderedSame }) {
-            found = list.remove(at: idx)
-            self.localUsersById[normFrom] = list
+        for key in Self.candidatePeerIds(for: fromPeerId) {
+            if var list = self.localUsersById[key] {
+                for item in list where Self.matchesSlug(item, slug: slug) {
+                    if found == nil { found = item }
+                    break
+                }
+                list.removeAll { Self.matchesSlug($0, slug: slug) }
+                if list.isEmpty {
+                    self.localUsersById.removeValue(forKey: key)
+                } else {
+                    self.localUsersById[key] = list
+                }
+            }
+            if var sList = self.serverUsersById[key] {
+                for item in sList where Self.matchesSlug(item, slug: slug) {
+                    if found == nil { found = item }
+                    break
+                }
+                sList.removeAll { Self.matchesSlug($0, slug: slug) }
+                if sList.isEmpty {
+                    self.serverUsersById.removeValue(forKey: key)
+                } else {
+                    self.serverUsersById[key] = sList
+                }
+            }
         }
         guard var transferred = found else {
             self.lock.unlock()
