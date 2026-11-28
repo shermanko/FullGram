@@ -1004,7 +1004,7 @@ public final class FullGramAnimatedImageDecoder {
         cfg.httpMaximumConnectionsPerHost = 6
         cfg.requestCachePolicy = .returnCacheDataElseLoad
         cfg.urlCache = URLCache(memoryCapacity: 12 * 1024 * 1024, diskCapacity: 48 * 1024 * 1024)
-        return URLSession(configuration: cfg, delegate: Self.redirectDelegate, delegateQueue: nil)
+        return URLSession(configuration: cfg, delegate: redirectDelegate, delegateQueue: nil)
     }()
 
     private static let cachePruneOnce: Void = {

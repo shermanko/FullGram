@@ -512,7 +512,7 @@ public struct FullGramArchiveEntry: Sendable {
 }
 
 public enum FullGramArchiveParser {
-    private static let maxExtractBytes = 64 * 1024 * 1024
+    public static let maxExtractBytes = 64 * 1024 * 1024
 
     public static func parse(url: URL) -> (format: String, entries: [FullGramArchiveEntry]) {
         guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else {

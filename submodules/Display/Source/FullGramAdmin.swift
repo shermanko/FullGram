@@ -1024,13 +1024,23 @@ public final class FullGramAdmin: @unchecked Sendable {
                 return
             }
         }
+        self.sendClientSessionJSONRequest(path: "/sponsor/economy", peerId: normActor, payload: payload, didRetry: false, completion: completion)
+    }
+
+    private func sendClientSessionJSONRequest(
+        path: String,
+        peerId: Int64,
+        payload: [String: Any],
+        didRetry: Bool = false,
+        completion: @escaping @Sendable (Result<[String: Any], Error>) -> Void
+    ) {
         guard let bodyData = try? JSONSerialization.data(withJSONObject: payload, options: []) else {
             DispatchQueue.main.async {
                 completion(.failure(NSError(domain: "FullGramAdmin", code: 400, userInfo: [NSLocalizedDescriptionKey: "Ошибка формирования запроса."])))
             }
             return
         }
-        self.sendClientSessionJSONRequest(path: "/sponsor/economy", peerId: normActor, bodyData: bodyData, didRetry: false, completion: completion)
+        self.sendClientSessionJSONRequest(path: path, peerId: peerId, bodyData: bodyData, didRetry: didRetry, completion: completion)
     }
 
     private func sendClientSessionJSONRequest(
