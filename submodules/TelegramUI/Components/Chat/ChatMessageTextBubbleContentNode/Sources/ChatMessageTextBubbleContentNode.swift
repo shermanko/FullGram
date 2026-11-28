@@ -2640,6 +2640,10 @@ private final class FullGramChatGiftCardView: UIView {
                 containerSize: iconSize
             )
             if let iconView = self.giftIconHostView.view {
+                if let giftItemView = iconView as? GiftItemComponent.View {
+                    giftItemView.backgroundLayer.isHidden = true
+                    giftItemView.backgroundLayer.backgroundColor = UIColor.clear.cgColor
+                }
                 if iconView.superview == nil {
                     iconView.isUserInteractionEnabled = false
                     iconView.backgroundColor = .clear
@@ -2675,6 +2679,10 @@ private final class FullGramChatGiftCardView: UIView {
                 containerSize: iconSize
             )
             if let iconView = self.giftIconHostView.view {
+                if let giftItemView = iconView as? GiftItemComponent.View {
+                    giftItemView.backgroundLayer.isHidden = true
+                    giftItemView.backgroundLayer.backgroundColor = UIColor.clear.cgColor
+                }
                 if iconView.superview == nil {
                     iconView.isUserInteractionEnabled = false
                     iconView.backgroundColor = .clear

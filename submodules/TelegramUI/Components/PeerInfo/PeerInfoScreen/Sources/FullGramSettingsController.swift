@@ -959,12 +959,9 @@ public func fullGramSettingsController(context: AccountContext) -> ViewControlle
             entries.append(.adminPanel(presentationData.theme, ru ? "Админ-панель FullGram" : "FullGram Admin"))
         } else if fullGramIsSelfSponsor(context: context) {
             let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
-            let isPlus = fullGramIsSelfSponsorPlus(context: context)
             entries.append(.sponsorPanel(
                 presentationData.theme,
-                isPlus
-                    ? (ru ? "Панель Спонсор+ (Бейдж и NFT)" : "Sponsor+ Panel (Badge & NFT)")
-                    : (ru ? "Панель спонсора (Бейдж и NFT)" : "Sponsor Panel (Badge & NFT)")
+                ru ? "Панель" : "Panel"
             ))
         }
         entries.append(.categoriesHeader(presentationData.theme, "КАТЕГОРИИ"))
@@ -1705,7 +1702,7 @@ private enum FullGramGhostModeEntry: ItemListNodeEntry {
 public func fullGramGhostModeController(context: AccountContext) -> ViewController {
     let store = context.account.network.fullGramGhostMode
     var presentError: (() -> Void)?
-    var presentControllerImpl: ((ViewController) -> Void)?
+    var pushImpl: ((ViewController) -> Void)?
 
     let arguments = FullGramGhostModeArguments(
         update: { option, value in
@@ -1749,7 +1746,7 @@ public func fullGramGhostModeController(context: AccountContext) -> ViewControll
                 }
                 selector?.dismiss()
             }
-            presentControllerImpl?(selector)
+            pushImpl?(selector)
         },
         removeException: { peerId in
             try? store.update { settings in
@@ -1838,8 +1835,8 @@ public func fullGramGhostModeController(context: AccountContext) -> ViewControll
     }
 
     let controller = ItemListController(context: context, state: signal)
-    presentControllerImpl = { [weak controller] c in
-        controller?.present(c, in: .window(.root))
+    pushImpl = { [weak controller] c in
+        controller?.push(c)
     }
     presentError = { [weak controller] in
         let presentationData = context.sharedContext.currentPresentationData.with { $0 }
@@ -4417,7 +4414,6 @@ private struct FullGramOtherCategoryArguments {
     let openAppearance: () -> Void
     let openGeneral: () -> Void
     let openWork: () -> Void
-    let openEconomy: () -> Void
     let openSmartFeatures: () -> Void
     let openPowerSaving: () -> Void
     let openAIAssistant: () -> Void
@@ -4433,7 +4429,6 @@ private enum FullGramOtherCategoryEntry: ItemListNodeEntry {
     case appearanceLink(String)
     case generalLink(String)
     case workLink(String, String)
-    case economyLink(String, String)
     case smartFeaturesLink(String, String)
     case powerSavingLink(String, String)
     case aiAssistantLink(String, String)
@@ -4446,7 +4441,7 @@ private enum FullGramOtherCategoryEntry: ItemListNodeEntry {
     var section: ItemListSectionId {
         switch self {
         case .localPremium, .localPremiumInfo: return 0
-        case .chatsLink, .appearanceLink, .generalLink, .workLink, .economyLink, .smartFeaturesLink, .powerSavingLink, .aiAssistantLink, .badgesLink: return 1
+        case .chatsLink, .appearanceLink, .generalLink, .workLink, .smartFeaturesLink, .powerSavingLink, .aiAssistantLink, .badgesLink: return 1
         case .backupHeader, .exportBackup, .importBackup, .backupInfo: return 2
         }
     }
@@ -4459,7 +4454,6 @@ private enum FullGramOtherCategoryEntry: ItemListNodeEntry {
         case .appearanceLink: return 9
         case .generalLink: return 10
         case .workLink: return 11
-        case .economyLink: return 12
         case .smartFeaturesLink: return 13
         case .powerSavingLink: return 14
         case .aiAssistantLink: return 15
@@ -4493,9 +4487,6 @@ private enum FullGramOtherCategoryEntry: ItemListNodeEntry {
         case let .workLink(title, value):
             let icon = FullGramSettingsIcons.symbol("briefcase.fill", color: UIColor(rgb: 0x007AFF)) ?? PresentationResourcesSettings.dataAndStorage
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openWork)
-        case let .economyLink(title, value):
-            let icon = FullGramSettingsIcons.symbol("star.circle.fill", color: UIColor(rgb: 0xFF9500)) ?? PresentationResourcesSettings.stars
-            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openEconomy)
         case let .smartFeaturesLink(title, value):
             let icon = FullGramSettingsIcons.symbol("wand.and.stars", color: UIColor(rgb: 0xAF52DE)) ?? PresentationResourcesSettings.stickers
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, icon: icon, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openSmartFeatures)
@@ -4562,9 +4553,6 @@ func fullGramOtherCategoryController(context: AccountContext) -> ViewController 
         },
         openWork: {
             pushImpl?(fullGramWorkController(context: context))
-        },
-        openEconomy: {
-            pushImpl?(fullGramEconomyHubController(context: context))
         },
         openSmartFeatures: {
             pushImpl?(fullGramSmartFeaturesController(context: context))
@@ -4641,7 +4629,6 @@ func fullGramOtherCategoryController(context: AccountContext) -> ViewController 
         let aiStatus = FullGramAIStore.shared.hasConfiguredKey ? FullGramAIStore.shared.provider.title : "Не настроен"
         let badgesStatus = FullGramBadges.shared.isEnabled ? "\(FullGramBadges.shared.totalCount)" : "Выкл."
         let powerStatus = FullGramPowerSaving.profile().mode.title
-        let ecoStatus = "\(FullGramEconomy.shared.starsBalance) ★"
         let workCount = FullGramExtras.shared.confirmSendPeerIds.count
         let workStatus = workCount > 0 ? "\(workCount) чат." : "Открыть"
         var entries: [FullGramOtherCategoryEntry] = [
@@ -4651,7 +4638,6 @@ func fullGramOtherCategoryController(context: AccountContext) -> ViewController 
             .appearanceLink("Оформление"),
             .generalLink("Прочее"),
             .workLink("Работа", workStatus),
-            .economyLink("Кошелёк Gram, Звёзды и Fragment", ecoStatus),
             .smartFeaturesLink("10 умных функций FullGram", "10"),
             .powerSavingLink("Энергосбережение", powerStatus),
             .aiAssistantLink("ИИ Ассистент и свой агент", aiStatus)

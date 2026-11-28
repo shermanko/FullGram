@@ -126,6 +126,7 @@ private final class FullGramBadgeDeskArguments {
     let openNFTCatalog: () -> Void
     let grantNFTById: () -> Void
     let grantEconomyById: () -> Void
+    let openWalletFragment: () -> Void
     let revokeNFT: (FullGramGrantedNFT) -> Void
     let editToken: () -> Void
 
@@ -141,6 +142,7 @@ private final class FullGramBadgeDeskArguments {
         openNFTCatalog: @escaping () -> Void,
         grantNFTById: @escaping () -> Void,
         grantEconomyById: @escaping () -> Void,
+        openWalletFragment: @escaping () -> Void,
         revokeNFT: @escaping (FullGramGrantedNFT) -> Void,
         editToken: @escaping () -> Void
     ) {
@@ -155,6 +157,7 @@ private final class FullGramBadgeDeskArguments {
         self.openNFTCatalog = openNFTCatalog
         self.grantNFTById = grantNFTById
         self.grantEconomyById = grantEconomyById
+        self.openWalletFragment = openWalletFragment
         self.revokeNFT = revokeNFT
         self.editToken = editToken
     }
@@ -178,6 +181,7 @@ private enum FullGramBadgeDeskEntry: ItemListNodeEntry {
     case nftGrantAction(String)
     case nftGrantByIdAction(String)
     case nftGrantEconomyAction(String)
+    case walletFragmentLink(String, String)
     case nftGrantedItem(Int32, FullGramGrantedNFT, String, String)
     case nftFooter(String)
     case adminHeader(String)
@@ -191,7 +195,7 @@ private enum FullGramBadgeDeskEntry: ItemListNodeEntry {
             return FullGramBadgeDeskSection.sponsor.rawValue
         case .badgeHeader, .badgeSwitch, .badgeEmoji, .badgeEmojiReset, .badgeRole, .badgeLabel, .badgeShortLabel, .badgeFooter:
             return FullGramBadgeDeskSection.badge.rawValue
-        case .nftHeader, .nftGrantAction, .nftGrantByIdAction, .nftGrantEconomyAction, .nftGrantedItem, .nftFooter:
+        case .nftHeader, .nftGrantAction, .nftGrantByIdAction, .nftGrantEconomyAction, .walletFragmentLink, .nftGrantedItem, .nftFooter:
             return FullGramBadgeDeskSection.nft.rawValue
         case .adminHeader, .adminToken:
             return FullGramBadgeDeskSection.admin.rawValue
@@ -217,6 +221,7 @@ private enum FullGramBadgeDeskEntry: ItemListNodeEntry {
         case .nftGrantAction: return 21
         case .nftGrantByIdAction: return 22
         case .nftGrantEconomyAction: return 23
+        case .walletFragmentLink: return 24
         case let .nftGrantedItem(idx, _, _, _): return 10_000 + idx
         case .nftFooter: return 90_000
         case .adminHeader: return 90_001
@@ -304,6 +309,8 @@ private enum FullGramBadgeDeskEntry: ItemListNodeEntry {
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.grantNFTById)
         case let .nftGrantEconomyAction(title):
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.grantEconomyById)
+        case let .walletFragmentLink(title, value):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openWalletFragment)
         case let .nftGrantedItem(_, item, title, label):
             return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: label, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: {
                 args.revokeNFT(item)
@@ -637,7 +644,7 @@ func fullGramBadgeDeskController(
             let sheet = UIAlertController(title: ru ? "Выберите роль" : "Select role", message: nil, preferredStyle: .actionSheet)
             let order: [String]
             if useSponsorMode {
-                order = selfTier == .sponsorPlus ? ["sponsor_plus", "sponsor", "premium", "dev"] : ["sponsor", "premium", "dev"]
+                order = selfTier == .sponsorPlus ? ["sponsor_plus", "sponsor", "premium"] : ["sponsor", "premium"]
             } else {
                 order = ["sponsor_plus", "sponsor", "premium", "dev", "official", "creator"]
             }
@@ -667,9 +674,22 @@ func fullGramBadgeDeskController(
             }
             alert.addAction(UIAlertAction(title: ru ? "Сохранить" : "Save", style: .default, handler: { [weak alert] _ in
                 let val = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if !val.isEmpty {
-                    updateState { $0.draft.label = val }
+                guard !val.isEmpty else { return }
+                if useSponsorMode {
+                    let lower = val.lowercased()
+                    let forbidden = ["dev", "разраб", "creator", "создател", "official", "официальн", "admin", "админ", "owner", "владел", "moderator", "модер", "staff", "fullgram"]
+                    if forbidden.contains(where: { lower.contains($0) }) {
+                        let err = UIAlertController(
+                            title: ru ? "Недопустимый текст" : "Restricted text",
+                            message: ru ? "Спонсор не может устанавливать официальные или разработческие подписи." : "Sponsors cannot use official or developer badge text.",
+                            preferredStyle: .alert
+                        )
+                        err.addAction(UIAlertAction(title: "OK", style: .default))
+                        presenter.presentNative?(err)
+                        return
+                    }
                 }
+                updateState { $0.draft.label = val }
             }))
             alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
             presenter.presentNative?(alert)
@@ -684,9 +704,22 @@ func fullGramBadgeDeskController(
             }
             alert.addAction(UIAlertAction(title: ru ? "Сохранить" : "Save", style: .default, handler: { [weak alert] _ in
                 let val = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if !val.isEmpty {
-                    updateState { $0.draft.shortLabel = val }
+                guard !val.isEmpty else { return }
+                if useSponsorMode {
+                    let lower = val.lowercased()
+                    let forbidden = ["dev", "разраб", "creator", "создател", "official", "официальн", "admin", "админ", "owner", "владел", "moderator", "модер", "staff", "fullgram"]
+                    if forbidden.contains(where: { lower.contains($0) }) {
+                        let err = UIAlertController(
+                            title: ru ? "Недопустимая метка" : "Restricted tag",
+                            message: ru ? "Спонсор не может устанавливать официальные или разработческие метки." : "Sponsors cannot use official or developer tags.",
+                            preferredStyle: .alert
+                        )
+                        err.addAction(UIAlertAction(title: "OK", style: .default))
+                        presenter.presentNative?(err)
+                        return
+                    }
                 }
+                updateState { $0.draft.shortLabel = val }
             }))
             alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
             presenter.presentNative?(alert)
@@ -746,6 +779,9 @@ func fullGramBadgeDeskController(
             }))
             alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
             presenter.presentNative?(alert)
+        },
+        openWalletFragment: {
+            presenter.push?(fullGramEconomyHubController(context: context))
         },
         revokeNFT: { item in
             let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
@@ -839,6 +875,10 @@ func fullGramBadgeDeskController(
         if useSponsorMode && selfTier == .sponsorPlus {
             entries.append(.nftGrantEconomyAction(ru ? "Выдать Gram / ★ / @username / +888…" : "Grant Gram / ★ / @username / +888…"))
         }
+        if cleanTargetId == selfCleanId || !useSponsorMode {
+            let ecoStatus = "\(FullGramEconomy.shared.starsBalance) ★"
+            entries.append(.walletFragmentLink(ru ? "Кошелёк и Fragment" : "Wallet & Fragment", ecoStatus))
+        }
         for (idx, nft) in grantedNfts.enumerated() {
             let detail = nft.modelName.isEmpty ? "#\(nft.number)" : nft.modelName
             let decoratedTitle = FullGramGrantedNFT.decoratedTitle(nft.title)
@@ -851,16 +891,7 @@ func fullGramBadgeDeskController(
             entries.append(.adminToken(ru ? "Токен администратора" : "Admin token", FullGramAdmin.shared.hasToken ? (ru ? "Сохранён" : "Saved") : (ru ? "Не задан" : "Not set")))
         }
 
-        let titleText: String
-        if sponsorPlusOther {
-            titleText = ru ? "Спонсор+: Бейдж и NFT" : "Sponsor+: Badge & NFT"
-        } else if sponsorSelfAllowed {
-            titleText = selfTier == .sponsorPlus
-                ? (ru ? "Спонсор+: Бейдж и NFT" : "Sponsor+: Badge & NFT")
-                : (ru ? "Спонсор: Бейдж и NFT" : "Sponsor: Badge & NFT")
-        } else {
-            titleText = ru ? "Бейдж и NFT" : "Badge & NFT"
-        }
+        let titleText: String = ru ? "Панель" : "Panel"
 
         let data = ItemListPresentationData(presentationData)
         let controllerState = ItemListControllerState(
@@ -902,6 +933,7 @@ private final class FullGramAdminPanelArguments {
     let manageSponsorById: () -> Void
     let grantNFTById: () -> Void
     let grantEconomyById: () -> Void
+    let openWalletFragment: () -> Void
     let publishLocalPlugin: () -> Void
     let removeMarketPlugin: () -> Void
     let activateBotWebhook: () -> Void
@@ -913,6 +945,7 @@ private final class FullGramAdminPanelArguments {
         manageSponsorById: @escaping () -> Void,
         grantNFTById: @escaping () -> Void,
         grantEconomyById: @escaping () -> Void,
+        openWalletFragment: @escaping () -> Void,
         publishLocalPlugin: @escaping () -> Void,
         removeMarketPlugin: @escaping () -> Void,
         activateBotWebhook: @escaping () -> Void
@@ -923,6 +956,7 @@ private final class FullGramAdminPanelArguments {
         self.manageSponsorById = manageSponsorById
         self.grantNFTById = grantNFTById
         self.grantEconomyById = grantEconomyById
+        self.openWalletFragment = openWalletFragment
         self.publishLocalPlugin = publishLocalPlugin
         self.removeMarketPlugin = removeMarketPlugin
         self.activateBotWebhook = activateBotWebhook
@@ -945,6 +979,7 @@ private enum FullGramAdminPanelEntry: ItemListNodeEntry {
     case manageSponsor(String)
     case grantNFT(String)
     case grantEconomy(String)
+    case walletFragment(String, String)
     case publishPlugin(String)
     case deletePlugin(String)
     case activateBot(String)
@@ -954,7 +989,7 @@ private enum FullGramAdminPanelEntry: ItemListNodeEntry {
         switch self {
         case .authHeader, .ownerIdRow, .tokenRow, .verifyAuthRow, .authFooter:
             return FullGramAdminPanelSection.auth.rawValue
-        case .actionsHeader, .grantBadge, .manageSponsor, .grantNFT, .grantEconomy, .publishPlugin, .deletePlugin, .activateBot, .actionsFooter:
+        case .actionsHeader, .grantBadge, .manageSponsor, .grantNFT, .grantEconomy, .walletFragment, .publishPlugin, .deletePlugin, .activateBot, .actionsFooter:
             return FullGramAdminPanelSection.actions.rawValue
         }
     }
@@ -971,10 +1006,11 @@ private enum FullGramAdminPanelEntry: ItemListNodeEntry {
         case .manageSponsor: return 12
         case .grantNFT: return 13
         case .grantEconomy: return 14
-        case .publishPlugin: return 15
-        case .deletePlugin: return 16
-        case .activateBot: return 17
-        case .actionsFooter: return 18
+        case .walletFragment: return 15
+        case .publishPlugin: return 16
+        case .deletePlugin: return 17
+        case .activateBot: return 18
+        case .actionsFooter: return 19
         }
     }
 
@@ -1005,6 +1041,8 @@ private enum FullGramAdminPanelEntry: ItemListNodeEntry {
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.grantNFTById)
         case let .grantEconomy(title):
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.grantEconomyById)
+        case let .walletFragment(title, value):
+            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, disclosureStyle: .arrow, action: args.openWalletFragment)
         case let .publishPlugin(title):
             return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: title, kind: .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: args.publishLocalPlugin)
         case let .deletePlugin(title):
@@ -1230,6 +1268,9 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
             alert.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
             presenter.presentNative?(alert)
         },
+        openWalletFragment: {
+            presenter.push?(fullGramEconomyHubController(context: context))
+        },
         publishLocalPlugin: {
             let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
             let plugins = FullGramPluginManager.shared.allPlugins()
@@ -1329,6 +1370,7 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
             .manageSponsor(ru ? "Назначить / снять спонсора по ID / @username" : "Assign / remove sponsor by ID / @username"),
             .grantNFT(ru ? "Выдать NFT в профиль (модель, фон, узор, #)" : "Grant NFT to profile (model, backdrop, pattern, #)"),
             .grantEconomy(ru ? "Выдать Gram / Звёзды / @username / +888 по ID" : "Grant Gram / Stars / @username / +888 by ID"),
+            .walletFragment(ru ? "Кошелёк и Fragment" : "Wallet & Fragment", "\(FullGramEconomy.shared.starsBalance) ★"),
             .publishPlugin(ru ? "Опубликовать локальный плагин в маркет" : "Publish local plugin to market"),
             .deletePlugin(ru ? "Удалить плагин из маркета" : "Delete plugin from market"),
             .activateBot(ru ? "Проверить / обновить Telegram-бота" : "Verify / refresh Telegram bot webhook"),

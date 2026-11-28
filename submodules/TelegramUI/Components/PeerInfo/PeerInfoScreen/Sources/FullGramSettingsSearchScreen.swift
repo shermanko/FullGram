@@ -668,7 +668,7 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
         FullGramSearchItem(
             id: 88,
             title: "Кошелёк Gram, Звёзды, Подарки NFT и Fragment",
-            subtitle: "Основное → Кошелёк",
+            subtitle: "Панель → Кошелёк и Fragment",
             keywords: "кошелек gram ton звезды stars подарок nft апгрейд upgrade кастомные номера +888 юзернейм fragment",
             destination: { fullGramEconomyHubController(context: $0) }
         ),

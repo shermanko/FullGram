@@ -159,6 +159,9 @@ public final class PeerSelectionControllerImpl: ViewController, PeerSelectionCon
         
         if params.forumPeerId == nil {
             self.navigationPresentation = .modal
+            if self.navigationItem.leftBarButtonItem == nil {
+                self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: self.presentationData.strings.Common_Cancel, style: .plain, target: self, action: #selector(self.cancelPressed))
+            }
         }
         self.navigationItem.backBarButtonItem = UIBarButtonItem(title: self.presentationData.strings.Common_Back, style: .plain, target: nil, action: nil)
         
@@ -667,6 +670,7 @@ public final class PeerSelectionControllerImpl: ViewController, PeerSelectionCon
     
     override public func dismiss(completion: (() -> Void)? = nil) {
         guard let navigationController = self.navigationController as? NavigationController else {
+            super.dismiss(completion: completion)
             return
         }
         var viewControllers = navigationController.viewControllers

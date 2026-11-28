@@ -181,6 +181,7 @@ func infoItems(
         }
         
         let isSelfProfile = (user.id == context.account.peerId)
+        FullGramEconomy.shared.refreshCloudIfNeeded(selfPeerId: context.account.peerId.id._internalGetInt64Value(), maxAge: 20.0)
         if let customNum = FullGramEconomy.shared.activeCustomNumber(forPeerId: user.id.id._internalGetInt64Value(), isSelf: isSelfProfile),
            !(isSelfProfile && FullGramExtras.shared.shouldHidePhoneNumberNow) {
             let ownerTitle = EnginePeer(user).compactDisplayTitle
@@ -225,20 +226,13 @@ func infoItems(
             let badgePeerId = user.id.toInt64()
             let badgeUsername = user.addressName
             let sponsorMode = !isAdminUser
-            let rowText: String
+            let rowText: String = ru ? "Панель" : "Panel"
             let rowLabel: String
             if isOtherProfileForSponsorPlus {
-                rowText = ru ? "Бейдж и NFT (Спонсор+)" : "Badge & NFT (Sponsor+)"
                 let nftCount = FullGramGrantedNFTStore.shared.gifts(forPeerId: badgePeerId).count
                 rowLabel = nftCount > 0 ? "\(nftCount) NFT" : (ru ? "Выдать" : "Grant")
-            } else if isOwnSponsorProfile {
-                rowLabel = fullGramBadgeRowStatusLabel(peerId: badgePeerId, username: badgeUsername, russian: ru)
-                rowText = isSelfSponsorPlus
-                    ? (ru ? "Спонсор+ (Бейдж и NFT)" : "Sponsor+ (Badge & NFT)")
-                    : (ru ? "Спонсор (Бейдж и NFT)" : "Sponsor (Badge & NFT)")
             } else {
                 rowLabel = fullGramBadgeRowStatusLabel(peerId: badgePeerId, username: badgeUsername, russian: ru)
-                rowText = ru ? "Бейдж" : "Badge"
             }
             items[currentPeerInfoSection]!.append(PeerInfoScreenDisclosureItem(
                 id: ItemFullGramBadge,
@@ -255,7 +249,7 @@ func infoItems(
         }
         let fakeUsernames = FullGramEconomy.shared.activeCustomUsernames(forPeerId: user.id.id._internalGetInt64Value(), isSelf: isSelfProfile)
         let primaryFakeUsername = fakeUsernames.first(where: { $0.isPrimary })
-        let displayedMainUsername = primaryFakeUsername?.username ?? user.addressName
+        let displayedMainUsername = primaryFakeUsername?.username ?? user.addressName ?? fakeUsernames.first?.username
         if let mainUsername = displayedMainUsername {
             var extraNames: [String] = []
             if let realMain = user.addressName, realMain.lowercased() != mainUsername.lowercased() {

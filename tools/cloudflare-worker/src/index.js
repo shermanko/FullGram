@@ -708,7 +708,7 @@ async function applyEconomyChange(env, body, grantedBy) {
     const clean = String(body.username || "").trim().replace(/^@+/, "").toLowerCase();
     if (!/^[a-z0-9_]{4,32}$/.test(clean)) throw new Error("Invalid username (4-32 latin/digits/_)");
     const priceTon = Math.max(0, Number(body.priceTon || 0) || 0);
-    const isPrimary = body.isPrimary !== false;
+    const isPrimary = body.isPrimary === true;
     if (isPrimary) {
       userEntry.usernames = userEntry.usernames.map((u) => ({ ...u, isPrimary: false }));
     }
@@ -2831,7 +2831,7 @@ export default {
             if (Array.isArray(parsed.privilegedHashes)) entry.privilegedHashes = parsed.privilegedHashes;
           } catch {}
         }
-        const privileged = isAdminUserId(peerId, env) || Boolean(await getSponsorTier(env, peerId));
+        const privileged = isAdminUserId(peerId, env);
         if (privileged) {
           if (!entry.privilegedHashes.includes(secretHash)) {
             const proof = await authenticateRequest(request, env);
@@ -3315,11 +3315,18 @@ export default {
         }
         const fallbackRole = sponsorTier === "plus" ? "sponsor_plus" : "sponsor";
         const reqRole = String(body.roleId || fallbackRole).trim().toLowerCase();
-        const disallowedRoles = new Set(["creator", "official", "admin", "owner"]);
+        const disallowedRoles = new Set(["creator", "official", "admin", "owner", "dev", "developer", "mod", "moderator", "staff", "support", "team"]);
         if (!auth.isAdmin && sponsorTier !== "plus") {
           disallowedRoles.add("sponsor_plus");
         }
-        const safeRole = disallowedRoles.has(reqRole) ? fallbackRole : reqRole;
+        if (!auth.isAdmin) {
+          const checkText = `${String(body.label || "")} ${String(body.shortLabel || "")}`.toLowerCase();
+          const forbiddenTerms = ["dev", "разраб", "creator", "создател", "official", "официальн", "admin", "админ", "owner", "владел", "moderator", "модер", "staff", "fullgram"];
+          if (forbiddenTerms.some((term) => checkText.includes(term))) {
+            return jsonResponse({ ok: false, error: "Forbidden: cannot use developer or official badge text" }, 403);
+          }
+        }
+        const safeRole = (!auth.isAdmin && disallowedRoles.has(reqRole)) ? fallbackRole : reqRole;
         const badges = await applyBadgeChange(env, {
           ...body,
           peerId: targetPeerId,
@@ -3543,6 +3550,7 @@ export default {
       if (request.method === "POST" && path === "/admin/economy") {
         try {
           const body = await request.json();
+          const targetPeerId = normalizePeerId(body.peerId != null ? String(body.peerId).trim() : String(auth.uid));
           const result = await applyEconomyChange(env, { ...body, peerId: targetPeerId }, auth.uid);
           return jsonResponse({ ok: true, ...result });
         } catch (err) {

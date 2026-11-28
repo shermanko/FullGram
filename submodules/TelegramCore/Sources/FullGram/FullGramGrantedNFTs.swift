@@ -816,7 +816,7 @@ func fullGramBuildUniqueGift(
         peerColor: nil,
         hostPeerId: nil,
         minOfferStars: nil,
-        craftChancePermille: nil
+        craftChancePermille: 250
     )
 }
 
@@ -900,7 +900,7 @@ func fullGramGrantedGiftsSignal(
                     dropOriginalDetailsStars: nil,
                     number: item.number,
                     isRefunded: false,
-                    canCraftAt: nil
+                    canCraftAt: isOwnProfile ? 0 : nil
                 )
                 result.append(row)
             }

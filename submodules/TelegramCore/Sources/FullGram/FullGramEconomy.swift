@@ -1051,15 +1051,25 @@ public final class FullGramEconomy: @unchecked Sendable {
     private static let lastEconomySyncKey = "fullgram.economy.lastSync"
     private var cloudUsers: [Int64: CloudEconomyUser] = [:]
     private var isRefreshingCloud = false
+    private var lastSelfPeerId: Int64?
 
     public func activeCustomNumber(forPeerId peerId: Int64, isSelf: Bool) -> FullGramCollectibleNumber? {
-        if isSelf {
-            return self.activeCustomNumber
-        }
         let norm = FullGramGrantedNFTStore.normalizedTelegramId(for: peerId)
         self.lock.lock()
-        defer { self.lock.unlock() }
-        return self.cloudUsers[norm]?.numbers.first(where: { $0.isActive })
+        let cloudNum = self.cloudUsers[norm]?.numbers.first(where: { $0.isActive })
+        let localActive = isSelf ? self.state.customNumbers.first(where: { $0.isActive }) : nil
+        let deletedKeys = self.state.deletedCloudItemKeys
+        self.lock.unlock()
+        if isSelf {
+            if let localActive {
+                return localActive
+            }
+            if let cloudNum, !deletedKeys.contains("num:\(cloudNum.number)") {
+                return cloudNum
+            }
+            return nil
+        }
+        return cloudNum
     }
 
     public func activeCustomUsernames(forPeerId peerId: Int64, isSelf: Bool) -> [FullGramCollectibleUsername] {
@@ -1094,6 +1104,10 @@ public final class FullGramEconomy: @unchecked Sendable {
             return
         }
         self.lock.lock()
+        if let selfPeerId {
+            self.lastSelfPeerId = selfPeerId
+        }
+        let effectiveSelfPeerId = selfPeerId ?? self.lastSelfPeerId
         if self.isRefreshingCloud {
             self.lock.unlock()
             completion?(false)
@@ -1126,8 +1140,8 @@ public final class FullGramEconomy: @unchecked Sendable {
             }
             self.lock.lock()
             self.cloudUsers = mapped
-            if let selfPeerId {
-                let norm = FullGramGrantedNFTStore.normalizedTelegramId(for: selfPeerId)
+            if let effectiveSelfPeerId {
+                let norm = FullGramGrantedNFTStore.normalizedTelegramId(for: effectiveSelfPeerId)
                 if let me = mapped[norm] {
                     if me.gramBalance >= 0,
                        self.state.lastSyncedCloudGram == nil || abs((self.state.lastSyncedCloudGram ?? 0) - me.gramBalance) > 0.001 {
@@ -1149,7 +1163,14 @@ public final class FullGramEconomy: @unchecked Sendable {
                     }
                     let existingNums = Set(self.state.customNumbers.map { $0.number })
                     for n in me.numbers where !existingNums.contains(n.number) && !self.state.deletedCloudItemKeys.contains("num:\(n.number)") {
-                        self.state.customNumbers.append(n)
+                        if n.isActive {
+                            for i in self.state.customNumbers.indices {
+                                self.state.customNumbers[i].isActive = false
+                            }
+                            self.state.customNumbers.insert(n, at: 0)
+                        } else {
+                            self.state.customNumbers.append(n)
+                        }
                     }
                     if let encoded = try? JSONEncoder().encode(self.state) {
                         self.defaults.set(encoded, forKey: self.stateKey)

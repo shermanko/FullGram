@@ -2269,8 +2269,7 @@ private final class GiftViewSheetContent: CombinedComponent {
                     })))
                 } else if gift.slug.lowercased().hasPrefix("fullgram-"),
                           case let .peerId(ownerId) = gift.owner,
-                          ownerId == self.context.account.peerId,
-                          let reference = arguments.reference {
+                          ownerId == self.context.account.peerId {
                     let isVisibleOnProfile = arguments.savedToProfile
                     items.append(.action(ContextMenuActionItem(text: isVisibleOnProfile ? strings.Gift_View_Context_HideFromProfile : strings.Gift_View_Context_ShowOnProfile, icon: { theme in
                         return generateTintedImage(image: UIImage(bundleImageName: isVisibleOnProfile ? "Peer Info/HideIcon" : "Peer Info/ShowIcon"), color: theme.contextMenu.primaryColor)
@@ -2280,26 +2279,6 @@ private final class GiftViewSheetContent: CombinedComponent {
                         if case let .profileGift(peerId, profileGift) = self?.subject {
                             self?.subject = .profileGift(peerId, profileGift.withSavedToProfile(!isVisibleOnProfile))
                         }
-                    })))
-                    let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
-                    items.append(.action(ContextMenuActionItem(text: ru ? "Улучшить NFT (FullGram)" : "Upgrade NFT (FullGram)", icon: { theme in
-                        return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Edit"), color: theme.contextMenu.primaryColor)
-                    }, action: { [weak self, weak controller] c, _ in
-                        c?.dismiss(completion: nil)
-                        guard let self else { return }
-                        let signal: Signal<ProfileGiftsContext.State.StarGift, UpgradeStarGiftError>
-                        if let upgradeGift = controller?.upgradeGift {
-                            signal = upgradeGift(nil, reference, true)
-                        } else {
-                            signal = self.context.engine.payments.upgradeStarGift(formId: nil, reference: reference, keepOriginalInfo: true)
-                        }
-                        let _ = (signal |> deliverOnMainQueue).start(next: { [weak self, weak controller] updatedGift in
-                            if case let .profileGift(peerId, _) = self?.subject {
-                                self?.subject = .profileGift(peerId, updatedGift)
-                            }
-                            self?.updated(transition: .spring(duration: 0.35))
-                            controller?.animateSuccess()
-                        })
                     })))
                 }
                           

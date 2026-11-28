@@ -659,6 +659,7 @@ public final class SharedAccountContextImpl: SharedAccountContext {
             FullGramBadges.shared.refreshIfNeeded()
             FullGramSponsors.shared.refreshIfNeeded(maxAge: 20.0)
             FullGramGrantedNFTStore.shared.refreshIfNeeded(maxAge: 20.0)
+            FullGramEconomy.shared.refreshCloudIfNeeded(maxAge: 20.0)
             FullGramDiscordCosmeticsCatalog.shared.refreshIfNeeded(maxAge: 21600.0)
         }
         self.automaticMediaDownloadSettingsDisposable.set((self._automaticMediaDownloadSettings.get()

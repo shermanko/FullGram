@@ -3682,18 +3682,47 @@ private final class CraftGiftsContextImpl {
             }
         }
 
-        self.disposable.set((signal
-        |> deliverOn(self.queue)).start(next: { [weak self] (gifts, count, nextOffset) in
+        let fullGramSignal: Signal<[ProfileGiftsContext.State.StarGift], NoError> = initialNextOffset == nil
+            ? (fullGramGrantedGiftsSignal(account: self.account, peerId: accountPeerId)
+            |> take(1)
+            |> map { items in
+                return items.filter { entry in
+                    if case let .unique(u) = entry.gift {
+                        return u.giftId == giftId
+                    }
+                    return false
+                }
+            })
+            : .single([])
+
+        self.disposable.set((combineLatest(signal, fullGramSignal)
+        |> deliverOn(self.queue)).start(next: { [weak self] (serverResult, fullGramGifts) in
             guard let self else {
                 return
             }
-            if initialNextOffset == nil {
-                self.gifts = gifts
-            } else {
-                self.gifts.append(contentsOf: gifts)
+            let (gifts, count, nextOffset) = serverResult
+            var merged: [ProfileGiftsContext.State.StarGift] = []
+            var seenRefs = Set<StarGiftReference>()
+            for g in fullGramGifts {
+                if let ref = g.reference {
+                    seenRefs.insert(ref)
+                }
+                merged.append(g)
+            }
+            for g in gifts {
+                if let ref = g.reference, seenRefs.contains(ref) {
+                    continue
+                }
+                merged.append(g)
             }
 
-            let updatedCount = max(Int32(self.gifts.count), count)
+            if initialNextOffset == nil {
+                self.gifts = merged
+            } else {
+                self.gifts.append(contentsOf: merged)
+            }
+
+            let updatedCount = max(Int32(self.gifts.count), count + Int32(fullGramGifts.count))
             self.count = updatedCount
             self.dataState = .ready(canLoadMore: count != 0 && updatedCount > self.gifts.count && nextOffset != nil, nextOffset: nextOffset)
 
@@ -3802,6 +3831,133 @@ public enum CraftStarGiftError {
 }
 
 func _internal_craftStarGift(account: Account, references: [StarGiftReference]) -> Signal<ProfileGiftsContext.State.StarGift, CraftStarGiftError> {
+    let fgSlugs: [String] = references.compactMap { ref in
+        if case let .slug(slug) = ref, slug.lowercased().hasPrefix("fullgram-") {
+            return slug
+        }
+        return nil
+    }
+    if !fgSlugs.isEmpty {
+        let rawActorId = account.peerId.id._internalGetInt64Value()
+        let firstSlug = fgSlugs[0]
+        var baseGiftId: Int64?
+        for s in fgSlugs {
+            if let matched = FullGramGrantedNFTStore.shared.findBySlug(s), let gid = matched.nft.numericGiftId {
+                baseGiftId = gid
+                break
+            }
+            let parts = s.split(separator: "-")
+            if parts.count == 3, let gid = Int64(parts[1]), gid > 0 {
+                baseGiftId = gid
+                break
+            }
+        }
+        guard let gid = baseGiftId else {
+            return .fail(.craftFailed)
+        }
+        let chancePermille = min(1000, fgSlugs.count * 250)
+        let succeeded = Int.random(in: 1 ... 1000) <= chancePermille
+        for extraSlug in fgSlugs.dropFirst() {
+            if let removed = FullGramGrantedNFTStore.shared.removeBySlugLocal(peerId: rawActorId, slug: extraSlug) {
+                FullGramGrantedNFTStore.shared.onServerNFTAction?(rawActorId, rawActorId, nil, removed.id, extraSlug, "delete", nil, nil, nil, nil, nil)
+            }
+        }
+        guard succeeded else {
+            if let removed = FullGramGrantedNFTStore.shared.removeBySlugLocal(peerId: rawActorId, slug: firstSlug) {
+                FullGramGrantedNFTStore.shared.onServerNFTAction?(rawActorId, rawActorId, nil, removed.id, firstSlug, "delete", nil, nil, nil, nil, nil)
+            }
+            return .fail(.craftFailed)
+        }
+        return _internal_getStarGiftUpgradeAttributes(account: account, giftId: gid)
+        |> take(1)
+        |> castError(CraftStarGiftError.self)
+        |> mapToSignal { attrs -> Signal<ProfileGiftsContext.State.StarGift, CraftStarGiftError> in
+            guard let attrs, !attrs.isEmpty else {
+                return .fail(.craftFailed)
+            }
+            let models = attrs.filter { if case .model = $0 { return true } else { return false } }
+            let craftedModels = models.filter {
+                if case let .model(_, _, _, crafted) = $0 { return crafted }
+                return false
+            }
+            let modelPool = craftedModels.isEmpty ? models : craftedModels
+            let backdrops = attrs.filter { if case .backdrop = $0 { return true } else { return false } }
+            let patterns = attrs.filter { if case .pattern = $0 { return true } else { return false } }
+
+            guard let pickedModel = modelPool.randomElement(),
+                  let pickedBackdrop = backdrops.randomElement(),
+                  let pickedPattern = patterns.randomElement() else {
+                return .fail(.craftFailed)
+            }
+
+            let modelName: String
+            if case let .model(name, _, _, _) = pickedModel { modelName = name } else { modelName = "" }
+            let backdropName: String
+            let backdropId: Int32?
+            if case let .backdrop(name, id, _, _, _, _, _) = pickedBackdrop {
+                backdropName = name
+                backdropId = id
+            } else {
+                backdropName = ""
+                backdropId = nil
+            }
+            let patternName: String
+            if case let .pattern(name, _, _) = pickedPattern { patternName = name } else { patternName = "" }
+            let newNumber = Int32.random(in: 1 ... 9999)
+
+            guard let updated = FullGramGrantedNFTStore.shared.updateBySlugLocal(
+                peerId: rawActorId,
+                slug: firstSlug,
+                modelName: modelName,
+                backdropName: backdropName,
+                backdropId: backdropId,
+                patternName: patternName,
+                number: newNumber
+            ), let unique = fullGramBuildUniqueGift(item: updated, ownerPeerId: account.peerId, attributes: attrs) else {
+                return .fail(.craftFailed)
+            }
+
+            FullGramGrantedNFTStore.shared.onServerNFTAction?(
+                rawActorId,
+                rawActorId,
+                nil,
+                updated.id,
+                firstSlug,
+                "upgrade",
+                modelName,
+                backdropName,
+                backdropId,
+                patternName,
+                newNumber
+            )
+
+            return .single(ProfileGiftsContext.State.StarGift(
+                gift: .unique(unique),
+                reference: .slug(slug: unique.slug),
+                fromPeer: nil,
+                date: updated.grantedAt,
+                text: updated.note.isEmpty ? nil : updated.note,
+                entities: nil,
+                nameHidden: false,
+                savedToProfile: !updated.hidden,
+                pinnedToTop: updated.pinned,
+                convertStars: nil,
+                canUpgrade: true,
+                canExportDate: nil,
+                upgradeStars: 0,
+                transferStars: 0,
+                canTransferDate: 0,
+                canResaleDate: nil,
+                collectionIds: nil,
+                prepaidUpgradeHash: nil,
+                upgradeSeparate: false,
+                dropOriginalDetailsStars: nil,
+                number: newNumber,
+                isRefunded: false,
+                canCraftAt: 0
+            ))
+        }
+    }
     return account.postbox.transaction { transaction -> [Api.InputSavedStarGift] in
         return references.compactMap { $0.apiStarGiftReference(transaction: transaction) }
     }

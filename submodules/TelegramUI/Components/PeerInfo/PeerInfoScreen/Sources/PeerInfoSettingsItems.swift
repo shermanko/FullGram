@@ -546,14 +546,7 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
         let badgeUsername = peer.addressName
         let statusLabel = fullGramBadgeRowStatusLabel(peerId: badgePeerId, username: badgeUsername, russian: ru)
         let sponsorMode = !isAdminUser && isSelfSponsor
-        let rowTitle: String
-        if sponsorMode {
-            rowTitle = isSelfSponsorPlus
-                ? (ru ? "Спонсор+ (Бейдж и NFT)" : "Sponsor+ (Badge & NFT)")
-                : (ru ? "Спонсор (Бейдж и NFT)" : "Sponsor (Badge & NFT)")
-        } else {
-            rowTitle = ru ? "Бейдж" : "Badge"
-        }
+        let rowTitle: String = ru ? "Панель" : "Panel"
         items[.info]!.append(PeerInfoScreenDisclosureItem(
             id: ItemFullGramBadge,
             label: .text(statusLabel),

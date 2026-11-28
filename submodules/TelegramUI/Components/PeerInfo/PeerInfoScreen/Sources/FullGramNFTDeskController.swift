@@ -78,6 +78,21 @@ private final class FullGramNFTCatalogViewController: ViewController, UICollecti
         self.blocksBackgroundWhenInOverlay = true
         let ru = self.presentationData.strings.baseLanguageCode.hasPrefix("ru")
         self.title = ru ? "Коллекции NFT" : "NFT Collections"
+        self.navigationItem.rightBarButtonItem = UIBarButtonItem(
+            image: UIImage(systemName: "xmark"),
+            style: .plain,
+            target: self,
+            action: #selector(self.closeTapped)
+        )
+    }
+
+    @objc private func closeTapped() {
+        if let nav = self.navigationController as? NavigationController,
+           let idx = nav.viewControllers.lastIndex(where: { !($0 is FullGramNFTCatalogViewController) && !($0 is FullGramNFTStudioViewController) }) {
+            nav.setViewControllers(Array(nav.viewControllers.prefix(idx + 1)), animated: true)
+            return
+        }
+        self.dismiss()
     }
 
     @available(*, unavailable)
@@ -449,6 +464,21 @@ private final class FullGramNFTStudioViewController: ViewController, UICollectio
         self.isOpaqueWhenInOverlay = true
         self.blocksBackgroundWhenInOverlay = true
         self.title = self.collectionTitle
+        self.navigationItem.rightBarButtonItem = UIBarButtonItem(
+            image: UIImage(systemName: "xmark"),
+            style: .plain,
+            target: self,
+            action: #selector(self.closeTapped)
+        )
+    }
+
+    @objc private func closeTapped() {
+        if let nav = self.navigationController as? NavigationController,
+           let idx = nav.viewControllers.lastIndex(where: { !($0 is FullGramNFTCatalogViewController) && !($0 is FullGramNFTStudioViewController) }) {
+            nav.setViewControllers(Array(nav.viewControllers.prefix(idx + 1)), animated: true)
+            return
+        }
+        self.dismiss()
     }
 
     @available(*, unavailable)

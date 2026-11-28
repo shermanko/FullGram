@@ -175,7 +175,7 @@ public func fullGramWorkController(context: AccountContext) -> ViewController {
                 FullGramExtras.shared.addConfirmSendChat(peer.id.toInt64())
                 selector?.dismiss()
             }
-            presentControllerImpl?(selector)
+            pushImpl?(selector)
         },
         removeChat: { peerId in
             FullGramExtras.shared.removeConfirmSendChat(peerId)
