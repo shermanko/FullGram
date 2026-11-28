@@ -142,7 +142,7 @@ private enum FullGramMediaAudioCategoryEntry: ItemListNodeEntry {
 }
 
 private final class FullGramMediaAudioNativePresenterBox: @unchecked Sendable {
-    var present: (@MainActor @Sendable (UIViewController) -> Void)?
+    var present: ((UIViewController) -> Void)?
 }
 
 func fullGramMediaAudioCategoryController(context: AccountContext) -> ViewController {
@@ -691,7 +691,9 @@ func fullGramVoiceController(context: AccountContext, onChanged: @escaping () ->
     |> afterDisposed {
         DispatchQueue.main.async {
             tester.stop()
-            customRecorder.stop()
+            if customRecorder.isRecording {
+                customRecorder.toggleRecord()
+            }
         }
     }
 

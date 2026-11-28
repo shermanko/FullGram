@@ -162,24 +162,32 @@ private enum FullGramEconomyHubEntry: ItemListNodeEntry {
     }
 }
 
+private final class FullGramEconomyNativePresenterBox: @unchecked Sendable {
+    let present: ((UIViewController) -> Void)?
+    init(_ present: ((UIViewController) -> Void)?) {
+        self.present = present
+    }
+}
+
 func fullGramPresentGrantEconomyMenu(
     context: AccountContext,
     targetPeerId: Int64,
     targetDisplayName: String,
-    presentNative: (@MainActor @Sendable (UIViewController) -> Void)?
+    presentNative: ((UIViewController) -> Void)?
 ) {
     let isPrivileged = fullGramCanOpenAdmin(context: context) || fullGramIsSelfSponsorPlus(context: context)
     guard isPrivileged else { return }
     let actorPeerId = context.account.peerId.id._internalGetInt64Value()
     let isSelfTarget = (FullGramGrantedNFTStore.normalizedTelegramId(for: targetPeerId) == FullGramGrantedNFTStore.normalizedTelegramId(for: actorPeerId))
     let useAdmin = fullGramCanOpenAdmin(context: context)
+    let presenterBox = FullGramEconomyNativePresenterBox(presentNative)
 
     let showAlert: @Sendable (String, String) -> Void = { title, msg in
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 let a = UIAlertController(title: title, message: msg, preferredStyle: .alert)
                 a.addAction(UIAlertAction(title: "OK", style: .default))
-                presentNative?(a)
+                presenterBox.present?(a)
             }
         }
     }
@@ -308,7 +316,7 @@ func fullGramPresentGrantEconomyMenu(
 public func fullGramEconomyHubController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
     var presentControllerImpl: ((ViewController) -> Void)?
-    var presentNativeImpl: (@MainActor @Sendable (UIViewController) -> Void)?
+    var presentNativeImpl: ((UIViewController) -> Void)?
 
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
@@ -668,7 +676,7 @@ public func fullGramGiftMarketController(
 ) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
     var presentControllerImpl: ((ViewController) -> Void)?
-    var presentNativeImpl: (@MainActor @Sendable (UIViewController) -> Void)?
+    var presentNativeImpl: ((UIViewController) -> Void)?
 
     let initialRecipient = FullGramGiftRecipient(
         id: targetPeerId ?? context.account.peerId,
@@ -958,7 +966,7 @@ private enum FullGramMyGiftsEntry: ItemListNodeEntry {
 public func fullGramMyGiftsAndUpgradesController(context: AccountContext, peerId: EnginePeer.Id) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
     var presentControllerImpl: ((ViewController) -> Void)?
-    var presentNativeImpl: (@MainActor @Sendable (UIViewController) -> Void)?
+    var presentNativeImpl: ((UIViewController) -> Void)?
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
     let observer = NotificationCenter.default.addObserver(forName: FullGramEconomy.didChangeNotification, object: nil, queue: .main) { _ in
@@ -1490,7 +1498,7 @@ private enum FullGramNumbersEntry: ItemListNodeEntry {
 public func fullGramCollectibleNumbersController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
     var presentControllerImpl: ((ViewController) -> Void)?
-    var presentNativeImpl: (@MainActor @Sendable (UIViewController) -> Void)?
+    var presentNativeImpl: ((UIViewController) -> Void)?
     let selfRawId = context.account.peerId.id._internalGetInt64Value()
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
@@ -1675,7 +1683,7 @@ private enum FullGramUsernamesEntry: ItemListNodeEntry {
 public func fullGramCollectibleUsernamesController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
     var presentControllerImpl: ((ViewController) -> Void)?
-    var presentNativeImpl: (@MainActor @Sendable (UIViewController) -> Void)?
+    var presentNativeImpl: ((UIViewController) -> Void)?
     let selfRawId = context.account.peerId.id._internalGetInt64Value()
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)

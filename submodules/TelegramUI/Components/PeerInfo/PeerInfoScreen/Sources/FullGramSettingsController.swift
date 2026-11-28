@@ -4532,7 +4532,7 @@ private final class FullGramBackupPickerDelegate: NSObject, UIDocumentPickerDele
     }
 }
 
-@MainActor private var activeBackupPickerDelegate: FullGramBackupPickerDelegate?
+private nonisolated(unsafe) var activeBackupPickerDelegate: FullGramBackupPickerDelegate?
 
 func fullGramOtherCategoryController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
@@ -4960,7 +4960,7 @@ private enum FullGramBadgesEntry: ItemListNodeEntry {
 }
 
 private final class FullGramBadgesNativePresenterBox: @unchecked Sendable {
-    var present: (@MainActor @Sendable (UIViewController) -> Void)?
+    var present: ((UIViewController) -> Void)?
 }
 
 public func fullGramBadgesController(context: AccountContext) -> ViewController {

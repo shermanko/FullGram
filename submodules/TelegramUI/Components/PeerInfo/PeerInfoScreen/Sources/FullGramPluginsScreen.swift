@@ -136,7 +136,7 @@ private final class FullGramPluginFilePickerDelegate: NSObject, UIDocumentPicker
     }
 }
 
-@MainActor private var activePluginFilePickerDelegate: FullGramPluginFilePickerDelegate?
+private nonisolated(unsafe) var activePluginFilePickerDelegate: FullGramPluginFilePickerDelegate?
 
 func fullGramPluginsController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?

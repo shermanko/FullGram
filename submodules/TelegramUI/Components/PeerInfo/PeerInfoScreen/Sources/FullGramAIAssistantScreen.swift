@@ -519,7 +519,7 @@ private func fullGramModelPresets(for provider: FullGramAIProvider) -> [String] 
 }
 
 private final class FullGramAINativePresenterBox: @unchecked Sendable {
-    var present: (@MainActor @Sendable (UIViewController) -> Void)?
+    var present: ((UIViewController) -> Void)?
 }
 
 public func fullGramAIAssistantController(context: AccountContext) -> ViewController {

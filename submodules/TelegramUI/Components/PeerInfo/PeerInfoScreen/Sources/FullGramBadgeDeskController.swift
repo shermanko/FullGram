@@ -1,6 +1,6 @@
 import Foundation
 import UIKit
-import Display
+@preconcurrency import Display
 import AsyncDisplayKit
 @preconcurrency import SwiftSignalKit
 import TelegramCore
@@ -16,7 +16,7 @@ import UndoUI
 
 private final class FullGramBadgeDeskPresenterBox: @unchecked Sendable {
     weak var controller: ItemListController?
-    var presentNative: (@MainActor @Sendable (UIViewController) -> Void)?
+    var presentNative: ((UIViewController) -> Void)?
     var presentController: ((ViewController) -> Void)?
     var push: ((ViewController) -> Void)?
 }

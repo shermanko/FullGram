@@ -133,7 +133,7 @@ private final class FullGramWorkFilePickerDelegate: NSObject, UIDocumentPickerDe
     }
 }
 
-@MainActor private var activeWorkFilePickerDelegate: FullGramWorkFilePickerDelegate?
+private nonisolated(unsafe) var activeWorkFilePickerDelegate: FullGramWorkFilePickerDelegate?
 
 public func fullGramWorkController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
