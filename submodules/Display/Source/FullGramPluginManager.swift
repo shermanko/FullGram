@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import CryptoKit
+import Darwin
 
 public enum FullGramPluginNotifications {
     public static let pluginsDidChange = Notification.Name("FullGram.PluginsDidChange")
@@ -55,8 +56,8 @@ public struct FullGramPluginAccountProfile: Codable, Equatable {
         self.updatedAt = updatedAt
     }
 
-    public func toPluginValue() -> FullGramPluginValue {
-        return .table(FullGramPluginTableBox(dict: [
+    public func toPluginValue(includePhone: Bool = false) -> FullGramPluginValue {
+        var dict: [String: FullGramPluginValue] = [
             "id": .int(self.peerId),
             "peer_id": .int(self.peerId),
             "first_name": .string(self.firstName),
@@ -65,11 +66,14 @@ public struct FullGramPluginAccountProfile: Codable, Equatable {
             "name": .string(self.fullName),
             "username": .string(self.username),
             "bio": .string(self.bio),
-            "phone": .string(self.phone),
             "original_first_name": .string(self.originalFirstName),
             "original_last_name": .string(self.originalLastName),
             "updated_at": .double(self.updatedAt)
-        ]))
+        ]
+        if includePhone {
+            dict["phone"] = .string(self.phone)
+        }
+        return .table(FullGramPluginTableBox(dict: dict))
     }
 }
 
@@ -250,7 +254,7 @@ public struct FullGramRemoteCatalog: Codable {
     public let plugins: [FullGramRemotePluginItem]
 }
 
-private final class FullGramLoadedPlugin {
+private final class FullGramLoadedPlugin: @unchecked Sendable {
     let descriptor: FullGramPluginDescriptor
     var luaVM: FullGramLuaVM?
     var pythonVM: FullGramPythonVM?
@@ -275,7 +279,7 @@ private final class FullGramLoadedPlugin {
     }
 }
 
-public final class FullGramPluginManager {
+public final class FullGramPluginManager: @unchecked Sendable {
     public static let shared = FullGramPluginManager()
     public static let officialCatalogURL = "https://fullgram.korsakovx.workers.dev/plugins.json"
 
@@ -324,6 +328,30 @@ public final class FullGramPluginManager {
         }
     }
 
+    private final class FullGramNoRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+        func urlSession(
+            _ session: URLSession,
+            task: URLSessionTask,
+            willPerformHTTPRedirection response: HTTPURLResponse,
+            newRequest request: URLRequest,
+            completionHandler: @escaping (URLRequest?) -> Void
+        ) {
+            completionHandler(nil)
+        }
+    }
+
+    private struct ReloadPlan {
+        let generation: UInt64
+        let systemEnabled: Bool
+        let toCompile: [FullGramPluginDescriptor]
+        let oldUnloadPlugins: [FullGramLoadedPlugin]
+    }
+
+    private static let noRedirectDelegate = FullGramNoRedirectDelegate()
+    private static let pluginHTTPSession: URLSession = {
+        return URLSession(configuration: .ephemeral, delegate: noRedirectDelegate, delegateQueue: nil)
+    }()
+
     private var descriptors: [FullGramPluginDescriptor] = []
     private var loaded: [String: FullGramLoadedPlugin] = [:]
     private var cachedOrderedPlugins: [FullGramLoadedPlugin] = []
@@ -333,7 +361,8 @@ public final class FullGramPluginManager {
     private var cachedBackgroundEnabled: Bool?
     private var hasRenderHooks: Bool = false
     private var didInitialize = false
-    private var isInsideRenderHook = false
+    private var renderHookDepth = 0
+    private var reloadGeneration: UInt64 = 0
 
     // Background execution engine
     private let backgroundQueue = DispatchQueue(label: "com.fullgram.plugins.background", qos: .utility)
@@ -636,8 +665,10 @@ public final class FullGramPluginManager {
 
     private func ensureLoaded() {
         self.lock.lock()
-        defer { self.lock.unlock() }
-        guard !self.didInitialize else { return }
+        guard !self.didInitialize else {
+            self.lock.unlock()
+            return
+        }
         self.didInitialize = true
 
         self.registerLifecycleObserversIfNeeded()
@@ -665,7 +696,9 @@ public final class FullGramPluginManager {
         if purgedBuiltIns {
             self.persistLocked()
         }
-        self.reloadRuntimeLocked()
+        let plan = self.prepareReloadLocked()
+        self.lock.unlock()
+        self.finishReloadOutsideLock(plan)
     }
 
     private func persistLocked() {
@@ -772,8 +805,9 @@ public final class FullGramPluginManager {
             self.descriptors.append(descriptor)
         }
         self.persistLocked()
-        self.reloadRuntimeLocked()
+        let plan = self.prepareReloadLocked()
         self.lock.unlock()
+        self.finishReloadOutsideLock(plan)
 
         self.postPluginsDidChange()
         return descriptor
@@ -802,12 +836,16 @@ public final class FullGramPluginManager {
     public func setPluginEnabled(id: String, enabled: Bool) {
         self.ensureLoaded()
         self.lock.lock()
+        var plan: ReloadPlan?
         if let idx = self.descriptors.firstIndex(where: { $0.id == id }) {
             self.descriptors[idx].isEnabled = enabled
             self.persistLocked()
-            self.reloadRuntimeLocked()
+            plan = self.prepareReloadLocked()
         }
         self.lock.unlock()
+        if let plan {
+            self.finishReloadOutsideLock(plan)
+        }
         self.postPluginsDidChange()
     }
 
@@ -866,7 +904,19 @@ public final class FullGramPluginManager {
         defer {
             if accessed { url.stopAccessingSecurityScopedResource() }
         }
-        let code = try String(contentsOf: url, encoding: .utf8)
+        let maxPluginBytes = 256 * 1024
+        if let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize), fileSize > maxPluginBytes {
+            throw FullGramPluginError("Файл плагина превышает 256 КБ")
+        }
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let rawData = try handle.read(upToCount: maxPluginBytes + 1) ?? Data()
+        guard rawData.count <= maxPluginBytes else {
+            throw FullGramPluginError("Файл плагина превышает 256 КБ")
+        }
+        guard let code = String(data: rawData, encoding: .utf8) else {
+            throw FullGramPluginError("Файл плагина должен быть в кодировке UTF-8")
+        }
         let sourceName = preferredFileName?.isEmpty == false ? preferredFileName! : url.lastPathComponent
         let ext = (sourceName as NSString).pathExtension.lowercased()
         let baseName = (sourceName as NSString).deletingPathExtension
@@ -900,11 +950,14 @@ public final class FullGramPluginManager {
 
     public func reloadRuntime() {
         self.lock.lock()
-        self.reloadRuntimeLocked()
+        let plan = self.prepareReloadLocked()
         self.lock.unlock()
+        self.finishReloadOutsideLock(plan)
     }
 
-    private func reloadRuntimeLocked() {
+    private func prepareReloadLocked() -> ReloadPlan {
+        self.reloadGeneration &+= 1
+        let gen = self.reloadGeneration
         let oldUnloadPlugins = self.cachedOrderedPlugins.filter { $0.hasUnloadHook }
         self.loaded.removeAll()
         self.cachedOrderedPlugins.removeAll()
@@ -912,32 +965,34 @@ public final class FullGramPluginManager {
         self.hasRenderHooks = false
         guard self.isSystemEnabled else {
             self.syncBackgroundSchedulerLocked()
-            if !oldUnloadPlugins.isEmpty {
-                // Invoke lifecycle hooks outside self.lock to prevent AB-BA deadlock with self.vmLock.
-                self.backgroundQueue.async { [weak self] in
-                    guard let self else { return }
-                    for old in oldUnloadPlugins {
-                        self.invokeLifecycleHook(plugin: old, name: "on_unload", args: [])
-                    }
+            return ReloadPlan(generation: gen, systemEnabled: false, toCompile: [], oldUnloadPlugins: oldUnloadPlugins)
+        }
+        let toCompile = self.descriptors.filter { $0.isEnabled }
+        return ReloadPlan(generation: gen, systemEnabled: true, toCompile: toCompile, oldUnloadPlugins: oldUnloadPlugins)
+    }
+
+    private func finishReloadOutsideLock(_ plan: ReloadPlan) {
+        let compiled: [FullGramLoadedPlugin] = plan.systemEnabled ? plan.toCompile.map { self.compile(descriptor: $0) } : []
+
+        var newLoadPlugins: [FullGramLoadedPlugin] = []
+        self.lock.lock()
+        if self.reloadGeneration == plan.generation && plan.systemEnabled && self.isSystemEnabled {
+            var anyRender = false
+            for runtime in compiled {
+                if runtime.hasRenderHook {
+                    anyRender = true
+                    self.cachedRenderPlugins.append(runtime)
                 }
+                self.loaded[runtime.descriptor.id] = runtime
+                self.cachedOrderedPlugins.append(runtime)
             }
-            return
+            self.hasRenderHooks = anyRender
+            newLoadPlugins = self.cachedOrderedPlugins.filter { $0.hasLoadHook }
+            self.syncBackgroundSchedulerLocked()
         }
+        self.lock.unlock()
 
-        var anyRender = false
-        for descriptor in self.descriptors where descriptor.isEnabled {
-            let runtime = self.compile(descriptor: descriptor)
-            if runtime.hasRenderHook {
-                anyRender = true
-                self.cachedRenderPlugins.append(runtime)
-            }
-            self.loaded[descriptor.id] = runtime
-            self.cachedOrderedPlugins.append(runtime)
-        }
-        self.hasRenderHooks = anyRender
-
-        let newLoadPlugins = self.cachedOrderedPlugins.filter { $0.hasLoadHook }
-        self.syncBackgroundSchedulerLocked()
+        let oldUnloadPlugins = plan.oldUnloadPlugins
         if !oldUnloadPlugins.isEmpty || !newLoadPlugins.isEmpty {
             // Invoke lifecycle hooks outside self.lock to prevent AB-BA deadlock with self.vmLock.
             self.backgroundQueue.async { [weak self] in
@@ -1463,6 +1518,21 @@ public final class FullGramPluginManager {
         return (self.backgroundTimer != nil, count, self.backgroundTickCount)
     }
 
+    private func invokeCallable(
+        _ fn: ([FullGramPluginValue]) throws -> FullGramPluginValue,
+        on plugin: FullGramLoadedPlugin,
+        args: [FullGramPluginValue]
+    ) throws -> FullGramPluginValue {
+        if let lua = plugin.luaVM {
+            return try lua.invoke(fn, args: args)
+        } else if let py = plugin.pythonVM {
+            return try py.invoke(fn, args: args)
+        } else if let rs = plugin.rustVM {
+            return try rs.invoke(fn, args: args)
+        }
+        return try fn(args)
+    }
+
     private func invokeLifecycleHook(plugin: FullGramLoadedPlugin, name: String, args: [FullGramPluginValue]) {
         self.vmLock.lock()
         defer { self.vmLock.unlock() }
@@ -1490,13 +1560,13 @@ public final class FullGramPluginManager {
         self.lock.unlock()
         guard !targets.isEmpty else { return }
 
-        let timeTable = FullGramPluginTableBox(dict: FullGramPluginTimeHelper.buildPhoneTimeDict())
-        let ctx = FullGramPluginTableBox(dict: [
-            "state": .string(state),
-            "in_background": .bool(state == "background"),
-            "time": .table(timeTable)
-        ])
+        let timeDict = FullGramPluginTimeHelper.buildPhoneTimeDict()
         for plugin in targets {
+            let ctx = FullGramPluginTableBox(dict: [
+                "state": .string(state),
+                "in_background": .bool(state == "background"),
+                "time": .table(FullGramPluginTableBox(dict: timeDict))
+            ])
             self.invokeLifecycleHook(plugin: plugin, name: "on_app_state", args: [.table(ctx)])
         }
     }
@@ -1536,7 +1606,11 @@ public final class FullGramPluginManager {
             self.lock.unlock()
 
             let timeBox = FullGramPluginTableBox(dict: FullGramPluginTimeHelper.buildPhoneTimeDict())
-            let profileVal = self.currentProfile().toPluginValue()
+            let hasProfilePerm = plugin.descriptor.permissions.contains {
+                let p = $0.lowercased()
+                return p == "profile" || p == "all" || p == "*"
+            }
+            let profileVal = self.currentProfile().toPluginValue(includePhone: hasProfilePerm)
             let deviceBox = FullGramPluginTableBox(dict: self.buildDeviceInfoDict())
             let ctx = FullGramPluginTableBox(dict: [
                 "tick": .int(pluginTick),
@@ -1572,24 +1646,100 @@ public final class FullGramPluginManager {
         self.lock.unlock()
         guard !targets.isEmpty else { return }
 
-        let ctx = FullGramPluginTableBox(dict: [
-            "text": .string(text),
-            "peer_id": .int(peerId),
-            "sender_name": .string(senderName),
-            "timestamp": .int(Int64(timestamp)),
-            "is_group": .bool(isGroup),
-            "is_channel": .bool(isChannel),
-            "time": .table(FullGramPluginTableBox(dict: FullGramPluginTimeHelper.buildPhoneTimeDict()))
-        ])
         self.backgroundQueue.async { [weak self] in
             guard let self else { return }
+            let timeDict = FullGramPluginTimeHelper.buildPhoneTimeDict()
             for plugin in targets {
+                let ctx = FullGramPluginTableBox(dict: [
+                    "text": .string(text),
+                    "peer_id": .int(peerId),
+                    "sender_name": .string(senderName),
+                    "timestamp": .int(Int64(timestamp)),
+                    "is_group": .bool(isGroup),
+                    "is_channel": .bool(isChannel),
+                    "time": .table(FullGramPluginTableBox(dict: timeDict))
+                ])
                 self.invokeLifecycleHook(plugin: plugin, name: "on_incoming_message", args: [.table(ctx)])
             }
         }
     }
 
     private static let chatStatsThreadKey = "FullGram.Plugin.ChatStats"
+
+    private static func isBlockedIPv4(_ ipv4HostOrder: UInt32) -> Bool {
+        let b0 = (ipv4HostOrder >> 24) & 0xFF
+        let b1 = (ipv4HostOrder >> 16) & 0xFF
+        if b0 == 0 { return true }
+        if b0 == 10 { return true }
+        if b0 == 100 && (b1 >= 64 && b1 <= 127) { return true }
+        if b0 == 127 { return true }
+        if b0 == 169 && b1 == 254 { return true }
+        if b0 == 172 && (b1 >= 16 && b1 <= 31) { return true }
+        if b0 == 192 && b1 == 168 { return true }
+        if b0 == 198 && (b1 == 18 || b1 == 19) { return true }
+        if b0 >= 224 { return true }
+        return false
+    }
+
+    private static func isBlockedIPv6(_ addr: in6_addr) -> Bool {
+        var addrCopy = addr
+        let bytes = withUnsafeBytes(of: &addrCopy) { Array($0) }
+        guard bytes.count == 16 else { return true }
+        if bytes[0..<15].allSatisfy({ $0 == 0 }) && (bytes[15] == 0 || bytes[15] == 1) { return true }
+        let isV4Mapped = bytes[0..<10].allSatisfy({ $0 == 0 }) && bytes[10] == 0xFF && bytes[11] == 0xFF
+        if isV4Mapped {
+            let v4 = (UInt32(bytes[12]) << 24) | (UInt32(bytes[13]) << 16) | (UInt32(bytes[14]) << 8) | UInt32(bytes[15])
+            return Self.isBlockedIPv4(v4)
+        }
+        if (bytes[0] & 0xFE) == 0xFC { return true }
+        if bytes[0] == 0xFE && (bytes[1] & 0xC0) == 0x80 { return true }
+        if bytes[0] == 0xFF { return true }
+        return false
+    }
+
+    private static func isBlockedHost(_ host: String) -> Bool {
+        var clean = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if clean.hasPrefix("[") && clean.hasSuffix("]") {
+            clean = String(clean.dropFirst().dropLast())
+        }
+        if clean.isEmpty || clean == "localhost" || clean.hasSuffix(".local") || clean.hasSuffix(".internal") || clean.hasSuffix(".arpa") {
+            return true
+        }
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        hints.ai_socktype = SOCK_STREAM
+        var res: UnsafeMutablePointer<addrinfo>?
+        let status = clean.withCString { cHost in
+            getaddrinfo(cHost, nil, &hints, &res)
+        }
+        defer {
+            if let res {
+                freeaddrinfo(res)
+            }
+        }
+        guard status == 0, let first = res else {
+            return true
+        }
+        var resolvedAny = false
+        var cursor: UnsafeMutablePointer<addrinfo>? = first
+        while let info = cursor {
+            if let sa = info.pointee.ai_addr {
+                let family = Int32(sa.pointee.sa_family)
+                if family == AF_INET {
+                    let sin = sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
+                    let v4 = UInt32(bigEndian: sin.sin_addr.s_addr)
+                    resolvedAny = true
+                    if Self.isBlockedIPv4(v4) { return true }
+                } else if family == AF_INET6 {
+                    let sin6 = sa.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { $0.pointee }
+                    resolvedAny = true
+                    if Self.isBlockedIPv6(sin6.sin6_addr) { return true }
+                }
+            }
+            cursor = info.pointee.ai_next
+        }
+        return !resolvedAny
+    }
 
     private func performSyncHTTPRequest(
         urlString: String,
@@ -1605,17 +1755,7 @@ public final class FullGramPluginManager {
               let host = url.host?.lowercased(), !host.isEmpty else {
             return (0, nil, "Invalid URL")
         }
-        if host == "localhost"
-            || host == "::1"
-            || host == "[::1]"
-            || host == "0.0.0.0"
-            || host.hasSuffix(".local")
-            || host.hasPrefix("127.")
-            || host.hasPrefix("10.")
-            || host.hasPrefix("169.254.")
-            || host.hasPrefix("192.168.")
-            || host.hasPrefix("fc")
-            || host.hasPrefix("fd") {
+        if Self.isBlockedHost(host) {
             self.appendLog(pluginId: pluginId, message: "BLOCKED: SSRF to private host \(host)")
             return (0, nil, "Private/local network hosts are blocked")
         }
@@ -1624,18 +1764,36 @@ public final class FullGramPluginManager {
             return (0, nil, "Network calls are blocked on main thread")
         }
         self.vmLock.lock()
-        let insideRender = self.isInsideRenderHook
+        let insideRender = self.renderHookDepth > 0
         self.vmLock.unlock()
         if insideRender {
             self.appendLog(pluginId: pluginId, message: "BLOCKED: network call forbidden inside on_render_message")
             return (0, nil, "Network calls forbidden in on_render_message")
         }
 
+        final class HTTPResponseBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var status: Int = 0
+            private var body: String?
+            private var error: String?
+
+            func set(status: Int, body: String?, error: String?) {
+                self.lock.lock()
+                defer { self.lock.unlock() }
+                self.status = status
+                self.body = body
+                self.error = error
+            }
+
+            func read() -> (Int, String?, String?) {
+                self.lock.lock()
+                defer { self.lock.unlock() }
+                return (self.status, self.body, self.error)
+            }
+        }
+
         let sem = DispatchSemaphore(value: 0)
-        let boxLock = NSLock()
-        var respBody: String?
-        var respStatus = 0
-        var respError: String?
+        let box = HTTPResponseBox()
 
         var request = URLRequest(url: url)
         request.httpMethod = method.uppercased()
@@ -1650,16 +1808,16 @@ public final class FullGramPluginManager {
             }
         }
 
-        let ephemeralSession = URLSession(configuration: .ephemeral)
-        let task = ephemeralSession.dataTask(with: request) { data, response, error in
-            boxLock.lock()
-            respStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let task = Self.pluginHTTPSession.dataTask(with: request) { data, response, error in
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            var respError: String?
+            var respBody: String?
             if let error {
                 respError = error.localizedDescription
             } else if let data, data.count <= 1_048_576 {
                 respBody = String(data: data, encoding: .utf8)
             }
-            boxLock.unlock()
+            box.set(status: status, body: respBody, error: respError)
             sem.signal()
         }
         task.resume()
@@ -1667,10 +1825,7 @@ public final class FullGramPluginManager {
             task.cancel()
             return (0, nil, "Request timed out")
         }
-        boxLock.lock()
-        let result = (respStatus, respBody, respError)
-        boxLock.unlock()
-        return result
+        return box.read()
     }
 
     private func makeHostAPI(
@@ -1681,6 +1836,14 @@ public final class FullGramPluginManager {
     ) -> [String: FullGramPluginValue] {
         let storagePrefix = "fullgram.plugin.store.\(pluginId)."
         let sharedPrefix = "fullgram.plugin.shared."
+        let grantedPermissions = Set((commandsBox?.descriptor.permissions ?? []).map { $0.lowercased() })
+        let hasPermission: (String) -> Bool = { perm in
+            return grantedPermissions.contains(perm) || grantedPermissions.contains("all") || grantedPermissions.contains("*")
+        }
+        let allowProfile = hasPermission("profile")
+        let allowChat = hasPermission("chat")
+        let allowClipboard = hasPermission("clipboard")
+        let allowNetwork = !isSandboxTest && hasPermission("net")
 
         let logFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
             let text = args.map { $0.asString }.joined(separator: " ")
@@ -1749,22 +1912,34 @@ public final class FullGramPluginManager {
             return .bool(true)
         }
 
-        let clipboardSetFn: ([FullGramPluginValue]) -> FullGramPluginValue = { args in
+        let clipboardSetFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
+            guard allowClipboard else {
+                self?.appendLog(pluginId: pluginId, message: "BLOCKED: clipboard_set requires @permission clipboard")
+                return .bool(false)
+            }
             let text = args.first?.asString ?? ""
             if !isSandboxTest {
                 DispatchQueue.main.async {
-                    UIPasteboard.general.string = text
+                    MainActor.assumeIsolated {
+                        UIPasteboard.general.string = text
+                    }
                 }
             }
             return .bool(true)
         }
 
-        let clipboardGetFn: ([FullGramPluginValue]) -> FullGramPluginValue = { _ in
+        let clipboardGetFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] _ in
+            guard allowClipboard else {
+                self?.appendLog(pluginId: pluginId, message: "BLOCKED: clipboard_get requires @permission clipboard")
+                return .string("")
+            }
             // Avoid DispatchQueue.main.sync while vmLock is held (deadlocks with main-thread hooks).
             guard Thread.isMainThread else {
                 return .string("")
             }
-            return .string(UIPasteboard.general.string ?? "")
+            return MainActor.assumeIsolated {
+                .string(UIPasteboard.general.string ?? "")
+            }
         }
 
         let hapticFn: ([FullGramPluginValue]) -> FullGramPluginValue = { args in
@@ -1849,6 +2024,7 @@ public final class FullGramPluginManager {
             return .table(FullGramPluginTableBox(array: keys.map { .string($0) }))
         }
         let storageClearFn: ([FullGramPluginValue]) -> FullGramPluginValue = { _ in
+            guard !isSandboxTest else { return .bool(false) }
             let keys = UserDefaults.standard.dictionaryRepresentation().keys.filter { $0.hasPrefix(storagePrefix) }
             for k in keys { UserDefaults.standard.removeObject(forKey: k) }
             return .bool(true)
@@ -1897,9 +2073,13 @@ public final class FullGramPluginManager {
 
         // Profile & Nickname API
         let getProfileFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] _ in
-            return self?.currentProfile().toPluginValue() ?? .table(FullGramPluginTableBox())
+            return self?.currentProfile().toPluginValue(includePhone: allowProfile) ?? .table(FullGramPluginTableBox())
         }
         let setNicknameFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
+            guard allowProfile else {
+                self?.appendLog(pluginId: pluginId, message: "BLOCKED: set_nickname requires @permission profile")
+                return .bool(false)
+            }
             guard let self, let first = args.first?.asString else { return .bool(false) }
             let last = args.count > 1 ? (args[1].asString == "nil" ? "" : args[1].asString) : ""
             logCapture?("[set_nickname] \(first) \(last)")
@@ -1907,12 +2087,20 @@ public final class FullGramPluginManager {
             return .bool(self.requestSetNickname(firstName: first, lastName: last, pluginId: pluginId))
         }
         let restoreNicknameFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] _ in
+            guard allowProfile else {
+                self?.appendLog(pluginId: pluginId, message: "BLOCKED: restore_nickname requires @permission profile")
+                return .bool(false)
+            }
             guard let self else { return .bool(false) }
             logCapture?("[restore_nickname]")
             if isSandboxTest { return .bool(true) }
             return .bool(self.restoreOriginalNickname(pluginId: pluginId))
         }
         let setUsernameFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
+            guard allowProfile else {
+                self?.appendLog(pluginId: pluginId, message: "BLOCKED: set_username requires @permission profile")
+                return .bool(false)
+            }
             guard let self else { return .bool(false) }
             let username = args.first?.asString ?? ""
             logCapture?("[set_username] \(username)")
@@ -1920,6 +2108,10 @@ public final class FullGramPluginManager {
             return .bool(self.requestSetUsername(username, pluginId: pluginId))
         }
         let setBioFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
+            guard allowProfile else {
+                self?.appendLog(pluginId: pluginId, message: "BLOCKED: set_bio requires @permission profile")
+                return .bool(false)
+            }
             guard let self else { return .bool(false) }
             let bio = args.first?.asString ?? ""
             logCapture?("[set_bio] \(bio)")
@@ -1935,6 +2127,10 @@ public final class FullGramPluginManager {
             return .string(pair.lastName.isEmpty ? pair.firstName : "\(pair.firstName) \(pair.lastName)")
         }
         let applyNickTemplateFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
+            guard allowProfile else {
+                self?.appendLog(pluginId: pluginId, message: "BLOCKED: apply_nick_template requires @permission profile")
+                return .bool(false)
+            }
             guard let self else { return .bool(false) }
             let tpl = args.first?.asString ?? self.nickClockTemplate
             let style = args.count > 1 ? args[1].asString : self.nickClockStyle
@@ -1999,13 +2195,15 @@ public final class FullGramPluginManager {
                 "in_background": .bool(snap.isBackground)
             ]))
         }
-        let onEventFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak commandsBox] args in
-            guard args.count >= 2, case let .function(fn) = args[1] else { return .bool(false) }
+        let onEventFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self, weak commandsBox] args in
+            guard let self, let commandsBox, args.count >= 2, case let .function(fn) = args[1] else { return .bool(false) }
             let eventName = args[0].asString.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !eventName.isEmpty else { return .bool(false) }
-            var list = commandsBox?.eventListeners[eventName] ?? []
+            self.lock.lock()
+            var list = commandsBox.eventListeners[eventName] ?? []
             list.append(fn)
-            commandsBox?.eventListeners[eventName] = list
+            commandsBox.eventListeners[eventName] = list
+            self.lock.unlock()
             return .bool(true)
         }
         let emitEventFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
@@ -2015,17 +2213,21 @@ public final class FullGramPluginManager {
             let payload = args.count > 1 ? args[1] : .nil
             self.lock.lock()
             let plugins = self.cachedOrderedPlugins
+            var targets: [(FullGramLoadedPlugin, [([FullGramPluginValue]) throws -> FullGramPluginValue])] = []
+            for p in plugins {
+                if let listeners = p.eventListeners[eventName], !listeners.isEmpty {
+                    targets.append((p, listeners))
+                }
+            }
             self.lock.unlock()
             var count: Int64 = 0
-            for p in plugins {
-                if let listeners = p.eventListeners[eventName] {
-                    for fn in listeners {
-                        do {
-                            _ = try fn([payload])
-                            count += 1
-                        } catch {
-                            self.appendLog(pluginId: p.descriptor.id, message: "Event '\(eventName)' error: \(error.localizedDescription)")
-                        }
+            for (p, listeners) in targets {
+                for fn in listeners {
+                    do {
+                        _ = try self.invokeCallable(fn, on: p, args: [payload])
+                        count += 1
+                    } catch {
+                        self.appendLog(pluginId: p.descriptor.id, message: "Event '\(eventName)' error: \(error.localizedDescription)")
                     }
                 }
             }
@@ -2033,17 +2235,23 @@ public final class FullGramPluginManager {
         }
 
         // Chat & Message API
-        let registerCmdFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak commandsBox] args in
-            guard args.count >= 2, case let .function(fn) = args[1] else { return .nil }
+        let registerCmdFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self, weak commandsBox] args in
+            guard let self, let commandsBox, args.count >= 2, case let .function(fn) = args[1] else { return .nil }
             let raw = args[0].asString.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let cmd = raw.hasPrefix(".") ? String(raw.dropFirst()) : raw
             if !cmd.isEmpty {
-                commandsBox?.registeredCommands[cmd] = fn
-                commandsBox?.hasCommandHook = true
+                self.lock.lock()
+                commandsBox.registeredCommands[cmd] = fn
+                commandsBox.hasCommandHook = true
+                self.lock.unlock()
             }
             return .nil
         }
-        let getChatStatsFn: ([FullGramPluginValue]) -> FullGramPluginValue = { _ in
+        let getChatStatsFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] _ in
+            guard allowChat else {
+                self?.appendLog(pluginId: pluginId, message: "BLOCKED: get_chat_stats requires @permission chat")
+                return .nil
+            }
             if let stats = Thread.current.threadDictionary[FullGramPluginManager.chatStatsThreadKey] as? [String: FullGramPluginValue] {
                 return .table(FullGramPluginTableBox(dict: stats))
             }
@@ -2051,6 +2259,10 @@ public final class FullGramPluginManager {
         }
         let getActiveChatFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] _ in
             guard let self else { return .nil }
+            guard allowChat else {
+                self.appendLog(pluginId: pluginId, message: "BLOCKED: get_active_chat requires @permission chat")
+                return .nil
+            }
             self.lock.lock()
             let fn = self.bridgeActiveChatInfo
             self.lock.unlock()
@@ -2061,8 +2273,12 @@ public final class FullGramPluginManager {
         }
         let sendMessageFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
             guard let self else { return .bool(false) }
+            guard allowChat else {
+                self.appendLog(pluginId: pluginId, message: "BLOCKED: send_message requires @permission chat")
+                return .bool(false)
+            }
             self.vmLock.lock()
-            let insideRender = self.isInsideRenderHook
+            let insideRender = self.renderHookDepth > 0
             self.vmLock.unlock()
             guard !insideRender else { return .bool(false) }
 
@@ -2087,6 +2303,10 @@ public final class FullGramPluginManager {
         }
         let setDraftFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
             guard let self else { return .bool(false) }
+            guard allowChat else {
+                self.appendLog(pluginId: pluginId, message: "BLOCKED: set_draft requires @permission chat")
+                return .bool(false)
+            }
             let text = args.first?.asString ?? ""
             let peerId = args.count > 1 ? args[1].asInt : nil
             logCapture?("[set_draft] \(text)")
@@ -2115,7 +2335,6 @@ public final class FullGramPluginManager {
             }
             return dict
         }
-        let allowNetwork = !isSandboxTest && (commandsBox?.descriptor.permissions.contains("net") ?? false)
         let httpGetFn: ([FullGramPluginValue]) -> FullGramPluginValue = { [weak self] args in
             guard let self else { return .nil }
             guard allowNetwork else {
@@ -2436,9 +2655,9 @@ public final class FullGramPluginManager {
             self.lock.unlock()
             return []
         }
-        let active = self.descriptors.compactMap { desc -> (FullGramPluginDescriptor, FullGramLoadedPlugin)? in
+        let active = self.descriptors.compactMap { desc -> (FullGramPluginDescriptor, FullGramLoadedPlugin, [String])? in
             guard let holder = self.loaded[desc.id] else { return nil }
-            return (desc, holder)
+            return (desc, holder, holder.registeredCommands.keys.sorted())
         }
         self.lock.unlock()
 
@@ -2447,8 +2666,8 @@ public final class FullGramPluginManager {
         let regex = Self.commandHintRegex
         let plugRegex = Self.plugSubcommandRegex
 
-        for (desc, holder) in active {
-            for cmd in holder.registeredCommands.keys.sorted() {
+        for (desc, _, commands) in active {
+            for cmd in commands {
                 if seen.insert(cmd).inserted {
                     results.append((cmd, desc.description, desc.name))
                 }
@@ -2490,13 +2709,13 @@ public final class FullGramPluginManager {
         }
         self.lock.unlock()
 
-        let ctx = FullGramPluginTableBox(dict: [
-            "text": .string(text),
-            "peer_id": .int(peerId)
-        ])
         self.vmLock.lock()
         defer { self.vmLock.unlock() }
         for plugin in targets {
+            let ctx = FullGramPluginTableBox(dict: [
+                "text": .string(text),
+                "peer_id": .int(peerId)
+            ])
             do {
                 if let lua = plugin.luaVM, lua.hasFunction("on_message_action") {
                     let res = try lua.callFunction("on_message_action", args: [.table(ctx)])
@@ -2616,7 +2835,7 @@ public final class FullGramPluginManager {
                 do {
                     var result: FullGramPluginValue = .nil
                     if let registeredFn = plugin.registeredCommands[cmd] {
-                        result = try registeredFn([.table(ctxTable)])
+                        result = try self.invokeCallable(registeredFn, on: plugin, args: [.table(ctxTable)])
                     } else if let lua = plugin.luaVM, lua.hasFunction("on_command") {
                         result = try lua.callFunction("on_command", args: [.table(ctxTable)])
                     } else if let py = plugin.pythonVM, py.hasFunction("on_command") {
@@ -2694,9 +2913,9 @@ public final class FullGramPluginManager {
         self.lock.unlock()
 
         self.vmLock.lock()
-        self.isInsideRenderHook = true
+        self.renderHookDepth += 1
         defer {
-            self.isInsideRenderHook = false
+            self.renderHookDepth = max(0, self.renderHookDepth - 1)
             self.vmLock.unlock()
         }
 
@@ -2735,7 +2954,8 @@ public final class FullGramPluginManager {
         sampleInput: String = ".shrug проверка"
     ) -> (output: String, logs: [String], error: String?) {
         var capturedLogs: [String] = []
-        let holder = FullGramLoadedPlugin(descriptor: FullGramPluginDescriptor(id: "__test__", name: "Test", language: language, code: code))
+        let meta = FullGramPluginMetadata.parse(from: code, fallbackName: "Test", language: language)
+        let holder = FullGramLoadedPlugin(descriptor: FullGramPluginDescriptor(id: "__test__", name: "Test", language: language, code: code, permissions: meta.permissions))
         let hostAPI = self.makeHostAPI(pluginId: "__test__", commandsBox: holder, isSandboxTest: true) { line in
             capturedLogs.append(line)
         }
@@ -2772,7 +2992,7 @@ public final class FullGramPluginManager {
                 var resultText = ""
                 if !cmd.isEmpty {
                     if let fn = holder.registeredCommands[cmd] {
-                        resultText = try fn([.table(ctxTable)]).asString
+                        resultText = try vm.invoke(fn, args: [.table(ctxTable)]).asString
                     } else if vm.hasFunction("on_command") {
                         resultText = try vm.callFunction("on_command", args: [.table(ctxTable)]).asString
                     }
@@ -2789,7 +3009,7 @@ public final class FullGramPluginManager {
                 var resultText = ""
                 if !cmd.isEmpty {
                     if let fn = holder.registeredCommands[cmd] {
-                        resultText = try fn([.table(ctxTable)]).asString
+                        resultText = try vm.invoke(fn, args: [.table(ctxTable)]).asString
                     } else if vm.hasFunction("on_command") {
                         resultText = try vm.callFunction("on_command", args: [.table(ctxTable)]).asString
                     }
@@ -2806,7 +3026,7 @@ public final class FullGramPluginManager {
                 var resultText = ""
                 if !cmd.isEmpty {
                     if let fn = holder.registeredCommands[cmd] {
-                        resultText = try fn([.table(ctxTable)]).asString
+                        resultText = try vm.invoke(fn, args: [.table(ctxTable)]).asString
                     } else if vm.hasFunction("on_command") {
                         resultText = try vm.callFunction("on_command", args: [.table(ctxTable)]).asString
                     }
@@ -2826,7 +3046,12 @@ public final class FullGramPluginManager {
         language: FullGramPluginLanguage
     ) -> (output: String, logs: [String], error: String?) {
         var capturedLogs: [String] = []
-        let holder = FullGramLoadedPlugin(descriptor: FullGramPluginDescriptor(id: "__test_bg__", name: "BgTest", language: language, code: code))
+        let meta = FullGramPluginMetadata.parse(from: code, fallbackName: "BgTest", language: language)
+        let hasProfilePerm = meta.permissions.contains {
+            let p = $0.lowercased()
+            return p == "profile" || p == "all" || p == "*"
+        }
+        let holder = FullGramLoadedPlugin(descriptor: FullGramPluginDescriptor(id: "__test_bg__", name: "BgTest", language: language, code: code, permissions: meta.permissions))
         let hostAPI = self.makeHostAPI(pluginId: "__test_bg__", commandsBox: holder, isSandboxTest: true) { line in
             capturedLogs.append(line)
         }
@@ -2837,7 +3062,7 @@ public final class FullGramPluginManager {
             "in_background": .bool(snap.isBackground),
             "app_state": .string(snap.appState),
             "time": .table(FullGramPluginTableBox(dict: FullGramPluginTimeHelper.buildPhoneTimeDict())),
-            "profile": self.currentProfile().toPluginValue(),
+            "profile": self.currentProfile().toPluginValue(includePhone: hasProfilePerm),
             "device": .table(FullGramPluginTableBox(dict: self.buildDeviceInfoDict()))
         ])
 
@@ -2912,12 +3137,14 @@ public final class FullGramPluginManager {
 
     // MARK: - Remote Plugin Market
 
-    public func fetchRemoteCatalog(urlString: String? = nil, completion: @escaping (Result<FullGramRemoteCatalog, Error>) -> Void) {
+    public func fetchRemoteCatalog(urlString: String? = nil, completion: @escaping @Sendable (Result<FullGramRemoteCatalog, Error>) -> Void) {
         let targetString = urlString?.trimmingCharacters(in: .whitespacesAndNewlines)
         let effectiveString = (targetString?.isEmpty == false) ? targetString! : self.catalogURL
         guard let url = URL(string: effectiveString),
               let scheme = url.scheme?.lowercased(),
-              scheme == "https" || scheme == "http" else {
+              scheme == "https",
+              let host = url.host,
+              !Self.isBlockedHost(host) else {
             DispatchQueue.main.async {
                 completion(.failure(NSError(domain: "FullGramPlugins", code: 400, userInfo: [NSLocalizedDescriptionKey: "Некорректный адрес каталога плагинов."])))
             }
@@ -2927,7 +3154,7 @@ public final class FullGramPluginManager {
         var req = URLRequest(url: url)
         req.timeoutInterval = 12.0
         req.cachePolicy = .reloadIgnoringLocalCacheData
-        URLSession.shared.dataTask(with: req) { data, response, error in
+        Self.pluginHTTPSession.dataTask(with: req) { data, response, error in
             if let error {
                 DispatchQueue.main.async { completion(.failure(error)) }
                 return
@@ -2951,7 +3178,7 @@ public final class FullGramPluginManager {
     public func installRemotePlugin(
         _ item: FullGramRemotePluginItem,
         enableImmediately: Bool,
-        completion: @escaping (Result<FullGramPluginDescriptor, Error>) -> Void
+        completion: @escaping @Sendable (Result<FullGramPluginDescriptor, Error>) -> Void
     ) {
         if let inlineCode = item.code, !inlineCode.isEmpty {
             let saved = self.savePlugin(id: item.id, name: item.name, language: item.language, code: inlineCode, enabled: enableImmediately)
@@ -2961,7 +3188,9 @@ public final class FullGramPluginManager {
         guard let rawUrl = item.url,
               let url = URL(string: rawUrl),
               let scheme = url.scheme?.lowercased(),
-              scheme == "https" || scheme == "http" else {
+              scheme == "https",
+              let host = url.host,
+              !Self.isBlockedHost(host) else {
             DispatchQueue.main.async {
                 completion(.failure(NSError(domain: "FullGramPlugins", code: 400, userInfo: [NSLocalizedDescriptionKey: "У плагина отсутствует корректная ссылка на скрипт."])))
             }
@@ -2970,7 +3199,7 @@ public final class FullGramPluginManager {
         var req = URLRequest(url: url)
         req.timeoutInterval = 12.0
         req.cachePolicy = .reloadIgnoringLocalCacheData
-        URLSession.shared.dataTask(with: req) { data, response, error in
+        Self.pluginHTTPSession.dataTask(with: req) { data, response, error in
             if let error {
                 DispatchQueue.main.async { completion(.failure(error)) }
                 return

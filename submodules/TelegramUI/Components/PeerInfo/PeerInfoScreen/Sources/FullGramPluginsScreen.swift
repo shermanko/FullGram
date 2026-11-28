@@ -3,11 +3,11 @@ import UIKit
 import UniformTypeIdentifiers
 import Display
 import AsyncDisplayKit
-import SwiftSignalKit
+@preconcurrency import SwiftSignalKit
 import TelegramCore
 import TelegramPresentationData
 import ItemListUI
-import AccountContext
+@preconcurrency import AccountContext
 
 // MARK: - Главный экран «Плагины»
 
@@ -128,11 +128,15 @@ private final class FullGramPluginFilePickerDelegate: NSObject, UIDocumentPicker
     let onPick: (URL) -> Void
     init(onPick: @escaping (URL) -> Void) { self.onPick = onPick }
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        activePluginFilePickerDelegate = nil
         if let first = urls.first { self.onPick(first) }
+    }
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        activePluginFilePickerDelegate = nil
     }
 }
 
-private var activePluginFilePickerDelegate: FullGramPluginFilePickerDelegate?
+@MainActor private var activePluginFilePickerDelegate: FullGramPluginFilePickerDelegate?
 
 func fullGramPluginsController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
@@ -140,7 +144,7 @@ func fullGramPluginsController(context: AccountContext) -> ViewController {
 
     let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
-    let bump: () -> Void = {
+    let bump: @Sendable () -> Void = {
         refresh.set(version.modify { $0 + 1 })
     }
 

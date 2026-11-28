@@ -4,15 +4,19 @@ Sync full Discord cosmetics catalog (Avatar Decorations + Profile Effects)
 from public open-source archives into assets/discord_cosmetics.json.
 """
 
+import hashlib
 import json
 import os
 import re
 import subprocess
+import tempfile
 import urllib.parse
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_PATH = os.path.join(ROOT, "assets", "discord_cosmetics.json")
+MAX_JSON_BYTES = 20 * 1024 * 1024
+ALLOWED_UPSTREAM_HOSTS = {"cdn.discordapp.com", "cdn.jsdelivr.net"}
 
 JULES_CDN = "https://cdn.jsdelivr.net/gh/JulesZYTB/discord-collectibles-downloader@main/"
 DISCORD_AVATAR_CDN = "https://cdn.discordapp.com/avatar-decoration-presets/"
@@ -23,14 +27,27 @@ def slugify(text: str) -> str:
     return s or "item"
 
 
+def unique_key(prefix: str, title: str, existing: dict) -> str:
+    candidate = f"{prefix}{slugify(title)}"
+    if candidate not in existing:
+        return candidate
+    suffix = hashlib.sha256(title.encode("utf-8")).hexdigest()[:8]
+    return f"{candidate}_{suffix}"
+
+
 def fetch_json_url(url: str):
     req = urllib.request.Request(url, headers={"User-Agent": "FullGram-Sync/1.0"})
     with urllib.request.urlopen(req, timeout=20) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        data = resp.read(MAX_JSON_BYTES + 1)
+        if len(data) > MAX_JSON_BYTES:
+            raise ValueError(f"Upstream JSON exceeded {MAX_JSON_BYTES} bytes: {url}")
+        return json.loads(data.decode("utf-8"))
 
 
 def gh_api_json(endpoint: str):
-    out = subprocess.check_output(["gh", "api", endpoint], text=True, encoding="utf-8")
+    out = subprocess.check_output(["gh", "api", endpoint], text=True, encoding="utf-8", timeout=30)
+    if len(out.encode("utf-8")) > MAX_JSON_BYTES:
+        raise ValueError(f"GitHub API response exceeded {MAX_JSON_BYTES} bytes")
     return json.loads(out)
 
 
@@ -62,7 +79,7 @@ def main():
     tree = gh_api_json("repos/JulesZYTB/discord-collectibles-downloader/git/trees/main?recursive=1")
     if tree.get("truncated"):
         raise SystemExit("Error: GitHub tree response was truncated; aborting to avoid incomplete cosmetics catalog")
-    paths = [x["path"] for x in tree.get("tree", []) if x.get("type") == "blob"]
+    paths = sorted(x["path"] for x in tree.get("tree", []) if x.get("type") == "blob" and isinstance(x.get("path"), str))
 
     frames_by_id = {}
     effects_map = {}
@@ -97,9 +114,7 @@ def main():
             urls.append(f"{DISCORD_AVATAR_CDN}{asset_hash}.png?size=240&passthrough=true")
         urls.append(JULES_CDN + encode_path(p))
 
-        fid = "dc_" + slugify(title)
-        if fid in frames_by_id:
-            fid = f"{fid}_{len(frames_by_id)}"
+        fid = unique_key("dc_", title, frames_by_id)
         frames_by_id[fid] = {
             "id": fid,
             "title": title,
@@ -110,6 +125,8 @@ def main():
     # 2. Merge wickstudio effects.json (official Discord CDN links not in Jules)
     try:
         wick = fetch_json_url("https://raw.githubusercontent.com/wickstudio/Discord-Avatar-Decoration-Bot/main/effects.json")
+        if not isinstance(wick, list):
+            raise ValueError("Expected JSON list from wickstudio effects.json")
         existing_hashes = set()
         for f in frames_by_id.values():
             for u in f["urls"]:
@@ -118,18 +135,19 @@ def main():
                     existing_hashes.add(m.group(1).lower())
         added_wick = 0
         for item in wick:
-            url = (item.get("url") or "").strip()
-            label = (item.get("label") or "").strip()
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "").strip()
+            label = str(item.get("label") or "").strip()
             if not url or not label:
                 continue
-            if not (url.startswith("https://cdn.discordapp.com/") or url.startswith("https://cdn.jsdelivr.net/")):
+            parsed_url = urllib.parse.urlparse(url)
+            if parsed_url.scheme != "https" or (parsed_url.hostname or "").lower() not in ALLOWED_UPSTREAM_HOSTS or parsed_url.username or parsed_url.password:
                 continue
             m = re.search(r"(a_[0-9a-f]{20,40})", url, re.I)
             if m and m.group(1).lower() in existing_hashes:
                 continue
-            fid = "dc_" + slugify(label)
-            if fid in frames_by_id:
-                continue
+            fid = unique_key("dc_", label, frames_by_id)
             cat = "Флаги" if item.get("category") == "flags" else guess_category(label)
             frames_by_id[fid] = {
                 "id": fid,
@@ -171,7 +189,7 @@ def main():
         layers = [u for _, u in sorted(effects_map[title], key=lambda x: x[0])]
         eid = "pe_" + slugify(title)
         if eid in seen_eids:
-            eid = f"{eid}_{len(seen_eids)}"
+            eid = f"{eid}_{hashlib.sha256(title.encode('utf-8')).hexdigest()[:8]}"
         seen_eids.add(eid)
         profile_effects.append({
             "id": eid,
@@ -189,9 +207,16 @@ def main():
         "profileEffects": profile_effects,
     }
 
-    os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
-    with open(OUT_PATH, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+    out_dir = os.path.dirname(OUT_PATH)
+    os.makedirs(out_dir, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".discord_cosmetics_", suffix=".tmp", dir=out_dir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp_path, OUT_PATH)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
     size_kb = os.path.getsize(OUT_PATH) / 1024.0
     print(f"Wrote {OUT_PATH} ({size_kb:.1f} KB): {len(frames)} avatar frames, {len(profile_effects)} profile effects.")

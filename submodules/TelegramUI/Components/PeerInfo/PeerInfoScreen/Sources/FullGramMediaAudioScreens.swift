@@ -1,7 +1,7 @@
 import Foundation
 import UIKit
 import UniformTypeIdentifiers
-import Display
+@preconcurrency import Display
 import AsyncDisplayKit
 @preconcurrency import SwiftSignalKit
 import TelegramCore
@@ -141,9 +141,13 @@ private enum FullGramMediaAudioCategoryEntry: ItemListNodeEntry {
     }
 }
 
+private final class FullGramMediaAudioNativePresenterBox: @unchecked Sendable {
+    var present: (@MainActor @Sendable (UIViewController) -> Void)?
+}
+
 func fullGramMediaAudioCategoryController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
-    var presentNativeImpl: ((UIViewController) -> Void)?
+    let presenter = FullGramMediaAudioNativePresenterBox()
     let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
     let tickCounter = Atomic<Int>(value: 0)
     let bump: @Sendable () -> Void = {
@@ -174,7 +178,7 @@ func fullGramMediaAudioCategoryController(context: AccountContext) -> ViewContro
                 })
             }
             sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            presentNativeImpl?(sheet)
+            presenter.present?(sheet)
         },
         pickAutoCleanInterval: {
             let sheet = UIAlertController(title: "Интервал автоочистки кэша", message: "Удалять временные файлы и старый кэш:", preferredStyle: .actionSheet)
@@ -186,7 +190,7 @@ func fullGramMediaAudioCategoryController(context: AccountContext) -> ViewContro
                 })
             }
             sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            presentNativeImpl?(sheet)
+            presenter.present?(sheet)
         },
         pickAutoCleanMaxMB: {
             let sheet = UIAlertController(title: "Максимальный размер кэша", message: "При превышении старые кэшированные файлы удаляются автоматически:", preferredStyle: .actionSheet)
@@ -198,21 +202,23 @@ func fullGramMediaAudioCategoryController(context: AccountContext) -> ViewContro
                 })
             }
             sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            presentNativeImpl?(sheet)
+            presenter.present?(sheet)
         },
         cleanCacheNow: {
             DispatchQueue.global(qos: .userInitiated).async {
                 let freed = FullGramCacheCleaner.runIfNeeded(force: true)
                 let mb = Double(freed) / (1024.0 * 1024.0)
                 DispatchQueue.main.async {
-                    let alert = UIAlertController(
-                        title: "Кэш очищен",
-                        message: String(format: "Освобождено %.1f МБ временного кэша.", mb),
-                        preferredStyle: .alert
-                    )
-                    alert.addAction(UIAlertAction(title: "OK", style: .default))
-                    presentNativeImpl?(alert)
-                    bump()
+                    MainActor.assumeIsolated {
+                        let alert = UIAlertController(
+                            title: "Кэш очищен",
+                            message: String(format: "Освобождено %.1f МБ временного кэша.", mb),
+                            preferredStyle: .alert
+                        )
+                        alert.addAction(UIAlertAction(title: "OK", style: .default))
+                        presenter.present?(alert)
+                        bump()
+                    }
                 }
             }
         }
@@ -268,7 +274,7 @@ func fullGramMediaAudioCategoryController(context: AccountContext) -> ViewContro
 
     let controller = ItemListController(context: context, state: signal)
     pushImpl = { [weak controller] c in controller?.push(c) }
-    presentNativeImpl = { [weak controller] vc in
+    presenter.present = { [weak controller] vc in
         if let pop = vc.popoverPresentationController, let view = controller?.view {
             pop.sourceView = view
             pop.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1.0, height: 1.0)
@@ -682,6 +688,12 @@ func fullGramVoiceController(context: AccountContext, onChanged: @escaping () ->
         let listState = ItemListNodeState(presentationData: data, entries: entries, style: .blocks)
         return (state, (listState, args))
     }
+    |> afterDisposed {
+        DispatchQueue.main.async {
+            tester.stop()
+            customRecorder.stop()
+        }
+    }
 
     let controller = ItemListController(context: context, state: signal)
     presentUIKitImpl = { [weak controller] vc in
@@ -689,8 +701,9 @@ func fullGramVoiceController(context: AccountContext, onChanged: @escaping () ->
         if let pop = vc.popoverPresentationController {
             pop.sourceView = controller.view
             pop.sourceRect = CGRect(x: controller.view.bounds.midX, y: controller.view.bounds.midY, width: 1.0, height: 1.0)
+            pop.permittedArrowDirections = []
         }
-        controller.view.window?.rootViewController?.present(vc, animated: true)
+        controller.present(vc, animated: true)
     }
     return controller
 }

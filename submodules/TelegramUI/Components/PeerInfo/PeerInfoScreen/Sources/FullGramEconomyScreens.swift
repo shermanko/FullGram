@@ -166,7 +166,7 @@ func fullGramPresentGrantEconomyMenu(
     context: AccountContext,
     targetPeerId: Int64,
     targetDisplayName: String,
-    presentNative: ((UIViewController) -> Void)?
+    presentNative: (@MainActor @Sendable (UIViewController) -> Void)?
 ) {
     let isPrivileged = fullGramCanOpenAdmin(context: context) || fullGramIsSelfSponsorPlus(context: context)
     guard isPrivileged else { return }
@@ -174,15 +174,17 @@ func fullGramPresentGrantEconomyMenu(
     let isSelfTarget = (FullGramGrantedNFTStore.normalizedTelegramId(for: targetPeerId) == FullGramGrantedNFTStore.normalizedTelegramId(for: actorPeerId))
     let useAdmin = fullGramCanOpenAdmin(context: context)
 
-    let showAlert: (String, String) -> Void = { title, msg in
+    let showAlert: @Sendable (String, String) -> Void = { title, msg in
         DispatchQueue.main.async {
-            let a = UIAlertController(title: title, message: msg, preferredStyle: .alert)
-            a.addAction(UIAlertAction(title: "OK", style: .default))
-            presentNative?(a)
+            MainActor.assumeIsolated {
+                let a = UIAlertController(title: title, message: msg, preferredStyle: .alert)
+                a.addAction(UIAlertAction(title: "OK", style: .default))
+                presentNative?(a)
+            }
         }
     }
 
-    let sendAction: (String, Double?, String?, String?, Double?, Bool, String) -> Void = { action, amount, username, number, priceTon, isPrimary, successText in
+    let sendAction: (String, Double?, String?, String?, Double?, Bool, String, (@Sendable () -> Void)?) -> Void = { action, amount, username, number, priceTon, isPrimary, successText, onSuccess in
         FullGramAdmin.shared.grantEconomy(
             actorPeerId: actorPeerId,
             targetPeerId: targetPeerId,
@@ -196,6 +198,7 @@ func fullGramPresentGrantEconomyMenu(
         ) { result in
             switch result {
             case .success:
+                onSuccess?()
                 FullGramEconomy.shared.refreshCloudNow(selfPeerId: actorPeerId) { _ in }
                 showAlert("Готово", successText)
             case let .failure(error):
@@ -216,13 +219,14 @@ func fullGramPresentGrantEconomyMenu(
             tf.placeholder = "5000"
         }
         a.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-        a.addAction(UIAlertAction(title: "Выдать", style: .default) { _ in
-            let raw = (a.textFields?.first?.text ?? "").replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let val = Double(raw), val >= 0 else { return }
-            if isSelfTarget {
-                FullGramEconomy.shared.setGramBalance(val)
+        a.addAction(UIAlertAction(title: "Выдать", style: .default) { [weak a] _ in
+            let raw = (a?.textFields?.first?.text ?? "").replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let val = Double(raw), val.isFinite, val >= 0, val <= 1e12 else { return }
+            sendAction("set_gram", val, nil, nil, nil, true, "Пользователю \(targetDisplayName) установлен баланс \(String(format: "%.2f", val)) TON.") {
+                if isSelfTarget {
+                    FullGramEconomy.shared.setGramBalance(val)
+                }
             }
-            sendAction("set_gram", val, nil, nil, nil, true, "Пользователю \(targetDisplayName) установлен баланс \(String(format: "%.2f", val)) TON.")
         })
         presentNative?(a)
     })
@@ -233,13 +237,14 @@ func fullGramPresentGrantEconomyMenu(
             tf.placeholder = "10000"
         }
         a.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-        a.addAction(UIAlertAction(title: "Выдать", style: .default) { _ in
-            let raw = (a.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let val = Int64(raw), val >= 0 else { return }
-            if isSelfTarget {
-                FullGramEconomy.shared.setStarsBalance(val)
+        a.addAction(UIAlertAction(title: "Выдать", style: .default) { [weak a] _ in
+            let raw = (a?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let val = Int64(raw), val >= 0, val <= 1_000_000_000 else { return }
+            sendAction("set_stars", Double(val), nil, nil, nil, true, "Пользователю \(targetDisplayName) установлено \(val) ★.") {
+                if isSelfTarget {
+                    FullGramEconomy.shared.setStarsBalance(val)
+                }
             }
-            sendAction("set_stars", Double(val), nil, nil, nil, true, "Пользователю \(targetDisplayName) установлено \(val) ★.")
         })
         presentNative?(a)
     })
@@ -256,15 +261,18 @@ func fullGramPresentGrantEconomyMenu(
             tf.text = "1500"
         }
         a.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-        a.addAction(UIAlertAction(title: "Выдать", style: .default) { _ in
-            let uname = a.textFields?.first?.text ?? ""
-            let price = Double((a.textFields?.dropFirst().first?.text ?? "0").replacingOccurrences(of: ",", with: ".")) ?? 0.0
+        a.addAction(UIAlertAction(title: "Выдать", style: .default) { [weak a] _ in
+            let uname = a?.textFields?.first?.text ?? ""
+            let rawPrice = (a?.textFields?.dropFirst().first?.text ?? "0").replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
+            let parsedPrice = rawPrice.isEmpty ? 0.0 : Double(rawPrice)
+            guard let price = parsedPrice, price.isFinite, price >= 0, price <= 1e12 else { return }
             let clean = uname.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "@"))).lowercased()
             guard clean.count >= 4 else { return }
-            if isSelfTarget {
-                let _ = FullGramEconomy.shared.buyCollectibleUsername(rawUsername: clean, priceTon: price, isPrimary: true, deductFromBalance: false)
+            sendAction("grant_username", nil, clean, nil, price, true, "Пользователю \(targetDisplayName) выдан @\(clean) за \(String(format: "%.0f", price)) TON.") {
+                if isSelfTarget {
+                    let _ = FullGramEconomy.shared.buyCollectibleUsername(rawUsername: clean, priceTon: price, isPrimary: true, deductFromBalance: false)
+                }
             }
-            sendAction("grant_username", nil, clean, nil, price, true, "Пользователю \(targetDisplayName) выдан @\(clean) за \(String(format: "%.0f", price)) TON.")
         })
         presentNative?(a)
     })
@@ -280,13 +288,16 @@ func fullGramPresentGrantEconomyMenu(
             tf.text = "250"
         }
         a.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-        a.addAction(UIAlertAction(title: "Выдать", style: .default) { _ in
-            let num = a.textFields?.first?.text ?? ""
-            let price = Double((a.textFields?.dropFirst().first?.text ?? "0").replacingOccurrences(of: ",", with: ".")) ?? 0.0
-            if isSelfTarget {
-                let _ = FullGramEconomy.shared.buyAnonymousNumber(rawNumber: num, priceTon: price, deductFromBalance: false)
+        a.addAction(UIAlertAction(title: "Выдать", style: .default) { [weak a] _ in
+            let num = a?.textFields?.first?.text ?? ""
+            let rawPrice = (a?.textFields?.dropFirst().first?.text ?? "0").replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
+            let parsedPrice = rawPrice.isEmpty ? 0.0 : Double(rawPrice)
+            guard let price = parsedPrice, price.isFinite, price >= 0, price <= 1e12 else { return }
+            sendAction("grant_number", nil, nil, num, price, true, "Пользователю \(targetDisplayName) выдан номер \(num).") {
+                if isSelfTarget {
+                    let _ = FullGramEconomy.shared.buyAnonymousNumber(rawNumber: num, priceTon: price, deductFromBalance: false)
+                }
             }
-            sendAction("grant_number", nil, nil, num, price, true, "Пользователю \(targetDisplayName) выдан номер \(num).")
         })
         presentNative?(a)
     })
@@ -297,7 +308,7 @@ func fullGramPresentGrantEconomyMenu(
 public func fullGramEconomyHubController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
     var presentControllerImpl: ((ViewController) -> Void)?
-    var presentNativeImpl: ((UIViewController) -> Void)?
+    var presentNativeImpl: (@MainActor @Sendable (UIViewController) -> Void)?
 
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
@@ -315,9 +326,9 @@ public func fullGramEconomyHubController(context: AccountContext) -> ViewControl
                 tf.text = FullGramEconomy.shared.gramBalance > 0 ? String(format: "%.2f", FullGramEconomy.shared.gramBalance) : ""
             }
             alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            alert.addAction(UIAlertAction(title: "Установить", style: .default) { _ in
-                let raw = (alert.textFields?.first?.text ?? "").replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
-                if let val = Double(raw) {
+            alert.addAction(UIAlertAction(title: "Установить", style: .default) { [weak alert] _ in
+                let raw = (alert?.textFields?.first?.text ?? "").replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
+                if let val = Double(raw), val.isFinite, val >= 0, val <= 1e12 {
                     FullGramEconomy.shared.setGramBalance(val)
                 }
             })
@@ -353,11 +364,11 @@ public func fullGramEconomyHubController(context: AccountContext) -> ViewControl
                     tf.placeholder = "Комментарий (необязательно)"
                 }
                 alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-                alert.addAction(UIAlertAction(title: "Перевести", style: .default) { _ in
-                    let rawAmt = (alert.textFields?.first?.text ?? "").replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
+                alert.addAction(UIAlertAction(title: "Перевести", style: .default) { [weak alert] _ in
+                    let rawAmt = (alert?.textFields?.first?.text ?? "").replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
                     let amt = Double(rawAmt) ?? 0.0
-                    let comment = (alert.textFields?.dropFirst().first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard amt > 0 else { return }
+                    let comment = (alert?.textFields?.dropFirst().first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard amt.isFinite, amt > 0, amt <= 1e12 else { return }
                     if FullGramEconomy.shared.transferGram(peerName: peerTitle, amount: amt) {
                         FullGramAdmin.shared.performEconomyAction(
                             actorPeerId: selfRawId,
@@ -393,9 +404,9 @@ public func fullGramEconomyHubController(context: AccountContext) -> ViewControl
                 tf.text = FullGramEconomy.shared.starsBalance > 0 ? "\(FullGramEconomy.shared.starsBalance)" : ""
             }
             alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            alert.addAction(UIAlertAction(title: "Выдать ★", style: .default) { _ in
-                let raw = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if let val = Int64(raw) {
+            alert.addAction(UIAlertAction(title: "Выдать ★", style: .default) { [weak alert] _ in
+                let raw = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if let val = Int64(raw), val >= 0 {
                     FullGramEconomy.shared.setStarsBalance(val)
                 }
             })
@@ -431,9 +442,9 @@ public func fullGramEconomyHubController(context: AccountContext) -> ViewControl
                     tf.placeholder = "Комментарий (необязательно)"
                 }
                 alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-                alert.addAction(UIAlertAction(title: "Подарить", style: .default) { _ in
-                    let amt = Int64((alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-                    let comment = (alert.textFields?.dropFirst().first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                alert.addAction(UIAlertAction(title: "Подарить", style: .default) { [weak alert] _ in
+                    let amt = Int64((alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+                    let comment = (alert?.textFields?.dropFirst().first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                     guard amt > 0 else { return }
                     if FullGramEconomy.shared.giftStars(peerName: peerTitle, amount: amt) {
                         FullGramAdmin.shared.performEconomyAction(
@@ -657,7 +668,7 @@ public func fullGramGiftMarketController(
 ) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
     var presentControllerImpl: ((ViewController) -> Void)?
-    var presentNativeImpl: ((UIViewController) -> Void)?
+    var presentNativeImpl: (@MainActor @Sendable (UIViewController) -> Void)?
 
     let initialRecipient = FullGramGiftRecipient(
         id: targetPeerId ?? context.account.peerId,
@@ -761,9 +772,9 @@ public func fullGramGiftMarketController(
                 tf.placeholder = "Например: 10000"
             }
             alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            alert.addAction(UIAlertAction(title: "Выдать", style: .default) { _ in
-                let raw = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if let val = Int64(raw) {
+            alert.addAction(UIAlertAction(title: "Выдать", style: .default) { [weak alert] _ in
+                let raw = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if let val = Int64(raw), val >= 0 {
                     FullGramEconomy.shared.setStarsBalance(val)
                 }
             })
@@ -783,14 +794,14 @@ public func fullGramGiftMarketController(
                 tf.placeholder = "Подпись к подарку (необязательно)"
             }
             alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            alert.addAction(UIAlertAction(title: "Купить за \(gift.starsPrice) ★", style: .default) { _ in
-                let comment = alert.textFields?.first?.text ?? ""
+            alert.addAction(UIAlertAction(title: "Купить за \(gift.starsPrice) ★", style: .default) { [weak alert] _ in
+                let comment = alert?.textFields?.first?.text ?? ""
                 completePurchase(gift, realGiftId, comment, false)
             })
             if gift.canUpgradeToNFT {
                 let total = gift.starsPrice + gift.upgradeStars
-                alert.addAction(UIAlertAction(title: "Купить + NFT (\(total) ★)", style: .default) { _ in
-                    let comment = alert.textFields?.first?.text ?? ""
+                alert.addAction(UIAlertAction(title: "Купить + NFT (\(total) ★)", style: .default) { [weak alert] _ in
+                    let comment = alert?.textFields?.first?.text ?? ""
                     completePurchase(gift, realGiftId, comment, true)
                 })
             }
@@ -947,7 +958,7 @@ private enum FullGramMyGiftsEntry: ItemListNodeEntry {
 public func fullGramMyGiftsAndUpgradesController(context: AccountContext, peerId: EnginePeer.Id) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
     var presentControllerImpl: ((ViewController) -> Void)?
-    var presentNativeImpl: ((UIViewController) -> Void)?
+    var presentNativeImpl: (@MainActor @Sendable (UIViewController) -> Void)?
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
     let observer = NotificationCenter.default.addObserver(forName: FullGramEconomy.didChangeNotification, object: nil, queue: .main) { _ in
@@ -963,9 +974,11 @@ public func fullGramMyGiftsAndUpgradesController(context: AccountContext, peerId
                     : "Подарок за \(gift.priceStars) ★ → \(gift.recipientName)",
                 preferredStyle: .actionSheet
             )
-            sheet.addAction(UIAlertAction(title: gift.isUpgraded ? "Настроить модель / фон / узор" : "Улучшить до NFT", style: .default) { _ in
-                pushImpl?(fullGramGiftUpgradeController(context: context, ownedGift: gift))
-            })
+            if gift.isUpgraded || gift.canUpgradeToNFT {
+                sheet.addAction(UIAlertAction(title: gift.isUpgraded ? "Настроить модель / фон / узор" : "Улучшить до NFT", style: .default) { _ in
+                    pushImpl?(fullGramGiftUpgradeController(context: context, ownedGift: gift))
+                })
+            }
             sheet.addAction(UIAlertAction(title: gift.pinnedToProfile ? "Открепить из профиля" : "Закрепить в профиле", style: .default) { _ in
                 FullGramEconomy.shared.togglePinGift(id: gift.id)
             })
@@ -984,9 +997,9 @@ public func fullGramMyGiftsAndUpgradesController(context: AccountContext, peerId
                 ))
                 selector.peerSelected = { [weak selector] peer, _ in
                     selector?.dismiss()
-                    let toRaw = peer.id.id._internalGetInt64Value()
+                    let toPeerId = peer.id.toInt64()
                     let toName = peer.compactDisplayTitle
-                    if let moved = FullGramEconomy.shared.transferOwnedGift(id: gift.id, toPeerId: toRaw, toPeerName: toName) {
+                    if let moved = FullGramEconomy.shared.transferOwnedGift(id: gift.id, toPeerId: toPeerId, toPeerName: toName) {
                         let payload = FullGramChatGiftPayload(
                             kind: moved.isUpgraded ? .nft : .gift,
                             giftRecordId: moved.id,
@@ -1254,8 +1267,8 @@ public func fullGramGiftUpgradeController(context: AccountContext, ownedGift: Fu
                 tf.text = "\(draftNumber.with { $0 })"
             }
             alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in
-                if let n = Int32(alert.textFields?.first?.text ?? ""), n > 0 {
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { [weak alert] _ in
+                if let n = Int32(alert?.textFields?.first?.text ?? ""), n > 0 {
                     let _ = draftNumber.swap(n)
                     bumpDraft()
                 }
@@ -1321,9 +1334,9 @@ public func fullGramGiftUpgradeController(context: AccountContext, ownedGift: Fu
             ))
             selector.peerSelected = { [weak selector] peer, _ in
                 selector?.dismiss()
-                let toRaw = peer.id.id._internalGetInt64Value()
+                let toPeerId = peer.id.toInt64()
                 let toName = peer.compactDisplayTitle
-                if let moved = FullGramEconomy.shared.transferOwnedGift(id: ownedGift.id, toPeerId: toRaw, toPeerName: toName) {
+                if let moved = FullGramEconomy.shared.transferOwnedGift(id: ownedGift.id, toPeerId: toPeerId, toPeerName: toName) {
                     let payload = FullGramChatGiftPayload(
                         kind: moved.isUpgraded ? .nft : .gift,
                         giftRecordId: moved.id,
@@ -1477,7 +1490,7 @@ private enum FullGramNumbersEntry: ItemListNodeEntry {
 public func fullGramCollectibleNumbersController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
     var presentControllerImpl: ((ViewController) -> Void)?
-    var presentNativeImpl: ((UIViewController) -> Void)?
+    var presentNativeImpl: (@MainActor @Sendable (UIViewController) -> Void)?
     let selfRawId = context.account.peerId.id._internalGetInt64Value()
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
@@ -1499,14 +1512,18 @@ public func fullGramCollectibleNumbersController(context: AccountContext) -> Vie
                 tf.text = "250"
             }
             alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            alert.addAction(UIAlertAction(title: "Оформить бесплатно (лип.)", style: .default) { _ in
-                let num = alert.textFields?.first?.text ?? ""
-                let price = Double((alert.textFields?.dropFirst().first?.text ?? "250").replacingOccurrences(of: ",", with: ".")) ?? 250.0
+            alert.addAction(UIAlertAction(title: "Оформить бесплатно (лип.)", style: .default) { [weak alert] _ in
+                let num = alert?.textFields?.first?.text ?? ""
+                let rawPrice = (alert?.textFields?.dropFirst().first?.text ?? "250").replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
+                let price = rawPrice.isEmpty ? 250.0 : (Double(rawPrice) ?? -1.0)
+                guard price.isFinite, price >= 0, price <= 1e12 else { return }
                 let _ = FullGramEconomy.shared.buyAnonymousNumber(rawNumber: num, priceTon: price, deductFromBalance: false)
             })
-            alert.addAction(UIAlertAction(title: "Купить за TON с баланса", style: .default) { _ in
-                let num = alert.textFields?.first?.text ?? ""
-                let price = Double((alert.textFields?.dropFirst().first?.text ?? "250").replacingOccurrences(of: ",", with: ".")) ?? 250.0
+            alert.addAction(UIAlertAction(title: "Купить за TON с баланса", style: .default) { [weak alert] _ in
+                let num = alert?.textFields?.first?.text ?? ""
+                let rawPrice = (alert?.textFields?.dropFirst().first?.text ?? "250").replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
+                let price = rawPrice.isEmpty ? 250.0 : (Double(rawPrice) ?? -1.0)
+                guard price.isFinite, price >= 0, price <= 1e12 else { return }
                 if FullGramEconomy.shared.buyAnonymousNumber(rawNumber: num, priceTon: price, deductFromBalance: true) == nil {
                     let err = UIAlertController(title: "Недостаточно Gram / TON", message: "Пополните баланс Gram или выберите липовое оформление.", preferredStyle: .alert)
                     err.addAction(UIAlertAction(title: "OK", style: .default))
@@ -1658,7 +1675,7 @@ private enum FullGramUsernamesEntry: ItemListNodeEntry {
 public func fullGramCollectibleUsernamesController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
     var presentControllerImpl: ((ViewController) -> Void)?
-    var presentNativeImpl: ((UIViewController) -> Void)?
+    var presentNativeImpl: (@MainActor @Sendable (UIViewController) -> Void)?
     let selfRawId = context.account.peerId.id._internalGetInt64Value()
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
@@ -1680,18 +1697,22 @@ public func fullGramCollectibleUsernamesController(context: AccountContext) -> V
                 tf.text = "1200"
             }
             alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            alert.addAction(UIAlertAction(title: "Получить в профиль (лип.)", style: .default) { _ in
-                let uname = alert.textFields?.first?.text ?? ""
-                let price = Double((alert.textFields?.dropFirst().first?.text ?? "1200").replacingOccurrences(of: ",", with: ".")) ?? 1200.0
+            alert.addAction(UIAlertAction(title: "Получить в профиль (лип.)", style: .default) { [weak alert] _ in
+                let uname = alert?.textFields?.first?.text ?? ""
+                let rawPrice = (alert?.textFields?.dropFirst().first?.text ?? "1200").replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
+                let price = rawPrice.isEmpty ? 1200.0 : (Double(rawPrice) ?? -1.0)
+                guard price.isFinite, price >= 0, price <= 1e12 else { return }
                 if FullGramEconomy.shared.buyCollectibleUsername(rawUsername: uname, priceTon: price, isPrimary: true, deductFromBalance: false) == nil {
                     let err = UIAlertController(title: "Некорректный юзернейм", message: "Минимум 4 латинских символа.", preferredStyle: .alert)
                     err.addAction(UIAlertAction(title: "OK", style: .default))
                     presentNativeImpl?(err)
                 }
             })
-            alert.addAction(UIAlertAction(title: "Купить за TON с баланса", style: .default) { _ in
-                let uname = alert.textFields?.first?.text ?? ""
-                let price = Double((alert.textFields?.dropFirst().first?.text ?? "1200").replacingOccurrences(of: ",", with: ".")) ?? 1200.0
+            alert.addAction(UIAlertAction(title: "Купить за TON с баланса", style: .default) { [weak alert] _ in
+                let uname = alert?.textFields?.first?.text ?? ""
+                let rawPrice = (alert?.textFields?.dropFirst().first?.text ?? "1200").replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
+                let price = rawPrice.isEmpty ? 1200.0 : (Double(rawPrice) ?? -1.0)
+                guard price.isFinite, price >= 0, price <= 1e12 else { return }
                 if FullGramEconomy.shared.buyCollectibleUsername(rawUsername: uname, priceTon: price, isPrimary: true, deductFromBalance: true) == nil {
                     let err = UIAlertController(title: "Не удалось купить", message: "Проверьте длину юзернейма (от 4 символов) и баланс TON.", preferredStyle: .alert)
                     err.addAction(UIAlertAction(title: "OK", style: .default))

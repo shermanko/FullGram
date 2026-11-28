@@ -284,6 +284,32 @@ public enum FullGramAvatarFrames {
 
     private static let stateLock = NSLock()
     private static var cachedShowInChats: Bool?
+    private static let allowedCustomFrameHosts: Set<String> = [
+        "fullgram.korsakovx.workers.dev",
+        "cdn.discordapp.com",
+        "cdn.jsdelivr.net",
+        "raw.githubusercontent.com"
+    ]
+
+    public static func isAllowedCustomFrameURL(_ urlString: String) -> Bool {
+        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let url = URL(string: trimmed),
+              url.scheme?.lowercased() == "https",
+              url.user == nil,
+              url.password == nil,
+              let host = url.host?.lowercased(),
+              Self.allowedCustomFrameHosts.contains(host) else {
+            return false
+        }
+        return true
+    }
+
+    public static func invalidateCache() {
+        self.stateLock.lock()
+        self.cachedShowInChats = nil
+        self.stateLock.unlock()
+    }
 
     public static var showInChatListAndMessages: Bool {
         get {
@@ -338,7 +364,7 @@ public enum FullGramAvatarFrames {
 
     public static func setCustomURLFrame(urlString: String, forPeerId peerId: Int64) {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed.lowercased().hasPrefix("https://") else { return }
+        guard Self.isAllowedCustomFrameURL(trimmed) else { return }
         FullGramCloudCosmetics.shared.setFrame(forPeerId: peerId, frameId: "custom_url", customFrameUrl: trimmed)
     }
 
@@ -381,7 +407,7 @@ public enum FullGramAvatarFrames {
               let cosmetics = FullGramCloudCosmetics.shared.cosmetics(forPeerId: peerId, selfPeerId: selfPeerId) else {
             return nil
         }
-        if let customUrl = cosmetics.customFrameUrl, !customUrl.isEmpty, customUrl.lowercased().hasPrefix("https://") {
+        if let customUrl = cosmetics.customFrameUrl, Self.isAllowedCustomFrameURL(customUrl) {
             var fnv: UInt64 = 14695981039346656037
             for byte in customUrl.utf8 {
                 fnv ^= UInt64(byte)
@@ -548,8 +574,7 @@ public enum FullGramAvatarFrames {
             ))
         }
         if let customUrl = FullGramCloudCosmetics.shared.cosmetics(forPeerId: peerId, selfPeerId: peerId)?.customFrameUrl,
-           !customUrl.isEmpty,
-           customUrl.lowercased().hasPrefix("https://") {
+           Self.isAllowedCustomFrameURL(customUrl) {
             var fnv: UInt64 = 14695981039346656037
             for byte in customUrl.utf8 {
                 fnv ^= UInt64(byte)
@@ -621,7 +646,7 @@ public enum FullGramAvatarFrames {
         var seen = Set<String>()
         var urls: [URL] = []
         let appendUnique: (String) -> Void = { s in
-            guard !s.isEmpty, !seen.contains(s), let u = URL(string: s), u.scheme?.lowercased() == "https" else { return }
+            guard Self.isAllowedCustomFrameURL(s), !seen.contains(s), let u = URL(string: s) else { return }
             seen.insert(s)
             urls.append(u)
         }
@@ -956,6 +981,22 @@ public final class FullGramAnimatedImageDecoder {
     private static var inflightCallbacks: [String: [@Sendable (FullGramAnimatedFrameSequence?) -> Void]] = [:]
     private static var inflightDownloadCallbacks: [String: [@Sendable (Bool) -> Void]] = [:]
     private static var cancelledTokens: Set<UUID> = []
+    private final class RedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+        func urlSession(
+            _ session: URLSession,
+            task: URLSessionTask,
+            willPerformHTTPRedirection response: HTTPURLResponse,
+            newRequest request: URLRequest,
+            completionHandler: @escaping (URLRequest?) -> Void
+        ) {
+            if let url = request.url, FullGramAvatarFrames.isAllowedCustomFrameURL(url.absoluteString) {
+                completionHandler(request)
+            } else {
+                completionHandler(nil)
+            }
+        }
+    }
+    private static let redirectDelegate = RedirectDelegate()
     private static let session: URLSession = {
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForRequest = 15.0
@@ -963,7 +1004,7 @@ public final class FullGramAnimatedImageDecoder {
         cfg.httpMaximumConnectionsPerHost = 6
         cfg.requestCachePolicy = .returnCacheDataElseLoad
         cfg.urlCache = URLCache(memoryCapacity: 12 * 1024 * 1024, diskCapacity: 48 * 1024 * 1024)
-        return URLSession(configuration: cfg)
+        return URLSession(configuration: cfg, delegate: Self.redirectDelegate, delegateQueue: nil)
     }()
 
     private static let cachePruneOnce: Void = {
@@ -1018,7 +1059,7 @@ public final class FullGramAnimatedImageDecoder {
         var seen = Set<String>()
         var urls: [URL] = []
         let appendUnique: (String) -> Void = { str in
-            guard !str.isEmpty, !seen.contains(str), let u = URL(string: str), u.scheme?.lowercased() == "https" else { return }
+            guard FullGramAvatarFrames.isAllowedCustomFrameURL(str), !seen.contains(str), let u = URL(string: str) else { return }
             seen.insert(str)
             urls.append(u)
         }
@@ -1675,8 +1716,12 @@ public final class FullGramAnimatedImageDecoder {
                 let isWEBP = data.count > 12 && data.prefix(4) == Data([0x52, 0x49, 0x46, 0x46])
                 let isJPG = data.prefix(2) == Data([0xFF, 0xD8])
                 if isPNG || isGIF || isWEBP || isJPG {
-                    try? data.write(to: dst, options: .atomic)
-                    completion(true)
+                    do {
+                        try data.write(to: dst, options: .atomic)
+                        completion(true)
+                    } catch {
+                        completion(false)
+                    }
                     return
                 }
             }
@@ -1696,6 +1741,97 @@ public final class FullGramAnimatedImageDecoder {
             return nil
         }
         return self.decodeFile(url: url, cacheKey: preset.id, maxPixelSize: maxPixelSize, maxFrames: 36)
+    }
+
+    private struct APNGFrameMeta {
+        let width: Int
+        let height: Int
+        let xOffset: Int
+        let yOffset: Int
+        let disposeOp: UInt8
+        let blendOp: UInt8
+    }
+
+    private struct APNGMetadata {
+        let canvasWidth: Int
+        let canvasHeight: Int
+        let frames: [APNGFrameMeta]
+    }
+
+    private static func readUInt32BE(_ data: Data, at offset: Int) -> UInt32 {
+        return (UInt32(data[offset]) << 24)
+            | (UInt32(data[offset + 1]) << 16)
+            | (UInt32(data[offset + 2]) << 8)
+            | UInt32(data[offset + 3])
+    }
+
+    private static func parseAPNGMetadata(at url: URL) -> APNGMetadata? {
+        let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        guard fileSize > 24 && fileSize <= 16 * 1024 * 1024,
+              let data = try? Data(contentsOf: url, options: .mappedIfSafe),
+              data.count >= 24,
+              data[0] == 0x89, data[1] == 0x50, data[2] == 0x4E, data[3] == 0x47,
+              data[4] == 0x0D, data[5] == 0x0A, data[6] == 0x1A, data[7] == 0x0A else {
+            return nil
+        }
+
+        var canvasWidth = 0
+        var canvasHeight = 0
+        var frames: [APNGFrameMeta] = []
+        var offset = 8
+
+        while offset + 12 <= data.count && frames.count < 512 {
+            let length = Int(Self.readUInt32BE(data, at: offset))
+            let typeStart = offset + 4
+            let bodyStart = offset + 8
+            guard length >= 0, bodyStart + length + 4 <= data.count else { break }
+
+            let t0 = data[typeStart]
+            let t1 = data[typeStart + 1]
+            let t2 = data[typeStart + 2]
+            let t3 = data[typeStart + 3]
+
+            // IHDR
+            if t0 == 0x49 && t1 == 0x48 && t2 == 0x44 && t3 == 0x52 && length >= 8 {
+                canvasWidth = Int(Self.readUInt32BE(data, at: bodyStart))
+                canvasHeight = Int(Self.readUInt32BE(data, at: bodyStart + 4))
+            }
+            // fcTL
+            else if t0 == 0x66 && t1 == 0x63 && t2 == 0x54 && t3 == 0x4C && length >= 26 {
+                let fw = Int(Self.readUInt32BE(data, at: bodyStart + 4))
+                let fh = Int(Self.readUInt32BE(data, at: bodyStart + 8))
+                let fx = Int(Self.readUInt32BE(data, at: bodyStart + 12))
+                let fy = Int(Self.readUInt32BE(data, at: bodyStart + 16))
+                let disposeOp = data[bodyStart + 24]
+                let blendOp = data[bodyStart + 25]
+                frames.append(APNGFrameMeta(width: fw, height: fh, xOffset: fx, yOffset: fy, disposeOp: disposeOp, blendOp: blendOp))
+            }
+            // IEND
+            else if t0 == 0x49 && t1 == 0x45 && t2 == 0x4E && t3 == 0x44 {
+                break
+            }
+
+            offset = bodyStart + length + 4
+        }
+
+        guard canvasWidth > 0, canvasHeight > 0, canvasWidth <= 4096, canvasHeight <= 4096, !frames.isEmpty else {
+            return nil
+        }
+        return APNGMetadata(canvasWidth: canvasWidth, canvasHeight: canvasHeight, frames: frames)
+    }
+
+    private static func decodeRawImage(source: CGImageSource, index: Int) -> CGImage? {
+        if let props = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any] {
+            let pw = (props[kCGImagePropertyPixelWidth] as? Int) ?? 0
+            let ph = (props[kCGImagePropertyPixelHeight] as? Int) ?? 0
+            if pw > 8192 || ph > 8192 || Int64(pw) * Int64(ph) > 25_000_000 {
+                return nil
+            }
+        }
+        let options: [CFString: Any] = [
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+        return CGImageSourceCreateImageAtIndex(source, index, options as CFDictionary)
     }
 
     private static func decodeFile(
@@ -1721,19 +1857,110 @@ public final class FullGramAnimatedImageDecoder {
         durations.reserveCapacity(min(rawCount, maxFrames))
 
         var totalDuration: Double = 0.0
-        var idx = 0
-        while idx < rawCount {
-            if let cgImage = self.decodeSingleFrame(source: source, index: idx, maxPixelSize: maxPixelSize) {
-                var delay = 0.0
-                let endIdx = min(rawCount, idx + strideStep)
-                for j in idx ..< endIdx {
-                    delay += self.frameDelay(source: source, index: j)
-                }
-                images.append(cgImage)
-                durations.append(delay)
-                totalDuration += delay
+        let safeMax = max(32, min(maxPixelSize, 1024))
+        let apngMeta = rawCount > 1 ? self.parseAPNGMetadata(at: url) : nil
+        let needsCompositing: Bool = {
+            guard let apngMeta, apngMeta.frames.count == rawCount else { return false }
+            return apngMeta.frames.contains { f in
+                f.xOffset != 0 || f.yOffset != 0
+                    || f.width != apngMeta.canvasWidth || f.height != apngMeta.canvasHeight
+                    || f.disposeOp != 0 || f.blendOp != 0
             }
-            idx += strideStep
+        }()
+
+        if needsCompositing, let apngMeta {
+            let cw = apngMeta.canvasWidth
+            let ch = apngMeta.canvasHeight
+            let scale = min(1.0, CGFloat(safeMax) / CGFloat(max(cw, ch)))
+            let targetW = max(1, Int((CGFloat(cw) * scale).rounded()))
+            let targetH = max(1, Int((CGFloat(ch) * scale).rounded()))
+            let bytesPerRow = targetW * 4
+            if let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+               let ctx = CGContext(
+                   data: nil,
+                   width: targetW,
+                   height: targetH,
+                   bitsPerComponent: 8,
+                   bytesPerRow: bytesPerRow,
+                   space: colorSpace,
+                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+               ) {
+                let totalCanvasBytes = ctx.bytesPerRow * targetH
+                ctx.interpolationQuality = .high
+                let sx = CGFloat(targetW) / CGFloat(cw)
+                let sy = CGFloat(targetH) / CGFloat(ch)
+                var prevSnapshot: Data?
+                var pendingDelay = 0.0
+                var pendingComposite: CGImage?
+
+                for idx in 0 ..< rawCount {
+                    let meta = apngMeta.frames[idx]
+                    if meta.disposeOp == 2, let ptr = ctx.data {
+                        prevSnapshot = Data(bytes: ptr, count: totalCanvasBytes)
+                    } else {
+                        prevSnapshot = nil
+                    }
+
+                    if let rawFrame = self.decodeRawImage(source: source, index: idx) {
+                        let alreadyFull = (rawFrame.width == cw && rawFrame.height == ch)
+                            && (meta.width != cw || meta.height != ch || meta.xOffset != 0 || meta.yOffset != 0)
+                        let drawRect: CGRect
+                        if alreadyFull {
+                            drawRect = CGRect(x: 0, y: 0, width: CGFloat(targetW), height: CGFloat(targetH))
+                        } else {
+                            let rw = CGFloat(meta.width) * sx
+                            let rh = CGFloat(meta.height) * sy
+                            let rx = CGFloat(meta.xOffset) * sx
+                            let ry = CGFloat(targetH) - (CGFloat(meta.yOffset) * sy) - rh
+                            drawRect = CGRect(x: rx, y: ry, width: rw, height: rh)
+                        }
+
+                        if alreadyFull || meta.blendOp == 0 {
+                            ctx.clear(drawRect)
+                        }
+                        ctx.draw(rawFrame, in: drawRect)
+
+                        if idx % strideStep == 0 {
+                            if let prevImg = pendingComposite {
+                                images.append(prevImg)
+                                durations.append(pendingDelay)
+                                totalDuration += pendingDelay
+                                pendingDelay = 0.0
+                            }
+                            pendingComposite = ctx.makeImage()
+                        }
+                        pendingDelay += self.frameDelay(source: source, index: idx)
+
+                        if meta.disposeOp == 1 {
+                            ctx.clear(drawRect)
+                        } else if meta.disposeOp == 2, let snap = prevSnapshot, let ptr = ctx.data {
+                            snap.copyBytes(to: ptr.assumingMemoryBound(to: UInt8.self), count: totalCanvasBytes)
+                        }
+                    } else {
+                        pendingDelay += self.frameDelay(source: source, index: idx)
+                    }
+                }
+                if let lastImg = pendingComposite {
+                    images.append(lastImg)
+                    durations.append(pendingDelay)
+                    totalDuration += pendingDelay
+                }
+            }
+        } else {
+            var idx = 0
+            while idx < rawCount {
+                if let cgImage = self.decodeSingleFrame(source: source, index: idx, maxPixelSize: maxPixelSize) {
+                    var delay = 0.0
+                    let endIdx = min(rawCount, idx + strideStep)
+                    for j in idx ..< endIdx {
+                        delay += self.frameDelay(source: source, index: j)
+                    }
+                    images.append(cgImage)
+                    durations.append(delay)
+                    totalDuration += delay
+                }
+                idx += strideStep
+            }
         }
 
         guard !images.isEmpty else { return nil }
@@ -1955,6 +2182,8 @@ public final class FullGramProfileEffectOverlayView: UIView {
     private var currentEffectId: String?
     private var pendingEffectId: String?
     private var activeThumbToken: UUID?
+    private var isPlayingAnimatedEffect = false
+    private var failedLayerCount = 0
     public var onLoadingStateChanged: ((Bool) -> Void)?
 
     public override init(frame: CGRect) {
@@ -1993,6 +2222,8 @@ public final class FullGramProfileEffectOverlayView: UIView {
         self.activeThumbToken = nil
         self.pendingEffectId = nil
         self.currentEffectId = nil
+        self.isPlayingAnimatedEffect = false
+        self.failedLayerCount = 0
         self.introLayer.removeAllAnimations()
         self.introLayer.contents = nil
         self.ambientLayer.removeAllAnimations()
@@ -2010,6 +2241,8 @@ public final class FullGramProfileEffectOverlayView: UIView {
         guard let preset, !preset.layerURLs.isEmpty else {
             self.currentEffectId = nil
             self.pendingEffectId = nil
+            self.isPlayingAnimatedEffect = false
+            self.failedLayerCount = 0
             self.introLayer.removeAllAnimations()
             self.introLayer.contents = nil
             self.ambientLayer.removeAllAnimations()
@@ -2019,10 +2252,12 @@ public final class FullGramProfileEffectOverlayView: UIView {
             return
         }
         self.isHidden = false
-        if self.currentEffectId == preset.id && self.introLayer.contents != nil {
+        if !self.isPlayingAnimatedEffect && self.currentEffectId == preset.id && self.introLayer.contents != nil {
             self.onLoadingStateChanged?(false)
             return
         }
+        self.isPlayingAnimatedEffect = false
+        self.failedLayerCount = 0
         self.currentEffectId = nil
         self.pendingEffectId = preset.id
         self.introLayer.removeAllAnimations()
@@ -2063,6 +2298,8 @@ public final class FullGramProfileEffectOverlayView: UIView {
         guard let preset, !preset.layerURLs.isEmpty else {
             self.currentEffectId = nil
             self.pendingEffectId = nil
+            self.isPlayingAnimatedEffect = false
+            self.failedLayerCount = 0
             self.introLayer.removeAllAnimations()
             self.introLayer.contents = nil
             self.ambientLayer.removeAllAnimations()
@@ -2071,11 +2308,13 @@ public final class FullGramProfileEffectOverlayView: UIView {
             return
         }
         self.isHidden = false
-        if !forceReplay && self.currentEffectId == preset.id {
+        if !forceReplay && self.isPlayingAnimatedEffect && self.currentEffectId == preset.id {
             return
         }
         self.pendingEffectId = preset.id
         self.currentEffectId = preset.id
+        self.isPlayingAnimatedEffect = true
+        self.failedLayerCount = 0
         self.introLayer.removeAllAnimations()
         self.introLayer.contents = nil
         self.ambientLayer.removeAllAnimations()
@@ -2084,11 +2323,21 @@ public final class FullGramProfileEffectOverlayView: UIView {
         let targetId = preset.id
         let introURL = preset.layerURLs[0]
         let ambientURL = preset.layerURLs.count > 1 ? preset.layerURLs[1] : nil
+        let totalLayers = ambientURL != nil ? 2 : 1
 
         FullGramAnimatedImageDecoder.profileEffectLayerAsync(effectId: targetId, layerIndex: 0, urlString: introURL) { [weak self] seq in
             Task { @MainActor in
                 guard let self, self.pendingEffectId == targetId else { return }
-                self.play(sequence: seq, on: self.introLayer, loop: ambientURL == nil)
+                if let seq, !seq.frames.isEmpty {
+                    self.play(sequence: seq, on: self.introLayer, loop: ambientURL == nil)
+                } else {
+                    self.play(sequence: nil, on: self.introLayer, loop: ambientURL == nil)
+                    self.failedLayerCount += 1
+                    if self.failedLayerCount >= totalLayers {
+                        self.isPlayingAnimatedEffect = false
+                        self.currentEffectId = nil
+                    }
+                }
             }
         }
 
@@ -2096,7 +2345,16 @@ public final class FullGramProfileEffectOverlayView: UIView {
             FullGramAnimatedImageDecoder.profileEffectLayerAsync(effectId: targetId, layerIndex: 1, urlString: ambientURL) { [weak self] seq in
                 Task { @MainActor in
                     guard let self, self.pendingEffectId == targetId else { return }
-                    self.play(sequence: seq, on: self.ambientLayer, loop: true)
+                    if let seq, !seq.frames.isEmpty {
+                        self.play(sequence: seq, on: self.ambientLayer, loop: true)
+                    } else {
+                        self.play(sequence: nil, on: self.ambientLayer, loop: true)
+                        self.failedLayerCount += 1
+                        if self.failedLayerCount >= totalLayers {
+                            self.isPlayingAnimatedEffect = false
+                            self.currentEffectId = nil
+                        }
+                    }
                 }
             }
         }

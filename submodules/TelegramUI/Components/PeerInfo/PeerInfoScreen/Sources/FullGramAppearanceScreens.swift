@@ -12,25 +12,25 @@ import TelegramPresentationData
 
 // MARK: - 2.1. Шрифты (локальные + пользовательские TTF/OTF + 50 шрифтов из GitHub-каталога FullGram)
 
+private nonisolated(unsafe) var fullGramFontPickerDelegateKey: UInt8 = 0
+
 private final class FullGramFontDocumentPickerDelegate: NSObject, UIDocumentPickerDelegate {
-    private var retainedSelf: FullGramFontDocumentPickerDelegate?
     private let onPick: (URL) -> Void
 
     init(onPick: @escaping (URL) -> Void) {
         self.onPick = onPick
         super.init()
-        self.retainedSelf = self
     }
 
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-        self.retainedSelf = nil
+        objc_setAssociatedObject(controller, &fullGramFontPickerDelegateKey, nil, .OBJC_ASSOCIATION_ASSIGN)
         if let url = urls.first {
             self.onPick(url)
         }
     }
 
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-        self.retainedSelf = nil
+        objc_setAssociatedObject(controller, &fullGramFontPickerDelegateKey, nil, .OBJC_ASSOCIATION_ASSIGN)
     }
 }
 
@@ -185,7 +185,7 @@ public func fullGramFontsController(context: AccountContext) -> ViewController {
     let version = Atomic<Int>(value: 0)
     let dlState = FullGramFontDownloadState()
 
-    let bump: () -> Void = {
+    let bump: @Sendable () -> Void = {
         changed.set(version.modify { $0 + 1 })
     }
     dlState.onChanged = bump
@@ -245,6 +245,7 @@ public func fullGramFontsController(context: AccountContext) -> ViewController {
             let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
             picker.allowsMultipleSelection = false
             picker.delegate = delegate
+            objc_setAssociatedObject(picker, &fullGramFontPickerDelegateKey, delegate, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
             dlState.presentNative?(picker)
         },
         manageCustom: { option in
@@ -318,8 +319,14 @@ public func fullGramFontsController(context: AccountContext) -> ViewController {
     }
 
     let controller = ItemListController(context: context, state: signal)
-    dlState.presentNative = { vc in
-        context.sharedContext.applicationBindings.presentNativeController(vc)
+    dlState.presentNative = { [weak controller] vc in
+        guard let controller else { return }
+        if let pop = vc.popoverPresentationController {
+            pop.sourceView = controller.view
+            pop.sourceRect = CGRect(x: controller.view.bounds.midX, y: controller.view.bounds.midY, width: 1.0, height: 1.0)
+            pop.permittedArrowDirections = []
+        }
+        controller.present(vc, animated: true)
     }
     return controller
 }
@@ -578,14 +585,14 @@ private enum FullGramThemesEntry: ItemListNodeEntry {
     }
 }
 
+private nonisolated(unsafe) var fullGramColorPickerDelegateKey: UInt8 = 0
+
 private final class FullGramColorPickerDelegate: NSObject, UIColorPickerViewControllerDelegate {
     private let onColor: (String) -> Void
-    private var retainedSelf: FullGramColorPickerDelegate?
 
     init(onColor: @escaping (String) -> Void) {
         self.onColor = onColor
         super.init()
-        self.retainedSelf = self
     }
 
     @available(iOS 14.0, *)
@@ -595,7 +602,7 @@ private final class FullGramColorPickerDelegate: NSObject, UIColorPickerViewCont
 
     @available(iOS 14.0, *)
     func colorPickerViewControllerDidFinish(_ viewController: UIColorPickerViewController) {
-        self.retainedSelf = nil
+        objc_setAssociatedObject(viewController, &fullGramColorPickerDelegateKey, nil, .OBJC_ASSOCIATION_ASSIGN)
     }
 
     private static func hexString(from color: UIColor) -> String {
@@ -641,6 +648,7 @@ func fullGramThemesController(context: AccountContext) -> ViewController {
                         FullGramThemeColors.set(slot, hex: hex)
                     }
                     picker.delegate = delegate
+                    objc_setAssociatedObject(picker, &fullGramColorPickerDelegateKey, delegate, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
                     presentNativeImpl?(picker)
                 }))
             }
@@ -714,8 +722,14 @@ func fullGramThemesController(context: AccountContext) -> ViewController {
     }
 
     let controller = ItemListController(context: context, state: signal)
-    presentNativeImpl = { vc in
-        context.sharedContext.applicationBindings.presentNativeController(vc)
+    presentNativeImpl = { [weak controller] vc in
+        guard let controller else { return }
+        if let pop = vc.popoverPresentationController {
+            pop.sourceView = controller.view
+            pop.sourceRect = CGRect(x: controller.view.bounds.midX, y: controller.view.bounds.midY, width: 1.0, height: 1.0)
+            pop.permittedArrowDirections = []
+        }
+        controller.present(vc, animated: true)
     }
     return controller
 }
@@ -875,6 +889,7 @@ func fullGramDesignController(context: AccountContext) -> ViewController {
                         }
                     }
                     picker.delegate = delegate
+                    objc_setAssociatedObject(picker, &fullGramColorPickerDelegateKey, delegate, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
                     presentNativeImpl?(picker)
                 }))
             }
@@ -982,8 +997,14 @@ func fullGramDesignController(context: AccountContext) -> ViewController {
     presentControllerImpl = { [weak controller] c in
         controller?.present(c, in: .window(.root))
     }
-    presentNativeImpl = { vc in
-        context.sharedContext.applicationBindings.presentNativeController(vc)
+    presentNativeImpl = { [weak controller] vc in
+        guard let controller else { return }
+        if let pop = vc.popoverPresentationController {
+            pop.sourceView = controller.view
+            pop.sourceRect = CGRect(x: controller.view.bounds.midX, y: controller.view.bounds.midY, width: 1.0, height: 1.0)
+            pop.permittedArrowDirections = []
+        }
+        controller.present(vc, animated: true)
     }
     return controller
 }

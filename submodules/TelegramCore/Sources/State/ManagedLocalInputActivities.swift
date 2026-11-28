@@ -79,9 +79,10 @@ func managedLocalTypingActivities(activities: Signal<[PeerActivitySpace: [(PeerI
     return Signal { subscriber in
         let context = Atomic(value: ManagedLocalTypingActivitiesContext())
         let disposable = combineLatest(activities, network.fullGramGhostMode.signal).start(next: { activities, settings in
-            let activities = activities.mapValues { records in
-                return records.filter { !fullGramSuppressInputActivity($0.1.activity, settings: settings.effective(forPeer: $0.0.toInt64())) }
-            }
+            let activities = Dictionary(uniqueKeysWithValues: activities.map { space, records in
+                let eff = settings.effective(forPeer: space.peerId.toInt64())
+                return (space, records.filter { !fullGramSuppressInputActivity($0.1.activity, settings: eff) })
+            })
             let (start, dispose) = context.with { context in
                 return context.update(activities: activities)
             }

@@ -357,7 +357,7 @@ def check_swift_sources() -> int:
         check_swift_delimiters(path)
         text = path.read_text(encoding="utf-8")
         rel = path.relative_to(ROOT)
-        imports = set(re.findall(r"^import\s+(\S+)", text, re.M))
+        imports = set(re.findall(r"^(?:@\w+\s+)*import\s+(\S+)", text, re.M))
 
         if not rel.as_posix().startswith("submodules/Display/") and "Display" not in imports:
             used_display = [s for s in sorted(display_syms) if re.search(rf"\b{s}\b", text)]
@@ -700,7 +700,7 @@ def check_swift6_static_rules_text(rel: str, text: str) -> None:
             lines = body.split("\n")
             i = 0
             while i < len(lines):
-                if re.search(r"\.shared\.\w+\(.*\)\s*\{\s*[\w, ]+ in\s*$", lines[i]):
+                if re.search(r"\.shared\.\w+(?:\(.*\))?\s*\{\s*[\w, ]+ in\s*$", lines[i]):
                     depth = lines[i].count("{") - lines[i].count("}")
                     j = i + 1
                     while j < len(lines) and depth > 0:
@@ -715,7 +715,7 @@ def check_swift6_static_rules_text(rel: str, text: str) -> None:
                     i += 1
 
     # 4. Plain imports of non-Sendable modules in files that hop threads/@Sendable.
-    if ("DispatchQueue.main.async" in text or "@Sendable" in text) and rel.startswith("submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/"):
+    if ("DispatchQueue.main.async" in text or "@Sendable" in text or "NotificationCenter.default.addObserver" in text) and rel.startswith("submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/"):
         for mod in ("AccountContext", "SwiftSignalKit"):
             if re.search(rf"^import {mod}\s*$", text, re.M):
                 raise AssertionError(f"{rel} must use '@preconcurrency import {mod}' (Sendable captures are errors under -warnings-as-errors)")

@@ -18,6 +18,7 @@ final class FullGramRoundVideoMask {
     private var cachedEmojiImage: CIImage?
     private var cachedMascotImage: CIImage?
     private var cachedScaledMascot: (size: CGFloat, image: CIImage)?
+    private var scratchPixelBuffer: CVPixelBuffer?
 
     static func makeIfEnabled() -> FullGramRoundVideoMask? {
         let mask = FullGramRoundMask.current
@@ -165,7 +166,77 @@ final class FullGramRoundVideoMask {
         }
 
         if image !== source {
-            self.context.render(image.cropped(to: source.extent), to: buffer)
+            guard let scratch = self.ensureScratchPixelBuffer(matching: buffer) else {
+                return
+            }
+            self.context.render(image.cropped(to: source.extent), to: scratch)
+            Self.copyPixelBuffer(from: scratch, to: buffer)
+        }
+    }
+
+    private func ensureScratchPixelBuffer(matching buffer: CVPixelBuffer) -> CVPixelBuffer? {
+        let width = CVPixelBufferGetWidth(buffer)
+        let height = CVPixelBufferGetHeight(buffer)
+        let format = CVPixelBufferGetPixelFormatType(buffer)
+        if let existing = self.scratchPixelBuffer,
+           CVPixelBufferGetWidth(existing) == width,
+           CVPixelBufferGetHeight(existing) == height,
+           CVPixelBufferGetPixelFormatType(existing) == format {
+            return existing
+        }
+        let attrs: [String: Any] = [
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:] as [String: Any],
+            kCVPixelBufferMetalCompatibilityKey as String: true
+        ]
+        var created: CVPixelBuffer?
+        let status = CVPixelBufferCreate(kCFAllocatorDefault, width, height, format, attrs as CFDictionary, &created)
+        guard status == kCVReturnSuccess, let created else {
+            return nil
+        }
+        self.scratchPixelBuffer = created
+        return created
+    }
+
+    private static func copyPixelBuffer(from src: CVPixelBuffer, to dst: CVPixelBuffer) {
+        guard CVPixelBufferLockBaseAddress(src, .readOnly) == kCVReturnSuccess else { return }
+        defer { CVPixelBufferUnlockBaseAddress(src, .readOnly) }
+        guard CVPixelBufferLockBaseAddress(dst, []) == kCVReturnSuccess else { return }
+        defer { CVPixelBufferUnlockBaseAddress(dst, []) }
+
+        let srcPlanes = CVPixelBufferGetPlaneCount(src)
+        let dstPlanes = CVPixelBufferGetPlaneCount(dst)
+        if srcPlanes == 0 && dstPlanes == 0 {
+            guard let srcPtr = CVPixelBufferGetBaseAddress(src),
+                  let dstPtr = CVPixelBufferGetBaseAddress(dst) else { return }
+            let rows = min(CVPixelBufferGetHeight(src), CVPixelBufferGetHeight(dst))
+            let srcBPR = CVPixelBufferGetBytesPerRow(src)
+            let dstBPR = CVPixelBufferGetBytesPerRow(dst)
+            if srcBPR == dstBPR {
+                memcpy(dstPtr, srcPtr, srcBPR * rows)
+            } else {
+                let rowBytes = min(srcBPR, dstBPR)
+                for y in 0 ..< rows {
+                    memcpy(dstPtr.advanced(by: y * dstBPR), srcPtr.advanced(by: y * srcBPR), rowBytes)
+                }
+            }
+            return
+        }
+
+        let count = min(srcPlanes, dstPlanes)
+        for plane in 0 ..< count {
+            guard let srcPtr = CVPixelBufferGetBaseAddressOfPlane(src, plane),
+                  let dstPtr = CVPixelBufferGetBaseAddressOfPlane(dst, plane) else { continue }
+            let rows = min(CVPixelBufferGetHeightOfPlane(src, plane), CVPixelBufferGetHeightOfPlane(dst, plane))
+            let srcBPR = CVPixelBufferGetBytesPerRowOfPlane(src, plane)
+            let dstBPR = CVPixelBufferGetBytesPerRowOfPlane(dst, plane)
+            if srcBPR == dstBPR {
+                memcpy(dstPtr, srcPtr, srcBPR * rows)
+            } else {
+                let rowBytes = min(srcBPR, dstBPR)
+                for y in 0 ..< rows {
+                    memcpy(dstPtr.advanced(by: y * dstBPR), srcPtr.advanced(by: y * srcBPR), rowBytes)
+                }
+            }
         }
     }
 }

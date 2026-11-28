@@ -27,15 +27,20 @@ public enum FullGramBackup {
         "fullgram.privacy.faceIdEnabled",
         "fullgram.privacy.lockedChats",
         "fullgram.plugins.catalogURL",
+        "fullgram.plugins.systemEnabled",
+        "fullgram.plugins.backgroundEnabled",
+        "fullgram.plugins.cachedProfile",
+        "fullgram.plugins.originalNickname",
         // A crafted backup must not redirect AI/badge traffic to a foreign server,
         // disable Anti-Scam protections, inject prompts/regexes/font paths, or forge economy state.
         "fullgram.ai.endpoint",
         "fullgram.ai.customPrompt",
         "fullgram.ai.provider",
         "fullgram.ai.model",
-        "fullgram.ai.allowReadCurrentChat",
-        "fullgram.ai.allowReadChatList",
-        "fullgram.ai.allowDraftInsert",
+        "fullgram.ai.allowReadChat",
+        "fullgram.ai.allowChatList",
+        "fullgram.ai.allowDraft",
+        "fullgram.ai.allowConfirmSend",
         "fullgram.badges.url",
         "fullgram.appearance.customFonts",
         "fullgram.appearance.slowMotion",
@@ -51,7 +56,7 @@ public enum FullGramBackup {
         "fullgram.antiscam.ruleBanByLinks",
         "fullgram.antiscam.ruleBanNewAccounts",
         "fullgram.antiscam.ruleNewAccountMinId",
-        "fullgram.antiscam.ruleNewAccountRequireNoAvatar",
+        "fullgram.antiscam.ruleNewAccountNoAvatar",
         "fullgram.antiscam.ruleBanMassJoins",
         "fullgram.antiscam.ruleMassJoinLimit",
         "fullgram.antiscam.ruleMassJoinWindow",
@@ -209,6 +214,13 @@ public enum FullGramBackup {
 
         FullGramThemeColors.invalidateCache()
         FullGramAntiScam.shared.invalidateCache()
+        FullGramMixer.invalidateCache()
+        FullGramNoiseReductionMode.invalidateCache()
+        FullGramVoiceMode.invalidateCache()
+        FullGramBleepSound.invalidateCache()
+        FullGramAvatarFrames.invalidateCache()
+        FullGramAIStore.invalidateCache()
+        FullGramBadges.invalidateCache()
 
         var importedPlugins = 0
         for plugin in payload.plugins.prefix(Self.maxImportedPlugins) where plugin.code.utf8.count <= Self.maxPluginCodeBytes {

@@ -178,13 +178,45 @@ final class SharedMediaPlayer {
     
     private var currentPrefetchItems: (SharedMediaPlaybackDataSource, SharedMediaPlaybackDataSource)?
     private let prefetchDisposable = MetaDisposable()
-    private struct FullGramSilenceState {
-        var intervals: [ClosedRange<Double>] = []
-        var lastJumpTarget: Double = -1.0
-        var lastJumpWall: CFAbsoluteTime = 0.0
-        var resourceId: String?
+    private final class FullGramSilenceStateBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var intervals: [ClosedRange<Double>] = []
+        private var lastJumpTarget: Double = -1.0
+        private var lastJumpWall: CFAbsoluteTime = 0.0
+        private var resourceId: String?
+
+        func reset(resourceId: String?) {
+            self.lock.lock()
+            self.intervals = []
+            self.lastJumpTarget = -1.0
+            self.lastJumpWall = 0.0
+            self.resourceId = resourceId
+            self.lock.unlock()
+        }
+
+        func setIntervals(_ intervals: [ClosedRange<Double>], ifResourceId resId: String) {
+            self.lock.lock()
+            if self.resourceId == resId {
+                self.intervals = intervals
+            }
+            self.lock.unlock()
+        }
+
+        func consumeSeekTarget(currentTime: Double, now: CFAbsoluteTime) -> Double? {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            guard !self.intervals.isEmpty,
+                  let target = FullGramSilenceSkipper.nextSkipTarget(currentTime: currentTime, intervals: self.intervals),
+                  (now - self.lastJumpWall) > 0.35,
+                  abs(target - self.lastJumpTarget) > 0.15 else {
+                return nil
+            }
+            self.lastJumpWall = now
+            self.lastJumpTarget = target
+            return target
+        }
     }
-    private let fgSilenceState = Atomic<FullGramSilenceState>(value: FullGramSilenceState())
+    private let fgSilenceState = FullGramSilenceStateBox()
     
     let type: MediaManagerPlayerType
     
@@ -237,32 +269,19 @@ final class SharedMediaPlayer {
                         } else {
                             rateValue = strongSelf.playbackRate.doubleValue
                         }
-                        let nextResId: String?
                         if (playbackData.type == .voice || playbackData.type == .instantVideo),
                            FullGramExtras.shared.skipSilenceInVoiceAndCircles,
                            case let .telegramFile(fileReference, _, _) = playbackData.source {
                             let resId = fileReference.media.resource.id.stringRepresentation
-                            nextResId = resId
-                            strongSelf.fgSilenceState.modify { _ in
-                                FullGramSilenceState(intervals: [], lastJumpTarget: -1.0, lastJumpWall: 0.0, resourceId: resId)
-                            }
+                            let silenceState = strongSelf.fgSilenceState
+                            silenceState.reset(resourceId: resId)
                             if let path = strongSelf.engine.account.postbox.mediaBox.completedResourcePath(fileReference.media.resource) {
-                                FullGramSilenceSkipper.analyzeSpeechIntervals(url: URL(fileURLWithPath: path)) { [weak self] intervals in
-                                    guard let self else { return }
-                                    self.fgSilenceState.modify { state in
-                                        var updated = state
-                                        if updated.resourceId == resId {
-                                            updated.intervals = intervals
-                                        }
-                                        return updated
-                                    }
+                                FullGramSilenceSkipper.analyzeSpeechIntervals(url: URL(fileURLWithPath: path)) { intervals in
+                                    silenceState.setIntervals(intervals, ifResourceId: resId)
                                 }
                             }
                         } else {
-                            nextResId = nil
-                            strongSelf.fgSilenceState.modify { _ in
-                                FullGramSilenceState(intervals: [], lastJumpTarget: -1.0, lastJumpWall: 0.0, resourceId: nextResId)
-                            }
+                            strongSelf.fgSilenceState.reset(resourceId: nil)
                         }
                         
                         switch playbackData.type {
@@ -379,19 +398,7 @@ final class SharedMediaPlayer {
                                FullGramExtras.shared.skipSilenceInVoiceAndCircles,
                                case .playing = itemStatus.status {
                                 let now = CFAbsoluteTimeGetCurrent()
-                                let seekTarget: Double? = strongSelf.fgSilenceState.modify { state in
-                                    guard !state.intervals.isEmpty,
-                                          let target = FullGramSilenceSkipper.nextSkipTarget(currentTime: itemStatus.timestamp, intervals: state.intervals),
-                                          (now - state.lastJumpWall) > 0.35,
-                                          abs(target - state.lastJumpTarget) > 0.15 else {
-                                        return (state, nil)
-                                    }
-                                    var updated = state
-                                    updated.lastJumpWall = now
-                                    updated.lastJumpTarget = target
-                                    return (updated, target)
-                                }
-                                if let target = seekTarget {
+                                if let target = strongSelf.fgSilenceState.consumeSeekTarget(currentTime: itemStatus.timestamp, now: now) {
                                     Queue.mainQueue().async { [weak strongSelf] in
                                         strongSelf?.playbackItem?.seek(target)
                                     }

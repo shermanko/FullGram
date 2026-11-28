@@ -435,6 +435,21 @@ class ThemeSettingsAppIconItemNode: ListViewItemNode, ItemListItemNode {
                                 case "FullGramMascotGold":
                                     name = "Mascot Royal"
                                     bordered = false
+                                case "FullGramObsidian":
+                                    name = "FullGram Обсидиан"
+                                    bordered = false
+                                case "FullGramAurora":
+                                    name = "FullGram Аврора"
+                                    bordered = false
+                                case "FullGramCrimson":
+                                    name = "FullGram Рубин"
+                                    bordered = false
+                                case "FullGramMint":
+                                    name = "FullGram Мята"
+                                    bordered = false
+                                case "FullGramPlasma":
+                                    name = "FullGram Плазма"
+                                    bordered = false
                                 case "BlueIcon":
                                     name = item.strings.Appearance_AppIconDefault
                                 case "BlueClassicIcon":
@@ -442,7 +457,7 @@ class ThemeSettingsAppIconItemNode: ListViewItemNode, ItemListItemNode {
                                 case "BlueFilledIcon":
                                     name = item.strings.Appearance_AppIconFilled
                                     bordered = false
-                                case "WhiteFilled":
+                                case "WhiteFilled", "WhiteFilledIcon":
                                     name = "⍺ White"
                                 case "New1":
                                     name = item.strings.Appearance_AppIconNew1

@@ -14,6 +14,7 @@ import ItemListUI
 import PresentationDataUtils
 import TelegramPresentationData
 import TelegramUIPreferences
+import LocalAuthentication
 
 /// Shared Telegram `ViewController` wrapper that hosts an embedded UIKit `UIViewController`
 /// with navigation bar presentation data and safe-area inset propagation.
@@ -619,7 +620,7 @@ public func fullGramBetaActivationController(context: AccountContext) -> ViewCon
 
     let changed = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
-    let bump: () -> Void = {
+    let bump: @Sendable () -> Void = {
         changed.set(version.modify { $0 + 1 })
     }
     let observer = NotificationCenter.default.addObserver(forName: FullGramBetaAccess.didChangeNotification, object: nil, queue: .main) { _ in
@@ -739,32 +740,36 @@ public func fullGramBetaActivationController(context: AccountContext) -> ViewCon
             tf.autocorrectionType = .no
             tf.autocapitalizationType = .none
         }
-        alert.addAction(UIAlertAction(title: ru ? "Активировать" : "Activate", style: .default, handler: { _ in
-            let raw = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        alert.addAction(UIAlertAction(title: ru ? "Активировать" : "Activate", style: .default, handler: { [weak alert] _ in
+            let raw = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard let code = FullGramBetaAccess.extractBetaCode(fromRawInput: raw), !code.isEmpty else {
                 return
             }
             let peerRawId = context.account.peerId.id._internalGetInt64Value()
             FullGramBetaAccess.shared.activate(code: code, peerId: peerRawId) { result in
-                switch result {
-                case .success:
-                    let okAlert = textAlertController(
-                        context: context,
-                        title: "FullGram Beta",
-                        text: ru ? "Бета-тест активирован! Все функции FullGram открыты." : "Beta access activated! All FullGram features are unlocked.",
-                        actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {
-                            box.replace()
-                        })]
-                    )
-                    box.present(okAlert)
-                case let .failure(err):
-                    let errAlert = textAlertController(
-                        context: context,
-                        title: ru ? "Ошибка активации" : "Activation Error",
-                        text: err.localizedDescription,
-                        actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]
-                    )
-                    box.present(errAlert)
+                MainActor.assumeIsolated {
+                    let currentPresentation = context.sharedContext.currentPresentationData.with { $0 }
+                    let isRu = currentPresentation.strings.baseLanguageCode.hasPrefix("ru")
+                    switch result {
+                    case .success:
+                        let okAlert = textAlertController(
+                            context: context,
+                            title: "FullGram Beta",
+                            text: isRu ? "Бета-тест активирован! Все функции FullGram открыты." : "Beta access activated! All FullGram features are unlocked.",
+                            actions: [TextAlertAction(type: .defaultAction, title: currentPresentation.strings.Common_OK, action: {
+                                box.replace()
+                            })]
+                        )
+                        box.present(okAlert)
+                    case let .failure(err):
+                        let errAlert = textAlertController(
+                            context: context,
+                            title: isRu ? "Ошибка активации" : "Activation Error",
+                            text: err.localizedDescription,
+                            actions: [TextAlertAction(type: .defaultAction, title: currentPresentation.strings.Common_OK, action: {})]
+                        )
+                        box.present(errAlert)
+                    }
                 }
             }
         }))
@@ -791,22 +796,24 @@ public func fullGramBetaActivationController(context: AccountContext) -> ViewCon
     }
 
     let checkAccessNow: () -> Void = {
-        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-        let ru = presentationData.strings.baseLanguageCode.hasPrefix("ru")
         let peerRawId = context.account.peerId.id._internalGetInt64Value()
         FullGramBetaAccess.shared.syncWithServer(peerId: peerRawId, force: true) { active in
-            if active {
-                box.replace()
-            } else {
-                let alert = textAlertController(
-                    context: context,
-                    title: "FullGram Beta",
-                    text: ru
-                        ? "Доступ для этого аккаунта пока не найден. Перейдите по ссылке приглашения через Telegram-бота или введите код вручную."
-                        : "Beta access not found for this account yet. Redeem your invite link via the Telegram bot or enter the code manually.",
-                    actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]
-                )
-                box.present(alert)
+            MainActor.assumeIsolated {
+                if active {
+                    box.replace()
+                } else {
+                    let currentPresentation = context.sharedContext.currentPresentationData.with { $0 }
+                    let isRu = currentPresentation.strings.baseLanguageCode.hasPrefix("ru")
+                    let alert = textAlertController(
+                        context: context,
+                        title: "FullGram Beta",
+                        text: isRu
+                            ? "Доступ для этого аккаунта пока не найден. Перейдите по ссылке приглашения через Telegram-бота или введите код вручную."
+                            : "Beta access not found for this account yet. Redeem your invite link via the Telegram bot or enter the code manually.",
+                        actions: [TextAlertAction(type: .defaultAction, title: currentPresentation.strings.Common_OK, action: {})]
+                    )
+                    box.present(alert)
+                }
             }
         }
     }
@@ -883,6 +890,11 @@ public func fullGramSettingsController(context: AccountContext) -> ViewControlle
     let arguments = FullGramSettingsControllerArguments(
         context: context,
         openSearch: {
+            let selfRawId = context.account.peerId.id._internalGetInt64Value()
+            guard FullGramBetaAccess.shared.isUnlocked(forPeerId: selfRawId) else {
+                pushControllerImpl?(fullGramBetaActivationController(context: context))
+                return
+            }
             pushControllerImpl?(fullGramSettingsSearchController(context: context))
         },
         openAdmin: {
@@ -4337,10 +4349,29 @@ func fullGramSecurityCategoryController(context: AccountContext) -> ViewControll
     let antiScamObserver = NotificationCenter.default.addObserver(forName: FullGramAntiScam.didChangeNotification, object: nil, queue: .main) { _ in
         changed.set(version.modify { $0 + 1 })
     }
+    let privacyObserver = NotificationCenter.default.addObserver(forName: FullGramChatPrivacy.didChangeNotification, object: nil, queue: .main) { _ in
+        changed.set(version.modify { $0 + 1 })
+    }
     let args = FullGramSecurityArguments(toggle: { opt, value in
         switch opt {
         case .faceIdChats:
-            FullGramChatPrivacy.isEnabled = value
+            if !value && !FullGramChatPrivacy.locked.isEmpty {
+                let la = LAContext()
+                var authError: NSError?
+                if la.canEvaluatePolicy(.deviceOwnerAuthentication, error: &authError) {
+                    la.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Подтвердите личность, чтобы отключить защиту чатов") { success, _ in
+                        DispatchQueue.main.async {
+                            FullGramChatPrivacy.isEnabled = !success
+                            changed.set(version.modify { $0 + 1 })
+                        }
+                    }
+                } else {
+                    FullGramChatPrivacy.isEnabled = true
+                    changed.set(version.modify { $0 + 1 })
+                }
+            } else {
+                FullGramChatPrivacy.isEnabled = value
+            }
         case .hidePhone:
             FullGramExtras.shared.hidePhoneNumber = value
         case .blurInTray:
@@ -4371,6 +4402,7 @@ func fullGramSecurityCategoryController(context: AccountContext) -> ViewControll
     |> afterDisposed {
         NotificationCenter.default.removeObserver(extrasObserver)
         NotificationCenter.default.removeObserver(antiScamObserver)
+        NotificationCenter.default.removeObserver(privacyObserver)
     }
     let controller = ItemListController(context: context, state: signal)
     pushImpl = { [weak controller] c in controller?.push(c) }
@@ -4492,11 +4524,15 @@ private final class FullGramBackupPickerDelegate: NSObject, UIDocumentPickerDele
     let onPick: (URL) -> Void
     init(onPick: @escaping (URL) -> Void) { self.onPick = onPick }
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        activeBackupPickerDelegate = nil
         if let first = urls.first { self.onPick(first) }
+    }
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        activeBackupPickerDelegate = nil
     }
 }
 
-private var activeBackupPickerDelegate: FullGramBackupPickerDelegate?
+@MainActor private var activeBackupPickerDelegate: FullGramBackupPickerDelegate?
 
 func fullGramOtherCategoryController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
@@ -4923,18 +4959,21 @@ private enum FullGramBadgesEntry: ItemListNodeEntry {
     }
 }
 
+private final class FullGramBadgesNativePresenterBox: @unchecked Sendable {
+    var present: (@MainActor @Sendable (UIViewController) -> Void)?
+}
+
 public func fullGramBadgesController(context: AccountContext) -> ViewController {
     guard fullGramCanOpenAdmin(context: context) else {
         return fullGramOtherCategoryController(context: context)
     }
-    var presentNativeImpl: ((UIViewController) -> Void)?
+    let presenter = FullGramBadgesNativePresenterBox()
     let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
-    var version = 0
-    var isRefreshing = false
+    let version = Atomic<Int>(value: 0)
+    let isRefreshing = Atomic<Bool>(value: false)
 
-    let bump: () -> Void = {
-        version += 1
-        refresh.set(version)
+    let bump: @Sendable () -> Void = {
+        refresh.set(version.modify { $0 + 1 })
     }
 
     let observer = NotificationCenter.default.addObserver(forName: FullGramBadges.didChangeNotification, object: nil, queue: .main) { _ in
@@ -4955,14 +4994,14 @@ public func fullGramBadgesController(context: AccountContext) -> ViewController 
                 tf.text = FullGramBadges.shared.customPopupText
                 tf.placeholder = "Например: Официальный создатель плагинов…"
             }
-            alert.addAction(UIAlertAction(title: "Сохранить", style: .default, handler: { _ in
-                FullGramBadges.shared.customPopupText = alert.textFields?.first?.text ?? ""
+            alert.addAction(UIAlertAction(title: "Сохранить", style: .default, handler: { [weak alert] _ in
+                FullGramBadges.shared.customPopupText = alert?.textFields?.first?.text ?? ""
             }))
             alert.addAction(UIAlertAction(title: "Сбросить", style: .destructive, handler: { _ in
                 FullGramBadges.shared.customPopupText = ""
             }))
             alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            presentNativeImpl?(alert)
+            presenter.present?(alert)
         },
         editURL: {
             let alert = UIAlertController(
@@ -4979,39 +5018,40 @@ public func fullGramBadgesController(context: AccountContext) -> ViewController 
             }
             alert.addAction(UIAlertAction(title: "Сохранить и обновить", style: .default, handler: { [weak alert] _ in
                 FullGramBadges.shared.badgesURL = alert?.textFields?.first?.text ?? ""
-                isRefreshing = true
+                _ = isRefreshing.swap(true)
                 bump()
                 FullGramBadges.shared.refreshNow { _ in
                     DispatchQueue.main.async {
-                        isRefreshing = false
+                        _ = isRefreshing.swap(false)
                         bump()
                     }
                 }
             }))
             alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            presentNativeImpl?(alert)
+            presenter.present?(alert)
         },
         refreshNow: {
-            guard !isRefreshing else { return }
-            isRefreshing = true
+            guard !isRefreshing.swap(true) else { return }
             bump()
             FullGramBadges.shared.refreshNow { result in
                 DispatchQueue.main.async {
-                    isRefreshing = false
+                    _ = isRefreshing.swap(false)
                     bump()
-                    let title: String
-                    let msg: String
-                    switch result {
-                    case let .success(count):
-                        title = "Бейджи обновлены"
-                        msg = "Загружено записей: \(count)"
-                    case let .failure(err):
-                        title = "Ошибка обновления"
-                        msg = err.localizedDescription
+                    MainActor.assumeIsolated {
+                        let title: String
+                        let msg: String
+                        switch result {
+                        case let .success(count):
+                            title = "Бейджи обновлены"
+                            msg = "Загружено записей: \(count)"
+                        case let .failure(err):
+                            title = "Ошибка обновления"
+                            msg = err.localizedDescription
+                        }
+                        let alert = UIAlertController(title: title, message: msg, preferredStyle: .alert)
+                        alert.addAction(UIAlertAction(title: "OK", style: .default))
+                        presenter.present?(alert)
                     }
-                    let alert = UIAlertController(title: title, message: msg, preferredStyle: .alert)
-                    alert.addAction(UIAlertAction(title: "OK", style: .default))
-                    presentNativeImpl?(alert)
                 }
             }
         }
@@ -5021,6 +5061,7 @@ public func fullGramBadgesController(context: AccountContext) -> ViewController 
     |> deliverOnMainQueue
     |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
         let badges = FullGramBadges.shared
+        let refreshingNow = isRefreshing.with { $0 }
         let customTextLabel = badges.customPopupText.isEmpty ? "По умолчанию" : String(badges.customPopupText.prefix(24))
         let urlLabel = badges.badgesURL.isEmpty ? "По умолчанию" : String(badges.badgesURL.suffix(24))
 
@@ -5029,7 +5070,7 @@ public func fullGramBadgesController(context: AccountContext) -> ViewController 
             .enabled(badges.isEnabled),
             .customText("Текст бейджа", customTextLabel),
             .url("Ссылка на badges.json", urlLabel),
-            .refresh(isRefreshing ? "⏳ Загрузка…" : "🔄 Обновить бейджи с сервера", isRefreshing ? .neutral : .generic),
+            .refresh(refreshingNow ? "⏳ Загрузка…" : "🔄 Обновить бейджи с сервера", refreshingNow ? .neutral : .generic),
             .footer("Бейджи отображаются в профиле, шапке чата и у сообщений в группах. @shermanko (Создатель), @fullgram_mod и @fullgramgroup уже встроены по умолчанию; новых Premium-пользователей можно добавлять в badges.json без обновления приложения.")
         ]
 
@@ -5056,7 +5097,7 @@ public func fullGramBadgesController(context: AccountContext) -> ViewController 
     }
 
     let controller = ItemListController(context: context, state: signal)
-    presentNativeImpl = { [weak controller] vc in
+    presenter.present = { [weak controller] vc in
         guard let controller else { return }
         if let pop = vc.popoverPresentationController, pop.sourceView == nil, pop.barButtonItem == nil {
             pop.sourceView = controller.view
@@ -5201,8 +5242,8 @@ func fullGramAutoResponderController(context: AccountContext) -> ViewController 
                 tf.placeholder = "Например: Сейчас занят, напишу позже!"
                 tf.text = FullGramAutoResponderSettings.shared.customText
             }
-            alert.addAction(UIAlertAction(title: "Сохранить", style: .default) { _ in
-                if let text = alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+            alert.addAction(UIAlertAction(title: "Сохранить", style: .default) { [weak alert] _ in
+                if let text = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
                     FullGramAutoResponderSettings.shared.customText = text
                     FullGramAutoResponderSettings.shared.mode = .custom
                     bump()
@@ -5296,8 +5337,9 @@ func fullGramAutoResponderController(context: AccountContext) -> ViewController 
         if let pop = vc.popoverPresentationController {
             pop.sourceView = controller.view
             pop.sourceRect = CGRect(x: controller.view.bounds.midX, y: controller.view.bounds.midY, width: 1.0, height: 1.0)
+            pop.permittedArrowDirections = []
         }
-        controller.view.window?.rootViewController?.present(vc, animated: true)
+        controller.present(vc, animated: true)
     }
     return controller
 }

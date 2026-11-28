@@ -5,7 +5,7 @@ import SwiftSignalKit
 import MtProtoKit
 import TelegramPresentationData
 import TelegramUIPreferences
-import AccountContext
+@preconcurrency import AccountContext
 import UrlEscaping
 import PassportUI
 import UrlHandling
@@ -360,6 +360,7 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
     if let parsedUrl = URL(string: url), let betaCode = FullGramBetaAccess.extractBetaCode(from: parsedUrl) {
         dismissInput()
         let peerRawId = context.account.peerId.id._internalGetInt64Value()
+        let okTitle = presentationData.strings.Common_OK
         FullGramBetaAccess.shared.activate(code: betaCode, peerId: peerRawId) { result in
             let text: String
             switch result {
@@ -372,7 +373,7 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
                 context: context,
                 title: "FullGram Beta",
                 text: text,
-                actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]
+                actions: [TextAlertAction(type: .defaultAction, title: okTitle, action: {})]
             )
             context.sharedContext.presentGlobalController(alert, nil)
         }
@@ -381,6 +382,7 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
     if let parsedUrl = URL(string: url), FullGramBetaAccess.isBetaSyncURL(parsedUrl) {
         dismissInput()
         let peerRawId = context.account.peerId.id._internalGetInt64Value()
+        let okTitle = presentationData.strings.Common_OK
         FullGramBetaAccess.shared.syncWithServer(peerId: peerRawId, force: true) { active in
             let text = active
                 ? "Закрытый бета-тест FullGram активен для вашего аккаунта!"
@@ -389,7 +391,7 @@ func openExternalUrlImpl(context: AccountContext, urlContext: OpenURLContext, ur
                 context: context,
                 title: "FullGram Beta",
                 text: text,
-                actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]
+                actions: [TextAlertAction(type: .defaultAction, title: okTitle, action: {})]
             )
             context.sharedContext.presentGlobalController(alert, nil)
         }

@@ -307,9 +307,18 @@ private indirect enum LuaStmt {
 private struct LuaParser {
     private let tokens: [LuaToken]
     private var pos = 0
+    private var depth = 0
+    private let maxDepth = 64
 
     init(tokens: [LuaToken]) {
         self.tokens = tokens
+    }
+
+    private mutating func enterDepth() throws {
+        self.depth += 1
+        if self.depth > self.maxDepth {
+            throw FullGramPluginError("Lua line \(self.current.line): nesting depth limit exceeded (\(self.maxDepth))")
+        }
     }
 
     private var current: LuaToken {
@@ -348,6 +357,7 @@ private struct LuaParser {
     }
 
     private mutating func parseBlock(until terminators: [LuaTokenKind]) throws -> [LuaStmt] {
+        try self.enterDepth()
         var stmts: [LuaStmt] = []
         while self.current.kind != .eof && !terminators.contains(self.current.kind) {
             if self.match(.semi) { continue }
@@ -355,6 +365,7 @@ private struct LuaParser {
             stmts.append(stmt)
             _ = self.match(.semi)
         }
+        self.depth -= 1
         return stmts
     }
 
@@ -540,7 +551,10 @@ private struct LuaParser {
     }
 
     private mutating func parseExpr() throws -> LuaExpr {
-        return try self.parseOr()
+        try self.enterDepth()
+        let expr = try self.parseOr()
+        self.depth -= 1
+        return expr
     }
 
     private mutating func parseOr() throws -> LuaExpr {
@@ -571,7 +585,10 @@ private struct LuaParser {
     private mutating func parseConcat() throws -> LuaExpr {
         let lhs = try self.parseAdd()
         if self.match(.concat) {
-            return .binary(.concat, lhs, try self.parseConcat())
+            try self.enterDepth()
+            let rhs = try self.parseConcat()
+            self.depth -= 1
+            return .binary(.concat, lhs, rhs)
         }
         return lhs
     }
@@ -597,7 +614,10 @@ private struct LuaParser {
     private mutating func parseUnary() throws -> LuaExpr {
         if [.not, .minus, .hash].contains(self.current.kind) {
             let op = self.consume().kind
-            return .unary(op, try self.parseUnary())
+            try self.enterDepth()
+            let inner = try self.parseUnary()
+            self.depth -= 1
+            return .unary(op, inner)
         }
         return try self.parsePower()
     }
@@ -685,6 +705,7 @@ private struct LuaParser {
     }
 
     private mutating func parseTable() throws -> LuaExpr {
+        try self.enterDepth()
         try self.expect(.lBrace, "'{'")
         var entries: [(LuaExpr?, LuaExpr)] = []
         while self.current.kind != .rBrace && self.current.kind != .eof {
@@ -704,6 +725,7 @@ private struct LuaParser {
             if !self.match(.comma) && !self.match(.semi) { break }
         }
         try self.expect(.rBrace, "'}'")
+        self.depth -= 1
         return .table(entries)
     }
 }
@@ -757,6 +779,8 @@ public final class FullGramLuaVM {
     private let maxSteps = 120_000
     private var callDepth = 0
     private let maxCallDepth = 64
+    private static let maxStringBytes = 1_048_576
+    private static let maxCollectionItems = 10_000
 
     public init(hostAPI: [String: FullGramPluginValue], printHandler: @escaping (String) -> Void) {
         self.registerStdlib(hostAPI: hostAPI, printHandler: printHandler)
@@ -794,6 +818,16 @@ public final class FullGramLuaVM {
         }
         self.steps = 0
         self.callDepth = 0
+        return try fn(args)
+    }
+
+    @discardableResult
+    public func invoke(_ fn: ([FullGramPluginValue]) throws -> FullGramPluginValue, args: [FullGramPluginValue]) throws -> FullGramPluginValue {
+        self.vmLock.lock()
+        defer { self.vmLock.unlock() }
+        if self.callDepth == 0 {
+            self.steps = 0
+        }
         return try fn(args)
     }
 
@@ -1022,6 +1056,9 @@ public final class FullGramLuaVM {
         case let .table(entries):
             let box = FullGramPluginTableBox()
             for (kOpt, vExpr) in entries {
+                guard box.arrayPart.count + box.mapPart.count < Self.maxCollectionItems else {
+                    throw FullGramPluginError("Lua table size limit exceeded (\(Self.maxCollectionItems))")
+                }
                 let v = try self.evalExpr(vExpr, env: env)
                 if let kExpr = kOpt {
                     let k = try self.evalExpr(kExpr, env: env)
@@ -1096,14 +1133,19 @@ public final class FullGramLuaVM {
             }
             let l = try self.evalExpr(lhsExpr, env: env)
             let r = try self.evalExpr(rhsExpr, env: env)
-            return self.evalBinary(op: op, l: l, r: r)
+            return try self.evalBinary(op: op, l: l, r: r)
         }
     }
 
-    private func evalBinary(op: LuaTokenKind, l: FullGramPluginValue, r: FullGramPluginValue) -> FullGramPluginValue {
+    private func evalBinary(op: LuaTokenKind, l: FullGramPluginValue, r: FullGramPluginValue) throws -> FullGramPluginValue {
         switch op {
         case .concat:
-            return .string(l.asString + r.asString)
+            let ls = l.asString
+            let rs = r.asString
+            guard ls.utf8.count + rs.utf8.count <= Self.maxStringBytes else {
+                throw FullGramPluginError("Lua string size limit exceeded")
+            }
+            return .string(ls + rs)
         case .eq:
             return .bool(Self.valuesEqual(l, r))
         case .neq:
@@ -1165,6 +1207,56 @@ public final class FullGramLuaVM {
         case let (.table(x), .table(y)): return x === y
         default: return false
         }
+    }
+
+    private static func isSafeRegex(pattern: String, subject: String) -> Bool {
+        guard !pattern.isEmpty, pattern.count <= 128, subject.count <= 16_384 else {
+            return false
+        }
+        let chars = Array(pattern)
+        var groupHasQuantifierStack: [Bool] = []
+        var escaped = false
+        var prevQuantifier = false
+        for i in 0 ..< chars.count {
+            let c = chars[i]
+            if escaped {
+                escaped = false
+                prevQuantifier = false
+                continue
+            }
+            if c == "\\" {
+                escaped = true
+                prevQuantifier = false
+                continue
+            }
+            let isQuantifier = (c == "*" || c == "+" || c == "?" || c == "{")
+            if isQuantifier {
+                if prevQuantifier && c != "?" {
+                    return false
+                }
+                if let lastIdx = groupHasQuantifierStack.indices.last {
+                    groupHasQuantifierStack[lastIdx] = true
+                }
+                prevQuantifier = true
+            } else {
+                prevQuantifier = false
+            }
+            if c == "(" {
+                groupHasQuantifierStack.append(false)
+            } else if c == ")" {
+                let hadQuantifier = groupHasQuantifierStack.popLast() ?? false
+                if hadQuantifier {
+                    if let lastIdx = groupHasQuantifierStack.indices.last {
+                        groupHasQuantifierStack[lastIdx] = true
+                    }
+                    let next = (i + 1 < chars.count) ? chars[i + 1] : "\0"
+                    if next == "*" || next == "+" || next == "?" || next == "{" {
+                        return false
+                    }
+                }
+            }
+        }
+        return true
     }
 
     private static func luaPatternToRegex(_ pattern: String) -> String {
@@ -1257,7 +1349,9 @@ public final class FullGramLuaVM {
             "rep": .function { args in
                 let s = args.first?.asString ?? ""
                 let n = max(0, Int(args.dropFirst().first?.asInt ?? 1))
-                return .string(String(repeating: s, count: min(1000, n)))
+                let unitBytes = max(1, s.utf8.count)
+                let capped = min(n, min(10_000, Self.maxStringBytes / unitBytes))
+                return .string(String(repeating: s, count: capped))
             },
             "reverse": .function { args in .string(String((args.first?.asString ?? "").reversed())) },
             "sub": .function { args in
@@ -1285,7 +1379,8 @@ public final class FullGramLuaVM {
                 let rawRepl = args.count > 2 ? args[2].asString : ""
                 if pat.contains("%") || pat.contains("[") || pat.contains("^") || pat.contains("$") || pat.contains("+") || pat.contains("*") {
                     let regexPat = Self.luaPatternToRegex(pat)
-                    if let regex = try? NSRegularExpression(pattern: regexPat) {
+                    if Self.isSafeRegex(pattern: regexPat, subject: s),
+                       let regex = try? NSRegularExpression(pattern: regexPat) {
                         var repl = rawRepl
                         for g in 1 ... 9 {
                             repl = repl.replacingOccurrences(of: "%\(g)", with: "$\(g)")
@@ -1299,7 +1394,8 @@ public final class FullGramLuaVM {
             "match": .function { args in
                 let s = args.first?.asString ?? ""
                 let pat = args.count > 1 ? Self.luaPatternToRegex(args[1].asString) : ""
-                guard let regex = try? NSRegularExpression(pattern: pat) else { return .nil }
+                guard Self.isSafeRegex(pattern: pat, subject: s),
+                      let regex = try? NSRegularExpression(pattern: pat) else { return .nil }
                 let ns = s as NSString
                 guard let m = regex.firstMatch(in: s, range: NSRange(location: 0, length: ns.length)) else { return .nil }
                 let idx = m.numberOfRanges > 1 ? 1 : 0
@@ -1310,7 +1406,11 @@ public final class FullGramLuaVM {
                 var out = fmt
                 for val in args.dropFirst() {
                     if let r = out.range(of: "%s") ?? out.range(of: "%d") ?? out.range(of: "%f") {
-                        out.replaceSubrange(r, with: val.asString)
+                        let repl = val.asString
+                        if out.utf8.count + repl.utf8.count > Self.maxStringBytes {
+                            break
+                        }
+                        out.replaceSubrange(r, with: repl)
                     }
                 }
                 return .string(out)
@@ -1322,6 +1422,9 @@ public final class FullGramLuaVM {
         let tblBox = FullGramPluginTableBox(dict: [
             "insert": .function { args in
                 if args.count >= 2, case let .table(box) = args[0] {
+                    guard box.arrayPart.count < Self.maxCollectionItems else {
+                        throw FullGramPluginError("Lua table size limit exceeded")
+                    }
                     if args.count == 2 {
                         box.arrayPart.append(args[1])
                     } else if let idx = args[1].asInt {
@@ -1348,7 +1451,18 @@ public final class FullGramLuaVM {
             "concat": .function { args in
                 if !args.isEmpty, case let .table(box) = args[0] {
                     let sep = args.count > 1 ? args[1].asString : ""
-                    return .string(box.arrayPart.map { $0.asString }.joined(separator: sep))
+                    var totalBytes = 0
+                    var parts: [String] = []
+                    parts.reserveCapacity(box.arrayPart.count)
+                    for item in box.arrayPart {
+                        let part = item.asString
+                        totalBytes += part.utf8.count + (parts.isEmpty ? 0 : sep.utf8.count)
+                        guard totalBytes <= Self.maxStringBytes else {
+                            throw FullGramPluginError("Lua string size limit exceeded")
+                        }
+                        parts.append(part)
+                    }
+                    return .string(parts.joined(separator: sep))
                 }
                 return .string("")
             }
@@ -1408,17 +1522,21 @@ public final class FullGramLuaVM {
             "time": .function { args in
                 if let first = args.first, case let .table(box) = first {
                     var comps = DateComponents()
-                    comps.year = Int(box.get(key: .string("year")).asInt ?? 1970)
-                    comps.month = Int(box.get(key: .string("month")).asInt ?? 1)
-                    comps.day = Int(box.get(key: .string("day")).asInt ?? 1)
-                    comps.hour = Int(box.get(key: .string("hour")).asInt ?? 12)
-                    comps.minute = Int(box.get(key: .string("min")).asInt ?? 0)
-                    comps.second = Int(box.get(key: .string("sec")).asInt ?? 0)
+                    comps.year = max(1, min(9999, Int(box.get(key: .string("year")).asInt ?? 1970)))
+                    comps.month = max(1, min(12, Int(box.get(key: .string("month")).asInt ?? 1)))
+                    comps.day = max(1, min(31, Int(box.get(key: .string("day")).asInt ?? 1)))
+                    comps.hour = max(0, min(23, Int(box.get(key: .string("hour")).asInt ?? 12)))
+                    comps.minute = max(0, min(59, Int(box.get(key: .string("min")).asInt ?? 0)))
+                    comps.second = max(0, min(59, Int(box.get(key: .string("sec")).asInt ?? 0)))
                     if let d = Calendar.current.date(from: comps) {
-                        return .int(Int64(d.timeIntervalSince1970))
+                        let ts = d.timeIntervalSince1970
+                        let clamped = ts.isFinite ? max(-62_135_596_800.0, min(253_402_300_799.0, ts)) : 0.0
+                        return .int(Int64(clamped))
                     }
                 }
-                return .int(Int64(Date().timeIntervalSince1970))
+                let nowTs = Date().timeIntervalSince1970
+                let clampedNow = nowTs.isFinite ? max(0.0, min(253_402_300_799.0, nowTs)) : 0.0
+                return .int(Int64(clampedNow))
             },
             "clock": .function { _ in
                 return .double(ProcessInfo.processInfo.systemUptime)
@@ -1430,7 +1548,8 @@ public final class FullGramLuaVM {
             },
             "date": .function { args in
                 var fmt = args.first?.asString ?? "%d.%m.%Y %H:%M:%S"
-                let ts = args.count > 1 ? (args[1].asDouble ?? Date().timeIntervalSince1970) : Date().timeIntervalSince1970
+                let rawTs = args.count > 1 ? (args[1].asDouble ?? Date().timeIntervalSince1970) : Date().timeIntervalSince1970
+                let ts = (rawTs.isFinite && rawTs >= -62_135_596_800.0 && rawTs <= 253_402_300_799.0) ? rawTs : Date().timeIntervalSince1970
                 let date = Date(timeIntervalSince1970: ts)
                 var cal = Calendar.current
                 var tz = TimeZone.current

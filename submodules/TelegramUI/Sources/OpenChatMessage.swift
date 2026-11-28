@@ -311,8 +311,8 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                         }
                         let fetchDisposable = messageMediaFileInteractiveFetched(context: params.context, message: params.message, file: file, userInitiated: true).startStandalone()
                         let minBytesForPreview: Int64 = isArchive ? 4096 : 0
-                        weak var weakNavigationController = params.navigationController
-                        let _ = (params.context.engine.resources.data(id: EngineMediaResource.Id(file.resource.id))
+                        let navigationController = params.navigationController
+                        let _ = (params.context.engine.resources.data(resource: EngineMediaResource(file.resource), incremental: isArchive)
                         |> filter { data in
                             if isArchive {
                                 return data.isComplete || data.availableSize >= minBytesForPreview
@@ -331,7 +331,7 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                             }
                             return (data.path, shouldStopFetch)
                         }
-                        |> deliverOnMainQueue).startStandalone(next: { path, shouldStopFetch in
+                        |> deliverOnMainQueue).startStandalone(next: { [weak navigationController] path, shouldStopFetch in
                             if shouldStopFetch {
                                 fetchDisposable.dispose()
                             }
@@ -342,7 +342,7 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                             } else {
                                 viewer = FullGramDocumentViewerController(fileURL: fileURL, fileName: resolvedName, canShare: canShare)
                             }
-                            if let navigationController = weakNavigationController {
+                            if let navigationController {
                                 navigationController.pushViewController(viewer)
                             } else {
                                 params.present(viewer, nil, .window(.root))
@@ -361,7 +361,7 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                         params.present(textAlertController(context: params.context, title: "Установить плагин FullGram", text: "Импортировать и включить «\(pluginFileName)»?", actions: [
                             TextAlertAction(type: .defaultAction, title: "Установить", action: {
                                 let _ = messageMediaFileInteractiveFetched(context: params.context, message: params.message, file: file, userInitiated: true).startStandalone()
-                                let _ = (params.context.engine.resources.data(id: EngineMediaResource.Id(file.resource.id))
+                                let _ = (params.context.engine.resources.data(resource: EngineMediaResource(file.resource), incremental: false)
                                 |> filter { $0.isComplete }
                                 |> take(1)
                                 |> deliverOnMainQueue).startStandalone(next: { data in
@@ -377,7 +377,7 @@ func openChatMessageImpl(_ params: OpenChatMessageParams) -> Bool {
                         params.present(textAlertController(context: params.context, title: "Бэкап FullGram", text: "Импортировать настройки и плагины из «\(file.fileName ?? "backup.fullgram")»? Белый список Анти-скама будет сохранён текущим.", actions: [
                             TextAlertAction(type: .defaultAction, title: "Восстановить", action: {
                                 let _ = messageMediaFileInteractiveFetched(context: params.context, message: params.message, file: file, userInitiated: true).startStandalone()
-                                let _ = (params.context.engine.resources.data(id: EngineMediaResource.Id(file.resource.id))
+                                let _ = (params.context.engine.resources.data(resource: EngineMediaResource(file.resource), incremental: false)
                                 |> filter { $0.isComplete }
                                 |> take(1)
                                 |> deliverOnMainQueue).startStandalone(next: { data in

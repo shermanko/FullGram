@@ -2,6 +2,69 @@ import Foundation
 import AVFoundation
 import Speech
 
+private final class FullGramSpeechOnceGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+
+    var isDone: Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.done
+    }
+
+    func enter() -> Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        if self.done { return false }
+        self.done = true
+        return true
+    }
+}
+
+private final class FullGramSpeechTaskBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: SFSpeechRecognitionTask?
+    private var isCancelled = false
+
+    init(_ task: SFSpeechRecognitionTask? = nil) {
+        self.task = task
+    }
+
+    func set(_ task: SFSpeechRecognitionTask?) {
+        self.lock.lock()
+        let cancelled = self.isCancelled
+        if !cancelled {
+            self.task = task
+        }
+        self.lock.unlock()
+        if cancelled {
+            task?.cancel()
+        }
+    }
+
+    func clear() {
+        self.lock.lock()
+        self.task = nil
+        self.lock.unlock()
+    }
+
+    func cancel() {
+        self.lock.lock()
+        self.isCancelled = true
+        let current = self.task
+        self.task = nil
+        self.lock.unlock()
+        current?.cancel()
+    }
+}
+
+private final class FullGramSpeechCallbackBox<T>: @unchecked Sendable {
+    let call: (T) -> Void
+    init(_ call: @escaping (T) -> Void) {
+        self.call = call
+    }
+}
+
 public enum FullGramSpeechBleep {
     private static let fallbackLocales = ["ru-RU", "en-US"]
 
@@ -164,10 +227,59 @@ public enum FullGramSpeechBleep {
         return s
     }
 
+    private final class RecognitionState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var finished = false
+        private var partialRanges: [ClosedRange<TimeInterval>]
+        private var hadAnySegments = false
+
+        init(accumulatedRanges: [ClosedRange<TimeInterval>]) {
+            self.partialRanges = accumulatedRanges
+        }
+
+        func handleResult(
+            isFinal: Bool,
+            extracted: [ClosedRange<TimeInterval>],
+            hasSegments: Bool
+        ) -> (shouldContinue: Bool, finalRanges: [ClosedRange<TimeInterval>], hadSegments: Bool, rawRanges: [ClosedRange<TimeInterval>]) {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            if self.finished {
+                return (false, [], false, [])
+            }
+            if isFinal {
+                if !extracted.isEmpty {
+                    self.partialRanges.append(contentsOf: extracted)
+                }
+                if hasSegments {
+                    self.hadAnySegments = true
+                }
+                self.finished = true
+                let merged = FullGramSpeechBleep.merge(ranges: self.partialRanges)
+                return (true, merged, self.hadAnySegments, self.partialRanges)
+            }
+            return (false, [], self.hadAnySegments, self.partialRanges)
+        }
+
+        func finishWithErrorOrTimeout() -> [ClosedRange<TimeInterval>]? {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            guard !self.finished else { return nil }
+            self.finished = true
+            return FullGramSpeechBleep.merge(ranges: self.partialRanges)
+        }
+
+        func snapshotRawRanges() -> [ClosedRange<TimeInterval>] {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            return self.partialRanges
+        }
+    }
+
     public static func detectProfanityRanges(
         inAudioFileAt url: URL,
         leadOffset: TimeInterval = 0.0,
-        completion: @escaping ([ClosedRange<TimeInterval>]) -> Void
+        completion: @escaping @Sendable ([ClosedRange<TimeInterval>]) -> Void
     ) {
         let authStatus = SFSpeechRecognizer.authorizationStatus()
         if authStatus == .notDetermined {
@@ -190,9 +302,9 @@ public enum FullGramSpeechBleep {
     public static func recognizeSamples(
         _ samples: [Int16],
         sampleRate: Double = 16000.0,
-        completion: @escaping ([ClosedRange<TimeInterval>]) -> Void
+        completion: @escaping @Sendable ([ClosedRange<TimeInterval>]) -> Void
     ) {
-        guard !samples.isEmpty, sampleRate > 0.0 else {
+        guard !samples.isEmpty, sampleRate.isFinite, sampleRate > 0.0 else {
             completion([])
             return
         }
@@ -278,7 +390,7 @@ public enum FullGramSpeechBleep {
         attemptIndex: Int,
         leadOffset: TimeInterval,
         accumulatedRanges: [ClosedRange<TimeInterval>],
-        completion: @escaping ([ClosedRange<TimeInterval>]) -> Void
+        completion: @escaping @Sendable ([ClosedRange<TimeInterval>]) -> Void
     ) {
         let attempts = buildAttempts()
         guard attemptIndex < attempts.count else {
@@ -307,64 +419,46 @@ public enum FullGramSpeechBleep {
             request.requiresOnDeviceRecognition = true
         }
 
-        let lock = NSLock()
-        var finished = false
-        var partialRanges: [ClosedRange<TimeInterval>] = accumulatedRanges
-        var hadAnySegments = false
+        let state = RecognitionState(accumulatedRanges: accumulatedRanges)
+        let taskBox = FullGramSpeechTaskBox()
 
         let task = recognizer.recognitionTask(with: request) { result, error in
-            lock.lock()
-            if finished {
-                lock.unlock()
-                return
-            }
-
             if let result, result.isFinal {
                 let extracted = extractProfanityRanges(from: result, leadOffset: leadOffset)
-                if !extracted.isEmpty {
-                    partialRanges.append(contentsOf: extracted)
-                }
-                if !result.bestTranscription.segments.isEmpty {
-                    hadAnySegments = true
-                }
-                finished = true
-                let finalRanges = merge(ranges: partialRanges)
-                lock.unlock()
-                if !finalRanges.isEmpty {
-                    completion(finalRanges)
-                } else if !hadAnySegments && attemptIndex + 1 < attempts.count {
-                    performRecognition(url: url, attemptIndex: attemptIndex + 1, leadOffset: leadOffset, accumulatedRanges: partialRanges, completion: completion)
+                let outcome = state.handleResult(
+                    isFinal: true,
+                    extracted: extracted,
+                    hasSegments: !result.bestTranscription.segments.isEmpty
+                )
+                guard outcome.shouldContinue else { return }
+                taskBox.clear()
+                if !outcome.finalRanges.isEmpty {
+                    completion(outcome.finalRanges)
+                } else if !outcome.hadSegments && attemptIndex + 1 < attempts.count {
+                    performRecognition(url: url, attemptIndex: attemptIndex + 1, leadOffset: leadOffset, accumulatedRanges: outcome.rawRanges, completion: completion)
                 } else {
-                    completion(finalRanges)
+                    completion(outcome.finalRanges)
                 }
                 return
             }
 
             if error != nil {
-                finished = true
-                let collected = merge(ranges: partialRanges)
-                lock.unlock()
+                guard let collected = state.finishWithErrorOrTimeout() else { return }
+                taskBox.clear()
                 if !collected.isEmpty {
                     completion(collected)
                 } else {
-                    performRecognition(url: url, attemptIndex: attemptIndex + 1, leadOffset: leadOffset, accumulatedRanges: partialRanges, completion: completion)
+                    performRecognition(url: url, attemptIndex: attemptIndex + 1, leadOffset: leadOffset, accumulatedRanges: state.snapshotRawRanges(), completion: completion)
                 }
                 return
             }
-            lock.unlock()
         }
+        taskBox.set(task)
 
         // Safety watchdog so a hung recognition task never stalls voice testing or sending
         DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 5.5) {
-            lock.lock()
-            guard !finished else {
-                lock.unlock()
-                return
-            }
-            finished = true
-            let collected = merge(ranges: partialRanges)
-            lock.unlock()
-            task.cancel()
+            guard let collected = state.finishWithErrorOrTimeout() else { return }
+            taskBox.cancel()
             completion(collected)
         }
     }
@@ -630,18 +724,19 @@ public enum FullGramSpeechBleep {
     }
 
     public static func processAudioOrVideoFile(inputURL: URL, outputURL: URL, sound: FullGramBleepSound, completion: @escaping (Bool) -> Void) {
+        let completionBox = FullGramSpeechCallbackBox(completion)
         guard sound != .off else {
-            completion(false)
+            completionBox.call(false)
             return
         }
         detectProfanityRanges(inAudioFileAt: inputURL) { ranges in
             guard !ranges.isEmpty else {
-                completion(false)
+                completionBox.call(false)
                 return
             }
             let asset = AVURLAsset(url: inputURL)
             guard let audioTrack = asset.tracks(withMediaType: .audio).first else {
-                completion(false)
+                completionBox.call(false)
                 return
             }
             let built = try? buildBleepComposition(asset: asset, audioTrack: audioTrack, ranges: ranges, sound: sound)
@@ -660,7 +755,7 @@ public enum FullGramSpeechBleep {
                     fallbackParams.setVolumeRamp(fromStartVolume: 0.0, toEndVolume: 1.0, timeRange: CMTimeRange(start: end, duration: CMTime(seconds: 0.02, preferredTimescale: 600)))
                 }
                 fallbackMix.inputParameters = [fallbackParams]
-                exportWithMixOnly(asset: asset, mix: fallbackMix, outputURL: outputURL, completion: completion)
+                exportWithMixOnly(asset: asset, mix: fallbackMix, outputURL: outputURL, completion: completionBox.call)
                 return
             }
 
@@ -684,12 +779,12 @@ public enum FullGramSpeechBleep {
                 if let tempBleepURL {
                     try? FileManager.default.removeItem(at: tempBleepURL)
                 }
-                completion(exporter.status == .completed)
+                completionBox.call(exporter.status == .completed)
             }
         }
     }
 
-    private static func exportWithMixOnly(asset: AVAsset, mix: AVAudioMix, outputURL: URL, completion: @escaping (Bool) -> Void) {
+    private static func exportWithMixOnly(asset: AVAsset, mix: AVAudioMix, outputURL: URL, completion: @escaping @Sendable (Bool) -> Void) {
         guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
             completion(false)
             return
@@ -771,18 +866,20 @@ public enum FullGramSpeechBleep {
         defaultExtension: String = "m4a",
         completion: @escaping (String?) -> Void
     ) {
-        let performWithAuth = {
+        let completionBox = FullGramSpeechCallbackBox(completion)
+        let performWithAuth: @Sendable () -> Void = {
             let srcURL = URL(fileURLWithPath: path)
             guard FileManager.default.fileExists(atPath: path) else {
-                completion(nil)
+                completionBox.call(nil)
                 return
             }
             let supportedExts = ["m4a", "mp4", "mov", "wav", "caf", "mp3", "aac"]
             let ext = srcURL.pathExtension.lowercased()
             let workingURL: URL
-            var shouldCleanup = false
+            let shouldCleanup: Bool
             if supportedExts.contains(ext) {
                 workingURL = srcURL
+                shouldCleanup = false
             } else {
                 let tmpURL = FileManager.default.temporaryDirectory
                     .appendingPathComponent("fullgram_stt_\(UUID().uuidString).\(defaultExtension)")
@@ -791,22 +888,32 @@ public enum FullGramSpeechBleep {
                     workingURL = tmpURL
                     shouldCleanup = true
                 } catch {
-                    completion(nil)
+                    completionBox.call(nil)
                     return
                 }
             }
 
-            var candidates: [String] = []
+            var candidatesList: [String] = []
             for raw in [preferredLanguage, Locale.current.identifier, "ru-RU", "en-US"] {
-                if let id = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty, !candidates.contains(id) {
-                    candidates.append(id)
+                if let id = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty, !candidatesList.contains(id) {
+                    candidatesList.append(id)
                 }
             }
+            let candidates = candidatesList
 
+            let gate = FullGramSpeechOnceGate()
+            let taskBox = FullGramSpeechTaskBox()
+            let finishFailure: @Sendable () -> Void = {
+                guard gate.enter() else { return }
+                taskBox.cancel()
+                if shouldCleanup { try? FileManager.default.removeItem(at: workingURL) }
+                completionBox.call(nil)
+            }
+
+            @Sendable
             func attempt(index: Int) {
-                guard index < candidates.count else {
-                    if shouldCleanup { try? FileManager.default.removeItem(at: workingURL) }
-                    completion(nil)
+                guard !gate.isDone, index < candidates.count else {
+                    finishFailure()
                     return
                 }
                 guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: candidates[index])), recognizer.isAvailable else {
@@ -820,25 +927,32 @@ public enum FullGramSpeechBleep {
                     request.addsPunctuation = true
                 }
 
-                var handled = false
-                recognizer.recognitionTask(with: request) { result, error in
-                    guard !handled else { return }
+                let attemptGate = FullGramSpeechOnceGate()
+                let task = recognizer.recognitionTask(with: request) { result, error in
                     if let result, result.isFinal {
-                        handled = true
+                        guard attemptGate.enter() else { return }
                         let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !text.isEmpty {
+                            guard gate.enter() else { return }
+                            taskBox.clear()
                             if shouldCleanup { try? FileManager.default.removeItem(at: workingURL) }
-                            formatTranscriptionWithSummary(text: text, mode: FullGramVoiceSummaryMode.current, completion: completion)
+                            formatTranscriptionWithSummary(text: text, mode: FullGramVoiceSummaryMode.current) { summary in
+                                completionBox.call(summary)
+                            }
                         } else {
                             attempt(index: index + 1)
                         }
                     } else if error != nil {
-                        handled = true
+                        guard attemptGate.enter() else { return }
                         attempt(index: index + 1)
                     }
                 }
+                taskBox.set(task)
             }
 
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 25.0) {
+                finishFailure()
+            }
             attempt(index: 0)
         }
 
@@ -848,13 +962,13 @@ public enum FullGramSpeechBleep {
                 if newStatus == .authorized {
                     performWithAuth()
                 } else {
-                    completion(nil)
+                    completionBox.call(nil)
                 }
             }
         } else if status == .authorized {
             performWithAuth()
         } else {
-            completion(nil)
+            completionBox.call(nil)
         }
     }
 
@@ -927,7 +1041,7 @@ public enum FullGramSpeechBleep {
         sampleRate: Double = 48000.0,
         completion: @escaping @Sendable (String?) -> Void
     ) {
-        guard !samples.isEmpty, sampleRate > 0.0 else {
+        guard !samples.isEmpty, sampleRate.isFinite, sampleRate > 0.0 else {
             completion(nil)
             return
         }
@@ -970,30 +1084,14 @@ public enum FullGramSpeechBleep {
             request.append(buffer)
             request.endAudio()
 
-            final class OnceGate: @unchecked Sendable {
-                private let lock = NSLock()
-                private var done = false
-                func enter() -> Bool {
-                    self.lock.lock()
-                    defer { self.lock.unlock() }
-                    if self.done { return false }
-                    self.done = true
-                    return true
-                }
-            }
-            final class TaskBox: @unchecked Sendable {
-                let task: SFSpeechRecognitionTask
-                init(_ task: SFSpeechRecognitionTask) { self.task = task }
-            }
-
-            let gate = OnceGate()
+            let gate = FullGramSpeechOnceGate()
             let finish: @Sendable (String?) -> Void = { text in
                 guard gate.enter() else { return }
                 let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
                 completion((trimmed?.isEmpty == false) ? trimmed : nil)
             }
 
-            let taskBox = TaskBox(recognizer.recognitionTask(with: request) { result, error in
+            let taskBox = FullGramSpeechTaskBox(recognizer.recognitionTask(with: request) { result, error in
                 if let result, result.isFinal {
                     finish(result.bestTranscription.formattedString)
                 } else if error != nil {
@@ -1001,7 +1099,7 @@ public enum FullGramSpeechBleep {
                 }
             })
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 10.0) {
-                taskBox.task.cancel()
+                taskBox.cancel()
                 finish(nil)
             }
         }
@@ -1048,7 +1146,7 @@ public extension FullGramSpeechBleep {
         }
         self.subtitleLock.unlock()
 
-        let startRecognition = {
+        let startRecognition: @Sendable () -> Void = {
             let srcURL = URL(fileURLWithPath: path)
             guard FileManager.default.fileExists(atPath: path) else {
                 DispatchQueue.main.async { completion([]) }
@@ -1057,9 +1155,10 @@ public extension FullGramSpeechBleep {
             let supportedExts = ["m4a", "mp4", "mov", "wav", "caf", "mp3", "aac"]
             let ext = srcURL.pathExtension.lowercased()
             let workingURL: URL
-            var shouldCleanup = false
+            let shouldCleanup: Bool
             if supportedExts.contains(ext) {
                 workingURL = srcURL
+                shouldCleanup = false
             } else {
                 let tmpURL = FileManager.default.temporaryDirectory
                     .appendingPathComponent("fullgram_sub_\(UUID().uuidString).\(defaultExtension)")
@@ -1073,15 +1172,21 @@ public extension FullGramSpeechBleep {
                 }
             }
 
-            let assetDuration = max(1.0, CMTimeGetSeconds(AVURLAsset(url: workingURL).duration))
-            var candidates: [String] = []
+            let rawDuration = CMTimeGetSeconds(AVURLAsset(url: workingURL).duration)
+            let assetDuration = (rawDuration.isFinite && rawDuration > 0.0) ? max(1.0, rawDuration) : 1.0
+            var candidatesList: [String] = []
             for raw in [preferredLanguage, Locale.current.identifier, "ru-RU", "en-US"] {
-                if let id = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty, !candidates.contains(id) {
-                    candidates.append(id)
+                if let id = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty, !candidatesList.contains(id) {
+                    candidatesList.append(id)
                 }
             }
+            let candidates = candidatesList
 
-            func finishCues(_ cues: [FullGramSubtitleCue]) {
+            let gate = FullGramSpeechOnceGate()
+            let taskBox = FullGramSpeechTaskBox()
+            let finishCues: @Sendable ([FullGramSubtitleCue]) -> Void = { cues in
+                guard gate.enter() else { return }
+                taskBox.cancel()
                 if shouldCleanup { try? FileManager.default.removeItem(at: workingURL) }
                 if !cues.isEmpty {
                     self.subtitleLock.lock()
@@ -1094,8 +1199,9 @@ public extension FullGramSpeechBleep {
                 DispatchQueue.main.async { completion(cues) }
             }
 
+            @Sendable
             func attempt(index: Int) {
-                guard index < candidates.count else {
+                guard !gate.isDone, index < candidates.count else {
                     finishCues([])
                     return
                 }
@@ -1109,11 +1215,10 @@ public extension FullGramSpeechBleep {
                 if #available(iOS 16.0, *) {
                     request.addsPunctuation = true
                 }
-                var handled = false
-                recognizer.recognitionTask(with: request) { result, error in
-                    guard !handled else { return }
+                let attemptGate = FullGramSpeechOnceGate()
+                let task = recognizer.recognitionTask(with: request) { result, error in
                     if let result, result.isFinal {
-                        handled = true
+                        guard attemptGate.enter() else { return }
                         let segs = result.bestTranscription.segments
                         let full = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
                         let built = Self.buildSubtitleCues(segments: segs, fallbackText: full, duration: assetDuration)
@@ -1123,12 +1228,16 @@ public extension FullGramSpeechBleep {
                             attempt(index: index + 1)
                         }
                     } else if error != nil {
-                        handled = true
+                        guard attemptGate.enter() else { return }
                         attempt(index: index + 1)
                     }
                 }
+                taskBox.set(task)
             }
 
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 25.0) {
+                finishCues([])
+            }
             attempt(index: 0)
         }
 

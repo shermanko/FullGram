@@ -356,73 +356,84 @@ public final class FullGramVoiceDSP {
     }
 
     public static func readWAV16Mono(from url: URL) -> (samples: [Int16], sampleRate: Double)? {
+        let maxWAVBytes = 32 * 1024 * 1024
+        if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize), size > maxWAVBytes {
+            return nil
+        }
         // 1. Fast & exact RIFF/WAVE chunk parser (handles FLLR/JUNK/LIST padding chunks from AVAudioRecorder)
-        if let raw = try? Data(contentsOf: url), raw.count > 44 {
-            if raw[0] == 0x52, raw[1] == 0x49, raw[2] == 0x46, raw[3] == 0x46,
-               raw[8] == 0x57, raw[9] == 0x41, raw[10] == 0x56, raw[11] == 0x45 {
-                var offset = 12
-                var audioFormat: UInt16 = 1
-                var channels: UInt16 = 1
-                var sampleRate: UInt32 = 16000
-                var bitsPerSample: UInt16 = 16
+        if let handle = try? FileHandle(forReadingFrom: url) {
+            defer { try? handle.close() }
+            if let raw = try? handle.read(upToCount: maxWAVBytes + 1) {
+                if raw.count > maxWAVBytes {
+                    return nil
+                }
+                if raw.count > 44,
+                   raw[0] == 0x52, raw[1] == 0x49, raw[2] == 0x46, raw[3] == 0x46,
+                   raw[8] == 0x57, raw[9] == 0x41, raw[10] == 0x56, raw[11] == 0x45 {
+                    var offset = 12
+                    var audioFormat: UInt16 = 1
+                    var channels: UInt16 = 1
+                    var sampleRate: UInt32 = 16000
+                    var bitsPerSample: UInt16 = 16
 
-                while offset + 8 <= raw.count {
-                    let c0 = raw[offset]
-                    let c1 = raw[offset + 1]
-                    let c2 = raw[offset + 2]
-                    let c3 = raw[offset + 3]
-                    let chunkSize = Int(readUInt32LE(raw, offset + 4))
-                    let bodyStart = offset + 8
-                    guard chunkSize >= 0, bodyStart <= raw.count else { break }
-                    let bodyEnd = min(raw.count, bodyStart + chunkSize)
+                    while offset + 8 <= raw.count {
+                        let c0 = raw[offset]
+                        let c1 = raw[offset + 1]
+                        let c2 = raw[offset + 2]
+                        let c3 = raw[offset + 3]
+                        let chunkSize = Int(readUInt32LE(raw, offset + 4))
+                        let bodyStart = offset + 8
+                        guard chunkSize >= 0, bodyStart <= raw.count else { break }
+                        let bodyEnd = min(raw.count, bodyStart + chunkSize)
 
-                    if c0 == 0x66 && c1 == 0x6D && c2 == 0x74 && c3 == 0x20 && bodyEnd - bodyStart >= 16 {
-                        audioFormat = readUInt16LE(raw, bodyStart)
-                        channels = max(1, readUInt16LE(raw, bodyStart + 2))
-                        sampleRate = min(384_000, max(8000, readUInt32LE(raw, bodyStart + 4)))
-                        bitsPerSample = readUInt16LE(raw, bodyStart + 14)
-                    } else if c0 == 0x64 && c1 == 0x61 && c2 == 0x74 && c3 == 0x61 {
-                        let byteLen = bodyEnd - bodyStart
-                        let ch = Int(channels)
-                        if audioFormat == 1 && bitsPerSample == 16 && byteLen >= 2 * ch {
-                            let frameCount = byteLen / (2 * ch)
-                            var out = [Int16](repeating: 0, count: frameCount)
-                            for f in 0 ..< frameCount {
-                                var sum = 0
-                                for c in 0 ..< ch {
-                                    let samplePos = bodyStart + (f * ch + c) * 2
-                                    let u = readUInt16LE(raw, samplePos)
-                                    sum += Int(Int16(bitPattern: u))
-                                }
-                                out[f] = Int16(max(-32768, min(32767, sum / ch)))
-                            }
-                            if !out.isEmpty {
-                                return (out, Double(sampleRate))
-                            }
-                        } else if audioFormat == 3 && bitsPerSample == 32 && byteLen >= 4 * ch {
-                            let frameCount = byteLen / (4 * ch)
-                            var out = [Int16](repeating: 0, count: frameCount)
-                            for f in 0 ..< frameCount {
-                                var sum: Float = 0.0
-                                for c in 0 ..< ch {
-                                    let samplePos = bodyStart + (f * ch + c) * 4
-                                    let bits = readUInt32LE(raw, samplePos)
-                                    let val = Float(bitPattern: bits)
-                                    if val.isFinite {
-                                        sum += val
+                        if c0 == 0x66 && c1 == 0x6D && c2 == 0x74 && c3 == 0x20 && bodyEnd - bodyStart >= 16 {
+                            audioFormat = readUInt16LE(raw, bodyStart)
+                            channels = max(1, readUInt16LE(raw, bodyStart + 2))
+                            sampleRate = min(384_000, max(8000, readUInt32LE(raw, bodyStart + 4)))
+                            bitsPerSample = readUInt16LE(raw, bodyStart + 14)
+                        } else if c0 == 0x64 && c1 == 0x61 && c2 == 0x74 && c3 == 0x61 {
+                            let byteLen = bodyEnd - bodyStart
+                            let ch = Int(channels)
+                            if audioFormat == 1 && bitsPerSample == 16 && byteLen >= 2 * ch {
+                                let frameCount = byteLen / (2 * ch)
+                                var out = [Int16](repeating: 0, count: frameCount)
+                                for f in 0 ..< frameCount {
+                                    var sum = 0
+                                    for c in 0 ..< ch {
+                                        let samplePos = bodyStart + (f * ch + c) * 2
+                                        let u = readUInt16LE(raw, samplePos)
+                                        sum += Int(Int16(bitPattern: u))
                                     }
+                                    out[f] = Int16(max(-32768, min(32767, sum / ch)))
                                 }
-                                let avg = Double(sum) / Double(ch)
-                                out[f] = Int16(max(-32767.0, min(32767.0, avg * 32767.0)))
-                            }
-                            if !out.isEmpty {
-                                return (out, Double(sampleRate))
+                                if !out.isEmpty {
+                                    return (out, Double(sampleRate))
+                                }
+                            } else if audioFormat == 3 && bitsPerSample == 32 && byteLen >= 4 * ch {
+                                let frameCount = byteLen / (4 * ch)
+                                var out = [Int16](repeating: 0, count: frameCount)
+                                for f in 0 ..< frameCount {
+                                    var sum: Float = 0.0
+                                    for c in 0 ..< ch {
+                                        let samplePos = bodyStart + (f * ch + c) * 4
+                                        let bits = readUInt32LE(raw, samplePos)
+                                        let val = Float(bitPattern: bits)
+                                        if val.isFinite {
+                                            sum += val
+                                        }
+                                    }
+                                    let avg = Double(sum) / Double(ch)
+                                    out[f] = Int16(max(-32767.0, min(32767.0, avg * 32767.0)))
+                                }
+                                if !out.isEmpty {
+                                    return (out, Double(sampleRate))
+                                }
                             }
                         }
-                    }
 
-                    let paddedSize = chunkSize + (chunkSize & 1)
-                    offset = bodyStart + paddedSize
+                        let paddedSize = chunkSize + (chunkSize & 1)
+                        offset = bodyStart + paddedSize
+                    }
                 }
             }
         }
@@ -483,8 +494,8 @@ public final class FullGramVoiceDSP {
 }
 
 /// Records up to 3 seconds from microphone and plays back processed voice + noise reduction + bleep sound.
-public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
-    public enum State: Equatable {
+public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate, @unchecked Sendable {
+    public enum State: Equatable, Sendable {
         case idle
         case recording(remainingSeconds: Int)
         case processing
@@ -512,7 +523,14 @@ public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
     private let recordingSampleRate: Double = 48000.0
 
     deinit {
-        self.stop()
+        self.countdownTimer?.invalidate()
+        self.countdownTimer = nil
+        self.recorder?.stop()
+        self.recorder = nil
+        self.player?.delegate = nil
+        self.player?.stop()
+        self.player = nil
+        self.cleanupFiles()
     }
 
     public func toggleTest() {
@@ -632,10 +650,9 @@ public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
         let capturedToken = self.sessionToken
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self else { return }
             guard let loaded = FullGramVoiceDSP.readWAV16Mono(from: rawURL), !loaded.samples.isEmpty else {
                 DispatchQueue.main.async {
-                    guard self.sessionToken == capturedToken else { return }
+                    guard let self, self.sessionToken == capturedToken else { return }
                     self.cleanupFiles()
                     self.state = .error("Пустая запись")
                 }
@@ -644,18 +661,18 @@ public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
             let samples = loaded.samples
             let sampleRate = loaded.sampleRate
 
-            let finalizeAndPlay: ([Int16]) -> Void = { finalSamples in
+            let finalizeAndPlay: @Sendable ([Int16]) -> Void = { [weak self] finalSamples in
                 let outURL = FileManager.default.temporaryDirectory.appendingPathComponent("fg_voice_test_out_\(UUID().uuidString).wav")
                 guard FullGramVoiceDSP.writeWAV16Mono(samples: finalSamples, sampleRate: Int(sampleRate.rounded()), to: outURL) else {
                     DispatchQueue.main.async {
-                        guard self.sessionToken == capturedToken else { return }
+                        guard let self, self.sessionToken == capturedToken else { return }
                         self.cleanupFiles()
                         self.state = .error("Не удалось сохранить тест")
                     }
                     return
                 }
                 DispatchQueue.main.async {
-                    guard self.sessionToken == capturedToken else {
+                    guard let self, self.sessionToken == capturedToken else {
                         try? FileManager.default.removeItem(at: outURL)
                         return
                     }
@@ -740,7 +757,7 @@ public final class FullGramVoiceTester: NSObject, AVAudioPlayerDelegate {
 }
 
 /// Records a 1.5-second custom bleep sound from microphone and saves it into `FullGramCustomBleepStore`.
-public final class FullGramCustomBleepRecorder: NSObject {
+public final class FullGramCustomBleepRecorder: NSObject, @unchecked Sendable {
     public private(set) var isRecording: Bool = false {
         didSet {
             DispatchQueue.main.async { [weak self] in

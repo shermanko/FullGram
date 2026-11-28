@@ -392,9 +392,18 @@ private indirect enum RsStmt {
 private struct RsParser {
     private let tokens: [RsToken]
     private var idx = 0
+    private var depth = 0
+    private let maxDepth = 64
 
     init(tokens: [RsToken]) {
         self.tokens = tokens
+    }
+
+    private mutating func enterDepth() throws {
+        self.depth += 1
+        if self.depth > self.maxDepth {
+            throw FullGramPluginError("Rust nesting depth limit exceeded (\(self.maxDepth)) at line \(self.current.line)")
+        }
     }
 
     private var current: RsToken { self.tokens[min(self.idx, self.tokens.count - 1)] }
@@ -460,6 +469,8 @@ private struct RsParser {
     }
 
     private mutating func parseTopLevelOrStmt() throws -> RsStmt? {
+        try self.enterDepth()
+        defer { self.depth -= 1 }
         _ = self.match(.pub)
         if self.match(.use) {
             while !self.check(.semi) && !self.check(.eof) { self.advance() }
@@ -621,6 +632,8 @@ private struct RsParser {
     }
 
     private mutating func parseBlockContents() throws -> ([RsStmt], RsExpr?) {
+        try self.enterDepth()
+        defer { self.depth -= 1 }
         try self.expect(.lBrace, "Expected '{'")
         var stmts: [RsStmt] = []
         var tailExpr: RsExpr? = nil
@@ -671,6 +684,8 @@ private struct RsParser {
     }
 
     private mutating func parseExpr(allowStructLit: Bool = true) throws -> RsExpr {
+        try self.enterDepth()
+        defer { self.depth -= 1 }
         return try self.parseRange(allowStructLit: allowStructLit)
     }
 
@@ -755,13 +770,25 @@ private struct RsParser {
     }
 
     private mutating func parseUnary(allowStructLit: Bool) throws -> RsExpr {
-        if self.match(.bang) { return .unary("!", try self.parseUnary(allowStructLit: allowStructLit)) }
-        if self.match(.minus) { return .unary("-", try self.parseUnary(allowStructLit: allowStructLit)) }
+        if self.match(.bang) {
+            try self.enterDepth()
+            defer { self.depth -= 1 }
+            return .unary("!", try self.parseUnary(allowStructLit: allowStructLit))
+        }
+        if self.match(.minus) {
+            try self.enterDepth()
+            defer { self.depth -= 1 }
+            return .unary("-", try self.parseUnary(allowStructLit: allowStructLit))
+        }
         if self.match(.amp) {
             _ = self.match(.mut)
+            try self.enterDepth()
+            defer { self.depth -= 1 }
             return try self.parseUnary(allowStructLit: allowStructLit)
         }
         if self.match(.star) {
+            try self.enterDepth()
+            defer { self.depth -= 1 }
             return try self.parseUnary(allowStructLit: allowStructLit)
         }
         return try self.parsePostfix(allowStructLit: allowStructLit)
@@ -812,6 +839,8 @@ private struct RsParser {
     }
 
     private mutating func parsePrimary(allowStructLit: Bool) throws -> RsExpr {
+        try self.enterDepth()
+        defer { self.depth -= 1 }
         switch self.current.kind {
         case .true: self.advance(); return .boolLit(true)
         case .false: self.advance(); return .boolLit(false)
@@ -976,6 +1005,8 @@ public final class FullGramRustVM {
     private let maxSteps = 120_000
     private var callDepth = 0
     private let maxCallDepth = 64
+    private static let maxStringBytes = 1_048_576
+    private static let maxCollectionItems = 10_000
 
     public init(hostAPI: [String: FullGramPluginValue], printHandler: @escaping (String) -> Void) {
         self.registerBuiltins(hostAPI: hostAPI, printHandler: printHandler)
@@ -1013,6 +1044,16 @@ public final class FullGramRustVM {
         }
         self.steps = 0
         self.callDepth = 0
+        return try fn(args)
+    }
+
+    @discardableResult
+    public func invoke(_ fn: ([FullGramPluginValue]) throws -> FullGramPluginValue, args: [FullGramPluginValue]) throws -> FullGramPluginValue {
+        self.vmLock.lock()
+        defer { self.vmLock.unlock() }
+        if self.callDepth == 0 {
+            self.steps = 0
+        }
         return try fn(args)
     }
 
@@ -1054,17 +1095,17 @@ public final class FullGramRustVM {
             return .nil
         })
         self.globalEnv.define("println!", .function { args in
-            let text = Self.formatMacro(args)
+            let text = try Self.formatMacro(args)
             printHandler(text)
             return .nil
         })
         self.globalEnv.define("eprintln!", .function { args in
-            let text = Self.formatMacro(args)
+            let text = try Self.formatMacro(args)
             printHandler(text)
             return .nil
         })
         self.globalEnv.define("format!", .function { args in
-            return .string(Self.formatMacro(args))
+            return .string(try Self.formatMacro(args))
         })
         self.globalEnv.define("len", .function { args in
             guard let v = args.first else { return .int(0) }
@@ -1098,17 +1139,32 @@ public final class FullGramRustVM {
         self.globalEnv.define("HashMap", .table(mapNS))
     }
 
-    private static func formatMacro(_ args: [FullGramPluginValue]) -> String {
+    private static func formatMacro(_ args: [FullGramPluginValue]) throws -> String {
         guard let first = args.first else { return "" }
         let template = first.asString
+        guard template.utf8.count <= Self.maxStringBytes else {
+            throw FullGramPluginError("Rust string size limit exceeded")
+        }
         var out = template
         for arg in args.dropFirst() {
+            let argStr = arg.asString
             if let range = out.range(of: "{}") {
-                out.replaceSubrange(range, with: arg.asString)
+                let replacedBytes = out[range].utf8.count
+                guard out.utf8.count - replacedBytes + argStr.utf8.count <= Self.maxStringBytes else {
+                    throw FullGramPluginError("Rust string size limit exceeded")
+                }
+                out.replaceSubrange(range, with: argStr)
             } else if let range = out.range(of: "{:?}") {
-                out.replaceSubrange(range, with: arg.asString)
+                let replacedBytes = out[range].utf8.count
+                guard out.utf8.count - replacedBytes + argStr.utf8.count <= Self.maxStringBytes else {
+                    throw FullGramPluginError("Rust string size limit exceeded")
+                }
+                out.replaceSubrange(range, with: argStr)
             } else {
-                out += " " + arg.asString
+                guard out.utf8.count + 1 + argStr.utf8.count <= Self.maxStringBytes else {
+                    throw FullGramPluginError("Rust string size limit exceeded")
+                }
+                out += " " + argStr
             }
         }
         return out
@@ -1209,11 +1265,17 @@ public final class FullGramRustVM {
     }
 
     private func performAssign(target: RsExpr, op: String, rhs: FullGramPluginValue, env: RsEnv) throws {
-        func combine(_ cur: FullGramPluginValue, _ op: String, _ rhs: FullGramPluginValue) -> FullGramPluginValue {
+        func combine(_ cur: FullGramPluginValue, _ op: String, _ rhs: FullGramPluginValue) throws -> FullGramPluginValue {
             switch op {
             case "=": return rhs
             case "+=":
-                if case let .string(a) = cur { return .string(a + rhs.asString) }
+                if case let .string(a) = cur {
+                    let b = rhs.asString
+                    guard a.utf8.count + b.utf8.count <= Self.maxStringBytes else {
+                        throw FullGramPluginError("Rust string size limit exceeded")
+                    }
+                    return .string(a + b)
+                }
                 if case .int = cur, case .int = rhs { return .int((cur.asInt ?? 0) &+ (rhs.asInt ?? 0)) }
                 return .double((cur.asDouble ?? 0.0) + (rhs.asDouble ?? 0.0))
             case "-=":
@@ -1231,11 +1293,11 @@ public final class FullGramRustVM {
         switch target {
         case let .ident(name):
             let cur = env.get(name) ?? .nil
-            env.assign(name, combine(cur, op, rhs))
+            env.assign(name, try combine(cur, op, rhs))
         case let .member(objExpr, key):
             if case let .table(box) = try self.eval(objExpr, env: env) {
                 let cur = box.get(key: .string(key))
-                box.set(key: .string(key), value: combine(cur, op, rhs))
+                box.set(key: .string(key), value: try combine(cur, op, rhs))
             }
         case let .index(objExpr, keyExpr):
             let obj = try self.eval(objExpr, env: env)
@@ -1245,14 +1307,14 @@ public final class FullGramRustVM {
                     if i >= 0 && i < Int64(box.arrayPart.count) {
                         let idx = Int(i)
                         let cur = box.arrayPart[idx]
-                        box.arrayPart[idx] = combine(cur, op, rhs)
+                        box.arrayPart[idx] = try combine(cur, op, rhs)
                     } else if box.arrayPart.isEmpty {
                         let cur = box.get(key: key)
-                        box.set(key: key, value: combine(cur, op, rhs))
+                        box.set(key: key, value: try combine(cur, op, rhs))
                     }
                 } else {
                     let cur = box.get(key: key)
-                    box.set(key: key, value: combine(cur, op, rhs))
+                    box.set(key: key, value: try combine(cur, op, rhs))
                 }
             }
         default:
@@ -1285,9 +1347,15 @@ public final class FullGramRustVM {
         case let .ident(name):
             return env.get(name) ?? .nil
         case let .arrayLit(items):
+            guard items.count <= Self.maxCollectionItems else {
+                throw FullGramPluginError("Rust array size limit exceeded")
+            }
             let vals = try items.map { try self.eval($0, env: env) }
             return .table(FullGramPluginTableBox(array: vals))
         case let .structLit(_, fields):
+            guard fields.count <= Self.maxCollectionItems else {
+                throw FullGramPluginError("Rust struct field limit exceeded")
+            }
             var dict: [String: FullGramPluginValue] = [:]
             for (k, v) in fields {
                 dict[k] = try self.eval(v, env: env)
@@ -1358,7 +1426,13 @@ public final class FullGramRustVM {
             let r = try self.eval(rhsExpr, env: env)
             switch op {
             case "+":
-                if case let .string(a) = l { return .string(a + r.asString) }
+                if case let .string(a) = l {
+                    let b = r.asString
+                    guard a.utf8.count + b.utf8.count <= Self.maxStringBytes else {
+                        throw FullGramPluginError("Rust string size limit exceeded")
+                    }
+                    return .string(a + b)
+                }
                 if case .int = l, case .int = r { return .int((l.asInt ?? 0) &+ (r.asInt ?? 0)) }
                 return .double((l.asDouble ?? 0.0) + (r.asDouble ?? 0.0))
             case "-":
@@ -1519,16 +1593,27 @@ public final class FullGramRustVM {
                 guard let key = args.first else { return .nil }
                 return box.get(key: key)
             case "insert":
-                if args.count >= 2 { box.set(key: args[0], value: args[1]) }
+                if args.count >= 2, box.mapPart.count < Self.maxCollectionItems { box.set(key: args[0], value: args[1]) }
                 return .nil
             case "push":
-                if let val = args.first { box.arrayPart.append(val) }
+                if let val = args.first, box.arrayPart.count < Self.maxCollectionItems { box.arrayPart.append(val) }
                 return .nil
             case "pop":
                 return box.arrayPart.popLast() ?? .nil
             case "join":
                 let sep = args.first?.asString ?? ""
-                return .string(box.arrayPart.map { $0.asString }.joined(separator: sep))
+                var totalBytes = 0
+                var parts: [String] = []
+                parts.reserveCapacity(box.arrayPart.count)
+                for item in box.arrayPart {
+                    let p = item.asString
+                    totalBytes += p.utf8.count + (parts.isEmpty ? 0 : sep.utf8.count)
+                    guard totalBytes <= Self.maxStringBytes else {
+                        throw FullGramPluginError("Rust string size limit exceeded")
+                    }
+                    parts.append(p)
+                }
+                return .string(parts.joined(separator: sep))
             case "contains":
                 let targetVal = args.first ?? .nil
                 if !box.arrayPart.isEmpty {

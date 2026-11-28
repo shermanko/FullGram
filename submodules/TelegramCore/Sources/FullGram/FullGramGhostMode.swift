@@ -9,7 +9,7 @@ import ImageIO
 import UniformTypeIdentifiers
 import Network
 
-public struct FullGramInterfaceSettings: Codable, Equatable {
+public struct FullGramInterfaceSettings: Codable, Equatable, Sendable {
     public var hideFastShare: Bool
     public var showReactionPicker: Bool
     public var showReadSummary: Bool
@@ -83,7 +83,7 @@ public struct FullGramInterfaceSettings: Codable, Equatable {
     }
 }
 
-public struct FullGramReactionDisplaySettings: Codable, Equatable {
+public struct FullGramReactionDisplaySettings: Codable, Equatable, Sendable {
     public var enabled: Bool
     public var showCounts: Bool
     public var maxVisibleCount: Int32
@@ -108,8 +108,8 @@ public struct FullGramReactionDisplaySettings: Codable, Equatable {
     }
 }
 
-public struct FullGramTranslationSettings: Codable, Equatable {
-    public enum Provider: String, Codable, CaseIterable {
+public struct FullGramTranslationSettings: Codable, Equatable, Sendable {
+    public enum Provider: String, Codable, CaseIterable, Sendable {
         case telegram
         case libreTranslate
         case deepLFree
@@ -406,7 +406,7 @@ public enum FullGramTranslationRequest {
 
     private static func perform(
         request: URLRequest,
-        parse: @escaping (Data) -> Result<String, FullGramTranslationError>
+        parse: @escaping @Sendable (Data) -> Result<String, FullGramTranslationError>
     ) -> Signal<String, FullGramTranslationError> {
         return Signal { subscriber in
             let task = self.session.dataTask(with: request) { data, response, error in
@@ -494,8 +494,8 @@ public extension TelegramEngine.Messages {
 
 public enum FullGramDisplayOptions {
     private static let lock = NSLock()
-    private static var activePeerId: Int64?
-    private static var valuesByPeer: [Int64: (
+    private nonisolated(unsafe) static var activePeerId: Int64?
+    private nonisolated(unsafe) static var valuesByPeer: [Int64: (
         hideStickerTime: Bool,
         unlimitedRecentStickers: Bool,
         hideFastShare: Bool,
@@ -588,7 +588,7 @@ public enum FullGramLocalPremium {
     }
 
     private static let lock = NSLock()
-    private static var states: [PeerId: State] = [:]
+    private nonisolated(unsafe) static var states: [PeerId: State] = [:]
 
     public static let emojiUrlPrefix = "tg://emoji?id="
 
@@ -711,7 +711,7 @@ public enum FullGramActivityFilter {
 
     private static let key = "fullgram.activity.hidden"
     private static let lock = NSLock()
-    private static var cache: Set<String>?
+    private nonisolated(unsafe) static var cache: Set<String>?
 
     public static var hidden: Set<Kind> {
         lock.lock()
@@ -777,10 +777,10 @@ public enum FullGramChatPrivacy {
     private static let keychainEnabledAccount = "faceIdEnabled"
     private static let keychainLockedAccount = "lockedChats"
     private static let lock = NSLock()
-    private static var lockedCache: Set<Int64>?
-    private static var enabledCache: Bool?
-    private static var unlocked: Set<Int64> = []
-    private static var migrated = false
+    private nonisolated(unsafe) static var lockedCache: Set<Int64>?
+    private nonisolated(unsafe) static var enabledCache: Bool?
+    private nonisolated(unsafe) static var unlocked: Set<Int64> = []
+    private nonisolated(unsafe) static var migrated = false
 
     private static func keychainReadWithStatus(account: String) -> (data: Data?, status: OSStatus) {
         return FullGramCoreKeychain.readWithStatus(service: keychainService, account: account)
@@ -870,7 +870,18 @@ public enum FullGramChatPrivacy {
 
     public static func isLocked(_ peerId: Int64) -> Bool {
         guard isEnabled else { return false }
-        return locked.contains(peerId)
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = lockedCache {
+            return cached.contains(peerId)
+        }
+        let loaded = loadLocked()
+        if loaded.authoritative {
+            lockedCache = loaded.ids
+            return loaded.ids.contains(peerId)
+        }
+        // Fail closed on transient Keychain error when cache is unpopulated.
+        return true
     }
 
     public static func setLocked(_ peerId: Int64, _ value: Bool) {
@@ -932,7 +943,7 @@ public enum FullGramChatPrivacy {
 }
 
 public enum FullGramPaidAds {
-    private static let results: NSCache<NSString, NSNumber> = {
+    private nonisolated(unsafe) static let results: NSCache<NSString, NSNumber> = {
         let cache = NSCache<NSString, NSNumber>()
         cache.countLimit = 4096
         return cache
@@ -971,8 +982,8 @@ public func fullGramManageDisplayOptions(network: Network, peerId: PeerId) -> Si
     }
 }
 
-public struct FullGramGhostModeSettings: Codable, Equatable {
-    public enum SilentSendMode: String, Codable {
+public struct FullGramGhostModeSettings: Codable, Equatable, Sendable {
+    public enum SilentSendMode: String, Codable, Sendable {
         case never
         case inGhostMode
         case always
@@ -1092,11 +1103,11 @@ public struct FullGramGhostModeSettings: Codable, Equatable {
     }
 }
 
-public final class FullGramGhostModeStore {
+public final class FullGramGhostModeStore: @unchecked Sendable {
     private let lock = NSRecursiveLock()
     private let fileURL: URL
     private var value: FullGramGhostModeSettings
-    private var observers: [UUID: (FullGramGhostModeSettings) -> Void] = [:]
+    private var observers: [UUID: @Sendable (FullGramGhostModeSettings) -> Void] = [:]
     private let observationQueue = DispatchQueue(label: "FullGram.GhostModeNotifications")
     public let hadLoadError: Bool
 
@@ -1144,7 +1155,7 @@ public final class FullGramGhostModeStore {
         }
     }
 
-    func observe(_ observer: @escaping (FullGramGhostModeSettings) -> Void) -> UUID {
+    func observe(_ observer: @escaping @Sendable (FullGramGhostModeSettings) -> Void) -> UUID {
         self.lock.lock()
         defer { self.lock.unlock() }
         let id = UUID()
@@ -2268,19 +2279,29 @@ public enum FullGramLinkCleaner {
     ]
 
     public static func clean(_ text: String) -> String {
-        guard !text.isEmpty, text.contains("://") else { return text }
-        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return text }
+        return self.cleanWithEdits(text).text
+    }
+
+    private static func cleanWithEdits(_ text: String) -> (text: String, edits: [(range: NSRange, delta: Int)]) {
+        guard !text.isEmpty, text.contains("://") else { return (text, []) }
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return (text, []) }
         let nsText = text as NSString
         let matches = detector.matches(in: text, options: [], range: NSRange(location: 0, length: nsText.length))
-        guard !matches.isEmpty else { return text }
-        let mutable = NSMutableString(string: text)
-        for match in matches.reversed() {
+        guard !matches.isEmpty else { return (text, []) }
+        var applied: [(range: NSRange, cleaned: String, delta: Int)] = []
+        for match in matches {
             let raw = nsText.substring(with: match.range)
             if let cleaned = cleanSingleURL(raw), cleaned != raw {
-                mutable.replaceCharacters(in: match.range, with: cleaned)
+                let delta = (cleaned as NSString).length - match.range.length
+                applied.append((match.range, cleaned, delta))
             }
         }
-        return mutable as String
+        guard !applied.isEmpty else { return (text, []) }
+        let mutable = NSMutableString(string: text)
+        for item in applied.reversed() {
+            mutable.replaceCharacters(in: item.range, with: item.cleaned)
+        }
+        return (mutable as String, applied.map { ($0.range, $0.delta) })
     }
 
     private static func cleanSingleURL(_ raw: String) -> String? {
@@ -2303,18 +2324,44 @@ public enum FullGramLinkCleaner {
             var newAttributes = attributes
             var newMediaReference = mediaReference
             if FullGramExtras.shared.cleanLinks {
-                let cleaned = Self.clean(newText)
-                if cleaned != newText {
-                    newText = cleaned
+                let cleanedResult = Self.cleanWithEdits(newText)
+                if cleanedResult.text != newText {
+                    newText = cleanedResult.text
+                    let edits = cleanedResult.edits
+                    let newUtf16Len = (newText as NSString).length
                     newAttributes = newAttributes.map { attr in
                         guard let entitiesAttr = attr as? TextEntitiesMessageAttribute else { return attr }
-                        let filtered = entitiesAttr.entities.filter { entity in
-                            switch entity.type {
-                            case .Url: return false
-                            default: return entity.range.upperBound <= (newText as NSString).length
+                        let adjusted: [MessageTextEntity] = entitiesAttr.entities.compactMap { entity in
+                            let origLower = entity.range.lowerBound
+                            let origUpper = entity.range.upperBound
+                            let shiftBefore = edits
+                                .filter { ($0.range.location + $0.range.length) <= origLower }
+                                .reduce(0) { $0 + $1.delta }
+                            if case .Url = entity.type {
+                                if let exact = edits.first(where: { $0.range.location == origLower && ($0.range.location + $0.range.length) == origUpper }) {
+                                    let newLower = max(0, min(origLower + shiftBefore, newUtf16Len))
+                                    let newUpper = max(0, min(origUpper + shiftBefore + exact.delta, newUtf16Len))
+                                    guard newLower < newUpper else { return nil }
+                                    return MessageTextEntity(range: newLower ..< newUpper, type: entity.type)
+                                }
+                                let overlaps = edits.contains { $0.range.location < origUpper && ($0.range.location + $0.range.length) > origLower }
+                                if overlaps {
+                                    return nil
+                                }
+                                let newLower = max(0, min(origLower + shiftBefore, newUtf16Len))
+                                let newUpper = max(0, min(origUpper + shiftBefore, newUtf16Len))
+                                guard newLower < newUpper else { return nil }
+                                return MessageTextEntity(range: newLower ..< newUpper, type: entity.type)
                             }
+                            let overlapDelta = edits
+                                .filter { $0.range.location >= origLower && $0.range.location < origUpper }
+                                .reduce(0) { $0 + $1.delta }
+                            let newLower = max(0, min(origLower + shiftBefore, newUtf16Len))
+                            let newUpper = max(0, min(origUpper + shiftBefore + overlapDelta, newUtf16Len))
+                            guard newLower < newUpper else { return nil }
+                            return MessageTextEntity(range: newLower ..< newUpper, type: entity.type)
                         }
-                        return TextEntitiesMessageAttribute(entities: filtered)
+                        return TextEntitiesMessageAttribute(entities: adjusted)
                     }
                 }
             }
@@ -2322,6 +2369,7 @@ public enum FullGramLinkCleaner {
                 var updatedAttributes = file.attributes
                 var updatedResource = file.resource
                 var updatedSize = file.size
+                var updatedMimeType = file.mimeType
                 var modified = false
                 if FullGramExtras.shared.randomFileNames {
                     updatedAttributes = updatedAttributes.map { attr in
@@ -2354,6 +2402,15 @@ public enum FullGramLinkCleaner {
                                 arc4random_buf(&randomId, 8)
                                 updatedResource = LocalFileReferenceMediaResource(localFilePath: cleanPath, randomId: randomId)
                                 updatedSize = Int64(finalData.count)
+                                updatedMimeType = "image/jpeg"
+                                updatedAttributes = updatedAttributes.map { attr in
+                                    if case let .FileName(fileName) = attr {
+                                        let stem = (fileName as NSString).deletingPathExtension
+                                        let base = stem.isEmpty ? "image" : stem
+                                        return .FileName(fileName: "\(base).jpg")
+                                    }
+                                    return attr
+                                }
                                 modified = true
                             }
                         }
@@ -2367,7 +2424,7 @@ public enum FullGramLinkCleaner {
                         previewRepresentations: file.previewRepresentations,
                         videoThumbnails: file.videoThumbnails,
                         immediateThumbnailData: file.immediateThumbnailData,
-                        mimeType: file.mimeType,
+                        mimeType: updatedMimeType,
                         size: updatedSize,
                         attributes: updatedAttributes,
                         alternativeRepresentations: file.alternativeRepresentations
@@ -2751,7 +2808,7 @@ public final class FullGramFeatureFlags: @unchecked Sendable {
     private var remoteFlags: [String: Bool] = [:]
     private var localOverrides: [String: Bool] = [:]
     private var isRefreshing = false
-    private var pendingCompletions: [(Bool) -> Void] = []
+    private var pendingCompletions: [@Sendable (Bool) -> Void] = []
 
     private static let session: URLSession = {
         let cfg = URLSessionConfiguration.ephemeral
@@ -2824,7 +2881,7 @@ public final class FullGramFeatureFlags: @unchecked Sendable {
         self.refreshFromRemote(completion: nil)
     }
 
-    public func refreshFromRemote(completion: ((Bool) -> Void)? = nil) {
+    public func refreshFromRemote(completion: (@Sendable (Bool) -> Void)? = nil) {
         guard let url = URL(string: Self.remoteURL) else {
             completion?(false)
             return

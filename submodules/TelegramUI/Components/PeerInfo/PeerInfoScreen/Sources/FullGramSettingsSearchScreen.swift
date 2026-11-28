@@ -1,12 +1,13 @@
 import Foundation
 import UIKit
+import LocalAuthentication
 import Display
 import AsyncDisplayKit
-import SwiftSignalKit
+@preconcurrency import SwiftSignalKit
 import TelegramCore
 import TelegramPresentationData
 import ItemListUI
-import AccountContext
+@preconcurrency import AccountContext
 
 private struct FullGramSearchItem {
     let id: Int32
@@ -424,7 +425,13 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
             title: "Защита чатов по Face ID",
             subtitle: "Безопасность",
             keywords: "face id touch id пароль замок приватный чат",
-            toggle: ({ FullGramChatPrivacy.isEnabled }, { FullGramChatPrivacy.isEnabled = $0 })
+            toggle: ({ FullGramChatPrivacy.isEnabled }, { newValue in
+                if !newValue && !FullGramChatPrivacy.locked.isEmpty {
+                    FullGramChatPrivacy.isEnabled = true
+                } else {
+                    FullGramChatPrivacy.isEnabled = newValue
+                }
+            })
         ),
         FullGramSearchItem(
             id: 41,
@@ -711,21 +718,26 @@ private func buildFullGramSearchCatalog() -> [FullGramSearchItem] {
 }
 
 func fullGramSettingsSearchController(context: AccountContext) -> ViewController {
+    let selfRawId = context.account.peerId.id._internalGetInt64Value()
+    guard FullGramBetaAccess.shared.isUnlocked(forPeerId: selfRawId) else {
+        return fullGramBetaActivationController(context: context)
+    }
+
     var pushImpl: ((ViewController) -> Void)?
     let canOpenAdmin = fullGramCanOpenAdmin(context: context)
     let catalog = buildFullGramSearchCatalog().filter { $0.id != 51 || canOpenAdmin }
     let queryPromise = ValuePromise<String>("", ignoreRepeated: true)
     let tickPromise = ValuePromise<Int>(0, ignoreRepeated: false)
-    var tick = 0
-    let bump: () -> Void = {
-        tick += 1
-        tickPromise.set(tick)
+    let tick = Atomic<Int>(value: 0)
+    let bump: @Sendable () -> Void = {
+        tickPromise.set(tick.modify { $0 + 1 })
     }
 
     let extrasObs = NotificationCenter.default.addObserver(forName: FullGramExtras.didChangeNotification, object: nil, queue: .main) { _ in bump() }
     let antiScamObs = NotificationCenter.default.addObserver(forName: FullGramAntiScam.didChangeNotification, object: nil, queue: .main) { _ in bump() }
     let aiObs = NotificationCenter.default.addObserver(forName: FullGramAINotifications.settingsChanged, object: nil, queue: .main) { _ in bump() }
     let pluginObs = NotificationCenter.default.addObserver(forName: FullGramPluginNotifications.pluginsDidChange, object: nil, queue: .main) { _ in bump() }
+    let privacyObs = NotificationCenter.default.addObserver(forName: FullGramChatPrivacy.didChangeNotification, object: nil, queue: .main) { _ in bump() }
 
     let args = FullGramSearchArguments(
         context: context,
@@ -734,6 +746,22 @@ func fullGramSettingsSearchController(context: AccountContext) -> ViewController
         },
         toggleItem: { id, newValue in
             if let item = catalog.first(where: { $0.id == id }) {
+                if id == 40 && !newValue && !FullGramChatPrivacy.locked.isEmpty {
+                    let la = LAContext()
+                    var authError: NSError?
+                    if la.canEvaluatePolicy(.deviceOwnerAuthentication, error: &authError) {
+                        la.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Подтвердите личность, чтобы отключить защиту чатов") { success, _ in
+                            DispatchQueue.main.async {
+                                FullGramChatPrivacy.isEnabled = !success
+                                bump()
+                            }
+                        }
+                    } else {
+                        FullGramChatPrivacy.isEnabled = true
+                        bump()
+                    }
+                    return
+                }
                 item.setEnabled?(context, newValue)
                 bump()
             }
@@ -797,6 +825,7 @@ func fullGramSettingsSearchController(context: AccountContext) -> ViewController
         NotificationCenter.default.removeObserver(antiScamObs)
         NotificationCenter.default.removeObserver(aiObs)
         NotificationCenter.default.removeObserver(pluginObs)
+        NotificationCenter.default.removeObserver(privacyObs)
     }
 
     let controller = ItemListController(context: context, state: signal)

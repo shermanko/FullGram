@@ -1398,8 +1398,9 @@ func managedStarGiftsUpdates(postbox: Postbox, network: Network, accountPeerId: 
 func _internal_convertStarGift(account: Account, reference: StarGiftReference) -> Signal<Never, NoError> {
     if case let .slug(slug) = reference, slug.lowercased().hasPrefix("fullgram-") {
         let rawId = account.peerId.id._internalGetInt64Value()
-        let removed = FullGramGrantedNFTStore.shared.removeBySlugLocal(peerId: rawId, slug: slug)
-        FullGramGrantedNFTStore.shared.onServerNFTAction?(rawId, rawId, nil, removed?.id ?? "", slug, "delete", nil, nil, nil, nil, nil)
+        if let removed = FullGramGrantedNFTStore.shared.removeBySlugLocal(peerId: rawId, slug: slug) {
+            FullGramGrantedNFTStore.shared.onServerNFTAction?(rawId, rawId, nil, removed.id, slug, "delete", nil, nil, nil, nil, nil)
+        }
         return .complete()
     }
     return account.postbox.transaction { transaction in
@@ -1437,8 +1438,9 @@ func _internal_convertStarGift(account: Account, reference: StarGiftReference) -
 func _internal_deleteStarGift(account: Account, reference: StarGiftReference) -> Signal<Never, NoError> {
     if case let .slug(slug) = reference, slug.lowercased().hasPrefix("fullgram-") {
         let rawId = account.peerId.id._internalGetInt64Value()
-        let removed = FullGramGrantedNFTStore.shared.removeBySlugLocal(peerId: rawId, slug: slug)
-        FullGramGrantedNFTStore.shared.onServerNFTAction?(rawId, rawId, nil, removed?.id ?? "", slug, "delete", nil, nil, nil, nil, nil)
+        if let removed = FullGramGrantedNFTStore.shared.removeBySlugLocal(peerId: rawId, slug: slug) {
+            FullGramGrantedNFTStore.shared.onServerNFTAction?(rawId, rawId, nil, removed.id, slug, "delete", nil, nil, nil, nil, nil)
+        }
         return .complete()
     }
     return account.postbox.transaction { transaction in
@@ -1482,8 +1484,9 @@ func _internal_deleteStarGift(account: Account, reference: StarGiftReference) ->
 func _internal_updateStarGiftAddedToProfile(account: Account, reference: StarGiftReference, added: Bool) -> Signal<Never, NoError> {
     if case let .slug(slug) = reference, slug.lowercased().hasPrefix("fullgram-") {
         let rawId = account.peerId.id._internalGetInt64Value()
-        let updated = FullGramGrantedNFTStore.shared.setHiddenLocal(peerId: rawId, slug: slug, hidden: !added)
-        FullGramGrantedNFTStore.shared.onServerNFTAction?(rawId, rawId, nil, updated?.id ?? "", slug, added ? "show" : "hide", nil, nil, nil, nil, nil)
+        if let updated = FullGramGrantedNFTStore.shared.setHiddenLocal(peerId: rawId, slug: slug, hidden: !added) {
+            FullGramGrantedNFTStore.shared.onServerNFTAction?(rawId, rawId, nil, updated.id, slug, added ? "show" : "hide", nil, nil, nil, nil, nil)
+        }
         return .complete()
     }
     var flags: Int32 = 0
@@ -1516,7 +1519,9 @@ func _internal_updateStarGiftsPinnedToTop(account: Account, peerId: EnginePeer.I
         return true
     }
     let rawOwnerId = peerId.id._internalGetInt64Value()
-    FullGramGrantedNFTStore.shared.setPinnedSlugsLocal(peerId: rawOwnerId, pinnedSlugs: pinnedFullGramSlugs)
+    if !pinnedFullGramSlugs.isEmpty {
+        FullGramGrantedNFTStore.shared.setPinnedSlugsLocal(peerId: rawOwnerId, pinnedSlugs: pinnedFullGramSlugs)
+    }
     if realReferences.isEmpty && !references.isEmpty {
         return .complete()
     }
@@ -1666,9 +1671,8 @@ func _internal_transferStarGift(account: Account, prepaid: Bool, reference: Star
     if case let .slug(slug) = reference, slug.lowercased().hasPrefix("fullgram-") {
         let fromId = account.peerId.id._internalGetInt64Value()
         let toId = peerId.id._internalGetInt64Value()
-        let transferred = FullGramGrantedNFTStore.shared.transferBySlugLocal(fromPeerId: fromId, toPeerId: toId, slug: slug)
-        FullGramGrantedNFTStore.shared.onServerNFTAction?(fromId, fromId, toId, transferred?.id ?? "", slug, "transfer", nil, nil, nil, nil, nil)
-        if let item = transferred {
+        if let item = FullGramGrantedNFTStore.shared.transferBySlugLocal(fromPeerId: fromId, toPeerId: toId, slug: slug) {
+            FullGramGrantedNFTStore.shared.onServerNFTAction?(fromId, fromId, toId, item.id, slug, "transfer", nil, nil, nil, nil, nil)
             let payload = FullGramChatGiftPayload(
                 kind: .nft,
                 giftRecordId: item.id,
@@ -1763,18 +1767,12 @@ func _internal_transferStarGift(account: Account, prepaid: Bool, reference: Star
 func _internal_upgradeStarGift(account: Account, formId: Int64?, reference: StarGiftReference, keepOriginalInfo: Bool) -> Signal<ProfileGiftsContext.State.StarGift, UpgradeStarGiftError> {
     if case let .slug(slug) = reference, slug.lowercased().hasPrefix("fullgram-") {
         let rawOwnerId = account.peerId.id._internalGetInt64Value()
-        let matched = FullGramGrantedNFTStore.shared.findBySlug(slug)
-        let currentItem: FullGramGrantedNFT
-        if let matched {
-            currentItem = matched.nft
-        } else {
-            let parts = slug.split(separator: "-")
-            guard parts.count >= 3, let gid = Int64(parts[1]), let num = Int32(parts[2]) else {
-                return .fail(.generic)
+        guard let currentItem = FullGramGrantedNFTStore.shared.gifts(forPeerId: rawOwnerId).first(where: { item in
+            if let gid = item.numericGiftId, "FullGram-\(gid)-\(item.number)".caseInsensitiveCompare(slug) == .orderedSame {
+                return true
             }
-            currentItem = FullGramGrantedNFT(id: slug, giftId: String(gid), title: "NFT", modelName: "", backdropName: "", backdropId: nil, patternName: "", number: num)
-        }
-        guard let gid = currentItem.numericGiftId else {
+            return "FullGram-\(item.giftId)-\(item.number)".caseInsensitiveCompare(slug) == .orderedSame
+        }), let gid = currentItem.numericGiftId else {
             return .fail(.generic)
         }
         return _internal_getStarGiftUpgradeAttributes(account: account, giftId: gid)
@@ -2422,9 +2420,12 @@ private final class ProfileGiftsContextImpl {
     
     func updateStarGiftPinnedToTop(reference: StarGiftReference, pinnedToTop: Bool) {
         if case let .slug(slug) = reference, slug.lowercased().hasPrefix("fullgram-") {
-            let rawId = self.account.peerId.id._internalGetInt64Value()
-            let updated = FullGramGrantedNFTStore.shared.setPinnedLocal(peerId: rawId, slug: slug, pinned: pinnedToTop)
-            FullGramGrantedNFTStore.shared.onServerNFTAction?(rawId, rawId, nil, updated?.id ?? "", slug, pinnedToTop ? "pin" : "unpin", nil, nil, nil, nil, nil)
+            let rawId = self.peerId.id._internalGetInt64Value()
+            if let updated = FullGramGrantedNFTStore.shared.setPinnedLocal(peerId: rawId, slug: slug, pinned: pinnedToTop) {
+                FullGramGrantedNFTStore.shared.onServerNFTAction?(rawId, rawId, nil, updated.id, slug, pinnedToTop ? "pin" : "unpin", nil, nil, nil, nil, nil)
+            }
+            self.pushState()
+            return
         }
         var pinnedGifts = self.gifts.filter { $0.pinnedToTop }
         var saveToProfile = false
@@ -2544,6 +2545,14 @@ private final class ProfileGiftsContextImpl {
         self.gifts = updatedGifts
         
         self.pushState()
+        
+        let fullGramSlugs = Set(references.compactMap { ref -> String? in
+            if case let .slug(slug) = ref, slug.lowercased().hasPrefix("fullgram-") {
+                return slug
+            }
+            return nil
+        })
+        FullGramGrantedNFTStore.shared.setPinnedSlugsLocal(peerId: self.peerId.id._internalGetInt64Value(), pinnedSlugs: fullGramSlugs)
         
         var signal = _internal_updateStarGiftsPinnedToTop(account: self.account, peerId: self.peerId, references: pinnedGifts.compactMap { $0.reference })
         if !saveSignals.isEmpty {

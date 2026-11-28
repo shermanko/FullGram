@@ -12,11 +12,11 @@ function getMemCached(key) {
     MEMORY_CACHE.delete(key);
     return null;
   }
-  return item.data;
+  return structuredClone(item.data);
 }
 
 function setMemCached(key, data) {
-  MEMORY_CACHE.set(key, { data, ts: Date.now() });
+  MEMORY_CACHE.set(key, { data: structuredClone(data), ts: Date.now() });
 }
 
 function invalidateMemCache(key) {
@@ -127,17 +127,52 @@ function privateJsonResponse(data, status = 200, extraHeaders = {}) {
   });
 }
 
-function timingSafeEqual(a, b) {
+async function timingSafeEqual(a, b) {
   if (typeof a !== "string" || typeof b !== "string") return false;
   const enc = new TextEncoder();
-  const ab = enc.encode(a);
-  const bb = enc.encode(b);
-  if (ab.length !== bb.length) return false;
+  const [digestA, digestB] = await Promise.all([
+    crypto.subtle.digest("SHA-256", enc.encode(a)),
+    crypto.subtle.digest("SHA-256", enc.encode(b))
+  ]);
+  const ab = new Uint8Array(digestA);
+  const bb = new Uint8Array(digestB);
   let diff = 0;
   for (let i = 0; i < ab.length; i++) {
     diff |= ab[i] ^ bb[i];
   }
   return diff === 0;
+}
+
+async function hasHashMatch(hashes, targetHash) {
+  let matched = false;
+  for (const candidate of hashes || []) {
+    if (await timingSafeEqual(String(candidate || ""), targetHash)) {
+      matched = true;
+    }
+  }
+  return matched;
+}
+
+async function readJsonObject(request, maxBytes = 256 * 1024) {
+  const contentLength = Number(request.headers.get("Content-Length") || 0);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new Error("Request body too large");
+  }
+  const raw = await request.text();
+  if (new TextEncoder().encode(raw).length > maxBytes) {
+    throw new Error("Request body too large");
+  }
+  if (!raw.trim()) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  return parsed;
 }
 
 function bytesToHex(bytes) {
@@ -211,15 +246,17 @@ function getSessionSecret(env) {
   return (env.SESSION_SECRET || env.ADMIN_TOKEN || env.TG_BOT_TOKEN || "").trim();
 }
 
-async function issueSessionToken(userId, role, env, ttlSeconds = SESSION_TTL_SECONDS) {
+async function issueSessionToken(userId, role, env, ttlSeconds = SESSION_TTL_SECONDS, opts = {}) {
   const secret = getSessionSecret(env);
   if (!secret) {
     throw new Error("Server signing secret is not configured");
   }
   const now = Math.floor(Date.now() / 1000);
+  const isPrivileged = Boolean(opts.priv || role === "admin");
   const payload = {
     uid: String(userId),
     role: role === "admin" ? "admin" : "user",
+    priv: isPrivileged,
     iat: now,
     exp: now + ttlSeconds
   };
@@ -241,7 +278,7 @@ async function verifySessionToken(token, env) {
   const [, payloadB64, providedSig] = parts;
   const expectedSigBytes = await hmacSha256Raw(new TextEncoder().encode(secret), `fg1.${payloadB64}`);
   const expectedSig = base64UrlEncodeBytes(expectedSigBytes);
-  if (!timingSafeEqual(providedSig, expectedSig)) return null;
+  if (!(await timingSafeEqual(providedSig, expectedSig))) return null;
   try {
     const payload = JSON.parse(base64UrlDecodeToString(payloadB64));
     const uid = String(payload.uid || "").trim();
@@ -251,7 +288,8 @@ async function verifySessionToken(token, env) {
       return null;
     }
     const isAdmin = payload.role === "admin" && isAdminUserId(uid, env);
-    return { uid, isAdmin, method: "session_token", exp };
+    const priv = Boolean(isAdmin || payload.priv === true);
+    return { uid, isAdmin, priv, method: "session_token", exp };
   } catch {
     return null;
   }
@@ -276,7 +314,7 @@ async function verifyTelegramInitData(initDataRaw, env) {
 
   const secretKey = await hmacSha256Raw(new TextEncoder().encode("WebAppData"), botToken);
   const expectedHash = bytesToHex(await hmacSha256Raw(secretKey, dataCheckString));
-  if (!timingSafeEqual(providedHash, expectedHash)) return null;
+  if (!(await timingSafeEqual(providedHash, expectedHash))) return null;
 
   const authDate = Number(params.get("auth_date") || 0);
   const now = Math.floor(Date.now() / 1000);
@@ -297,6 +335,7 @@ async function verifyTelegramInitData(initDataRaw, env) {
     uid,
     username: typeof userObj.username === "string" ? userObj.username : null,
     isAdmin: isAdminUserId(uid, env),
+    priv: true,
     method: "telegram_init_data"
   };
 }
@@ -320,9 +359,9 @@ async function authenticateRequest(request, env) {
       const session = await verifySessionToken(token, env);
       if (session) return session;
     }
-    if (env.ADMIN_TOKEN && env.ALLOW_LEGACY_ADMIN_TOKEN === "1" && timingSafeEqual(token, env.ADMIN_TOKEN)) {
+    if (env.ADMIN_TOKEN && env.ALLOW_LEGACY_ADMIN_TOKEN === "1" && (await timingSafeEqual(token, env.ADMIN_TOKEN))) {
       const ownerId = Array.from(getAdminIds(env))[0] || DEFAULT_OWNER_ID;
-      return { uid: ownerId, isAdmin: true, method: "legacy_admin_token" };
+      return { uid: ownerId, isAdmin: true, priv: true, method: "legacy_admin_token" };
     }
   }
 
@@ -336,9 +375,11 @@ async function expectedWebhookSecret(env) {
   return hex.slice(0, 48);
 }
 
-async function loadFeatureFlags(env) {
-  const cached = getMemCached("feature_flags");
-  if (cached) return cached;
+async function loadFeatureFlags(env, { bypassCache = false } = {}) {
+  if (!bypassCache) {
+    const cached = getMemCached("feature_flags");
+    if (cached) return cached;
+  }
   const base = { ...DEFAULT_FEATURE_FLAGS };
   if (!env.FULLGRAM_KV) return { version: 1, flags: base };
   const raw = await env.FULLGRAM_KV.get("feature_flags.json");
@@ -367,9 +408,11 @@ async function saveFeatureFlags(env, flagsObj) {
   await env.FULLGRAM_KV.put("feature_flags.json", JSON.stringify(flagsObj, null, 2));
 }
 
-async function loadSponsors(env) {
-  const cached = getMemCached("sponsors");
-  if (cached) return cached;
+async function loadSponsors(env, { bypassCache = false } = {}) {
+  if (!bypassCache) {
+    const cached = getMemCached("sponsors");
+    if (cached) return cached;
+  }
   if (!env.FULLGRAM_KV) return { version: 1, updatedAt: new Date().toISOString(), sponsors: {} };
   const raw = await env.FULLGRAM_KV.get("sponsors_v1");
   if (!raw) return { version: 1, updatedAt: new Date().toISOString(), sponsors: {} };
@@ -453,7 +496,7 @@ async function applySponsorChange(env, body, actingUserId) {
   if (!targetPeerId || !/^-?\d{1,20}$/.test(targetPeerId)) {
     throw new Error("Valid peerId or known @username is required");
   }
-  const data = await loadSponsors(env);
+  const data = await loadSponsors(env, { bypassCache: true });
   if (!data.sponsors) data.sponsors = {};
   if (enabled) {
     data.sponsors[targetPeerId] = {
@@ -466,7 +509,7 @@ async function applySponsorChange(env, body, actingUserId) {
     delete data.sponsors[targetPeerId];
   }
   const saved = await saveSponsors(env, data);
-  const badges = await loadBadges(env);
+  const badges = await loadBadges(env, { bypassCache: true });
   const existingRole = badges.users && badges.users[targetPeerId];
   const existingRoleId = typeof existingRole === "string" ? existingRole : null;
   const targetRole = tier === "plus" ? "sponsor_plus" : "sponsor";
@@ -483,7 +526,7 @@ async function applyNftChange(env, body, grantedBy) {
   if (!peerId || !/^-?\d{1,20}$/.test(peerId)) {
     throw new Error("Invalid peerId");
   }
-  const nfts = await loadNfts(env);
+  const nfts = await loadNfts(env, { bypassCache: true });
   if (!nfts.users) nfts.users = {};
   const list = Array.isArray(nfts.users[peerId]) ? nfts.users[peerId] : [];
   const entryId = body.id != null && String(body.id).trim()
@@ -540,7 +583,7 @@ async function applyNftAction(env, body, actorId, canManageAny) {
   if (!canManageAny && fromPeerId !== normalizePeerId(String(actorId))) {
     throw new Error("Forbidden: can only modify your own NFT");
   }
-  const nfts = await loadNfts(env);
+  const nfts = await loadNfts(env, { bypassCache: true });
   if (!nfts.users) nfts.users = {};
   const list = Array.isArray(nfts.users[fromPeerId]) ? [...nfts.users[fromPeerId]] : [];
   const idx = list.findIndex((item) => {
@@ -587,14 +630,17 @@ async function applyNftAction(env, body, actorId, canManageAny) {
     if (!toPeerId || !/^-?\d{1,20}$/.test(toPeerId) || toPeerId === fromPeerId) {
       throw new Error("Invalid recipient peerId");
     }
+    const targetList = Array.isArray(nfts.users[toPeerId]) ? [...nfts.users[toPeerId]] : [];
+    if (targetList.length >= 50) {
+      throw new Error("Recipient NFT storage is full");
+    }
     list.splice(idx, 1);
     if (list.length) nfts.users[fromPeerId] = list;
     else delete nfts.users[fromPeerId];
     item.pinned = true;
     item.hidden = false;
-    const targetList = Array.isArray(nfts.users[toPeerId]) ? [...nfts.users[toPeerId]] : [];
     targetList.unshift(item);
-    nfts.users[toPeerId] = targetList.slice(0, 50);
+    nfts.users[toPeerId] = targetList;
   } else {
     throw new Error("Unsupported NFT action");
   }
@@ -602,9 +648,11 @@ async function applyNftAction(env, body, actorId, canManageAny) {
   return { id: item.id, action, peerId: fromPeerId, items: nfts.users[fromPeerId] || [] };
 }
 
-async function loadEconomy(env) {
-  const cached = getMemCached("economy");
-  if (cached) return cached;
+async function loadEconomy(env, { bypassCache = false } = {}) {
+  if (!bypassCache) {
+    const cached = getMemCached("economy");
+    if (cached) return cached;
+  }
   const empty = { version: 1, users: {} };
   if (!env.FULLGRAM_KV) return empty;
   const raw = await env.FULLGRAM_KV.get("economy_v1");
@@ -633,7 +681,7 @@ async function applyEconomyChange(env, body, grantedBy) {
   if (!peerId || !/^-?\d{1,20}$/.test(peerId)) {
     throw new Error("Invalid peerId");
   }
-  const eco = await loadEconomy(env);
+  const eco = await loadEconomy(env, { bypassCache: true });
   if (!eco.users) eco.users = {};
   const userEntry = eco.users[peerId] && typeof eco.users[peerId] === "object"
     ? {
@@ -733,16 +781,16 @@ async function applyEconomyChange(env, body, grantedBy) {
     const targetId = String(body.id || "").trim();
     const rawNumber = String(body.number || "").trim();
     const makeActive = body.isActive !== undefined ? Boolean(body.isActive) : null;
-    const hasTarget = userEntry.numbers.some((n) =>
+    const targetItem = userEntry.numbers.find((n) =>
       (targetId && n.id === targetId) || (rawNumber && String(n.number || "").trim() === rawNumber)
     );
-    if (!hasTarget) throw new Error("Number not found");
+    if (!targetItem) throw new Error("Number not found");
+    const nextActive = makeActive !== null ? makeActive : !targetItem.isActive;
     userEntry.numbers = userEntry.numbers.map((n) => {
       const match = (targetId && n.id === targetId) || (rawNumber && String(n.number || "").trim() === rawNumber);
       if (!match) {
-        return makeActive === true ? { ...n, isActive: false } : n;
+        return nextActive ? { ...n, isActive: false } : n;
       }
-      const nextActive = makeActive !== null ? makeActive : !n.isActive;
       return { ...n, isActive: nextActive };
     });
   } else if (action === "transfer_username") {
@@ -754,7 +802,7 @@ async function applyEconomyChange(env, body, grantedBy) {
     const targetId = String(body.id || "").trim();
     const idx = userEntry.usernames.findIndex((u) => (targetId && u.id === targetId) || (clean && String(u.username || "").toLowerCase() === clean));
     if (idx < 0) throw new Error("Username not found");
-    const [moved] = userEntry.usernames.splice(idx, 1);
+    const movedCandidate = userEntry.usernames[idx];
     const dst = eco.users[toPeerId] && typeof eco.users[toPeerId] === "object"
       ? {
           gramBalance: Number(eco.users[toPeerId].gramBalance || 0),
@@ -763,9 +811,13 @@ async function applyEconomyChange(env, body, grantedBy) {
           numbers: Array.isArray(eco.users[toPeerId].numbers) ? [...eco.users[toPeerId].numbers] : []
         }
       : { gramBalance: 0, starsBalance: 0, usernames: [], numbers: [] };
-    dst.usernames = dst.usernames.filter((u) => String(u.username || "").toLowerCase() !== String(moved.username || "").toLowerCase());
-    dst.usernames.unshift({ ...moved, isActive: true, isPrimary: dst.usernames.length === 0, purchasedAt: nowSec });
-    dst.usernames = dst.usernames.slice(0, 30);
+    const filteredUsernames = dst.usernames.filter((u) => String(u.username || "").toLowerCase() !== String(movedCandidate.username || "").toLowerCase());
+    if (filteredUsernames.length >= 30) {
+      throw new Error("Recipient username storage is full");
+    }
+    const [moved] = userEntry.usernames.splice(idx, 1);
+    filteredUsernames.unshift({ ...moved, isActive: true, isPrimary: filteredUsernames.length === 0, purchasedAt: nowSec });
+    dst.usernames = filteredUsernames;
     eco.users[toPeerId] = dst;
   } else if (action === "transfer_number") {
     const toPeerId = normalizePeerId(body.toPeerId != null ? String(body.toPeerId).trim() : "");
@@ -776,7 +828,7 @@ async function applyEconomyChange(env, body, grantedBy) {
     const rawNumber = String(body.number || "").trim();
     const idx = userEntry.numbers.findIndex((n) => (targetId && n.id === targetId) || (rawNumber && String(n.number || "").trim() === rawNumber));
     if (idx < 0) throw new Error("Number not found");
-    const [moved] = userEntry.numbers.splice(idx, 1);
+    const movedCandidate = userEntry.numbers[idx];
     const dst = eco.users[toPeerId] && typeof eco.users[toPeerId] === "object"
       ? {
           gramBalance: Number(eco.users[toPeerId].gramBalance || 0),
@@ -785,9 +837,13 @@ async function applyEconomyChange(env, body, grantedBy) {
           numbers: Array.isArray(eco.users[toPeerId].numbers) ? [...eco.users[toPeerId].numbers] : []
         }
       : { gramBalance: 0, starsBalance: 0, usernames: [], numbers: [] };
-    dst.numbers = dst.numbers.filter((n) => String(n.number || "") !== String(moved.number || ""));
-    dst.numbers.unshift({ ...moved, isActive: dst.numbers.every((n) => !n.isActive), purchasedAt: nowSec });
-    dst.numbers = dst.numbers.slice(0, 30);
+    const filteredNumbers = dst.numbers.filter((n) => String(n.number || "") !== String(movedCandidate.number || ""));
+    if (filteredNumbers.length >= 30) {
+      throw new Error("Recipient number storage is full");
+    }
+    const [moved] = userEntry.numbers.splice(idx, 1);
+    filteredNumbers.unshift({ ...moved, isActive: filteredNumbers.every((n) => !n.isActive), purchasedAt: nowSec });
+    dst.numbers = filteredNumbers;
     eco.users[toPeerId] = dst;
   } else if (action === "transfer_gram") {
     const toPeerId = normalizePeerId(body.toPeerId != null ? String(body.toPeerId).trim() : "");
@@ -809,7 +865,6 @@ async function applyEconomyChange(env, body, grantedBy) {
     if (!Number.isFinite(sourceBalance) || !Number.isSafeInteger(sourceCents) || amountCents > sourceCents) {
       throw new Error("Insufficient Gram balance");
     }
-    userEntry.gramBalance = (sourceCents - amountCents) / 100;
     const dst = eco.users[toPeerId] && typeof eco.users[toPeerId] === "object"
       ? {
           gramBalance: Number(eco.users[toPeerId].gramBalance || 0),
@@ -819,6 +874,10 @@ async function applyEconomyChange(env, body, grantedBy) {
         }
       : { gramBalance: 0, starsBalance: 0, usernames: [], numbers: [] };
     const dstCents = Math.round((Number.isFinite(dst.gramBalance) ? dst.gramBalance : 0) * 100);
+    if (!Number.isFinite(dst.gramBalance) || dst.gramBalance < 0 || !Number.isSafeInteger(dstCents) || dstCents + amountCents > 1e14) {
+      throw new Error("Recipient balance limit exceeded");
+    }
+    userEntry.gramBalance = (sourceCents - amountCents) / 100;
     dst.gramBalance = (dstCents + amountCents) / 100;
     eco.users[toPeerId] = dst;
   } else if (action === "transfer_stars") {
@@ -831,7 +890,6 @@ async function applyEconomyChange(env, body, grantedBy) {
     if (!Number.isSafeInteger(sourceBalance) || sourceBalance < amount) {
       throw new Error("Insufficient Stars balance");
     }
-    userEntry.starsBalance = sourceBalance - amount;
     const dst = eco.users[toPeerId] && typeof eco.users[toPeerId] === "object"
       ? {
           gramBalance: Number(eco.users[toPeerId].gramBalance || 0),
@@ -840,6 +898,10 @@ async function applyEconomyChange(env, body, grantedBy) {
           numbers: Array.isArray(eco.users[toPeerId].numbers) ? [...eco.users[toPeerId].numbers] : []
         }
       : { gramBalance: 0, starsBalance: 0, usernames: [], numbers: [] };
+    if (!Number.isSafeInteger(dst.starsBalance) || dst.starsBalance < 0 || !Number.isSafeInteger(dst.starsBalance + amount) || dst.starsBalance + amount > 1e12) {
+      throw new Error("Recipient balance limit exceeded");
+    }
+    userEntry.starsBalance = sourceBalance - amount;
     dst.starsBalance = Math.floor(dst.starsBalance + amount);
     eco.users[toPeerId] = dst;
   } else {
@@ -902,7 +964,7 @@ async function verifyBetaReceipt(receipt, env) {
   if (parts.length !== 3) return null;
   const [, payloadB64, sig] = parts;
   const expected = base64UrlEncodeBytes(await hmacSha256Raw(new TextEncoder().encode(secret), `fgba1.${payloadB64}`));
-  if (!timingSafeEqual(sig, expected)) return null;
+  if (!(await timingSafeEqual(sig, expected))) return null;
   try {
     return JSON.parse(base64UrlDecodeToString(payloadB64));
   } catch {
@@ -981,7 +1043,9 @@ async function redeemBetaInvite(env, rawCode, rawPeerId, opts = {}) {
   usersData.users[peerId] = {
     ...(existingUser || {}),
     code: matchedCode,
-    deviceHash: opts.deviceHash || existingUser?.deviceHash || "",
+    deviceHash: (existingUser?.deviceHash && !opts.adminOverride)
+      ? existingUser.deviceHash
+      : (opts.deviceHash || existingUser?.deviceHash || ""),
     via: opts.via || existingUser?.via || "app",
     username: opts.username || existingUser?.username || "",
     activatedAt: existingUser?.activatedAt || now,
@@ -1391,7 +1455,7 @@ function renderBetaLandingHtml(code, origin, inviteStatus = null, options = {}) 
 
   <script>
     (function() {
-      var botUsername = ${JSON.stringify(botUsername)};
+      var botUsername = ${JSON.stringify(botUsername).replace(/</g, "\\u003c")};
       var tabs = document.querySelectorAll(".tab");
       var panes = document.querySelectorAll(".pane");
       tabs.forEach(function(tab) {
@@ -1558,7 +1622,7 @@ function renderBetaLandingHtml(code, origin, inviteStatus = null, options = {}) 
           if (navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard.writeText(code).then(function() {
               copyBtn.textContent = "✅ Код скопирован";
-            });
+            }).catch(function() {});
           }
         });
       }
@@ -1568,9 +1632,11 @@ function renderBetaLandingHtml(code, origin, inviteStatus = null, options = {}) 
 </html>`;
 }
 
-async function loadNfts(env) {
-  const cached = getMemCached("nfts");
-  if (cached) return cached;
+async function loadNfts(env, { bypassCache = false } = {}) {
+  if (!bypassCache) {
+    const cached = getMemCached("nfts");
+    if (cached) return cached;
+  }
   const empty = { version: 1, users: {} };
   if (!env.FULLGRAM_KV) return empty;
   const raw = await env.FULLGRAM_KV.get("nfts.json");
@@ -1594,9 +1660,11 @@ async function saveNfts(env, nfts) {
   await env.FULLGRAM_KV.put("nfts.json", JSON.stringify(nfts, null, 2));
 }
 
-async function loadBadges(env) {
-  const cached = getMemCached("badges");
-  if (cached) return cached;
+async function loadBadges(env, { bypassCache = false } = {}) {
+  if (!bypassCache) {
+    const cached = getMemCached("badges");
+    if (cached) return cached;
+  }
   if (!env.FULLGRAM_KV) return structuredClone(DEFAULT_BADGES);
   const raw = await env.FULLGRAM_KV.get("badges.json");
   if (!raw) return structuredClone(DEFAULT_BADGES);
@@ -1630,9 +1698,11 @@ async function saveBadges(env, badges) {
   await env.FULLGRAM_KV.put("badges.json", JSON.stringify(badges, null, 2));
 }
 
-async function loadCosmetics(env) {
-  const cached = getMemCached("cosmetics");
-  if (cached) return cached;
+async function loadCosmetics(env, { bypassCache = false } = {}) {
+  if (!bypassCache) {
+    const cached = getMemCached("cosmetics");
+    if (cached) return cached;
+  }
   const empty = { version: 1, users: {} };
   if (!env.FULLGRAM_KV) return empty;
   const raw = await env.FULLGRAM_KV.get("cosmetics.json");
@@ -1662,12 +1732,37 @@ async function saveCosmetics(env, cosmetics) {
   await env.FULLGRAM_KV.put("cosmetics.json", JSON.stringify(cosmetics, null, 2));
 }
 
-async function applyCosmeticChange(env, body) {
+function isAllowedCustomFrameUrl(candidate, allowedOrigin = null) {
+  let u;
+  try {
+    u = new URL(candidate);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "https:" || u.username || u.password) {
+    return false;
+  }
+  const host = u.hostname.toLowerCase();
+  const allowedHosts = new Set([
+    "fullgram.korsakovx.workers.dev",
+    "cdn.discordapp.com",
+    "cdn.jsdelivr.net",
+    "raw.githubusercontent.com"
+  ]);
+  if (allowedOrigin) {
+    try {
+      allowedHosts.add(new URL(allowedOrigin).hostname.toLowerCase());
+    } catch {}
+  }
+  return allowedHosts.has(host);
+}
+
+async function applyCosmeticChange(env, body, allowedOrigin = null) {
   const peerId = normalizePeerId(body.peerId != null ? String(body.peerId).trim() : "");
   if (!/^-?\d{1,20}$/.test(peerId)) {
     throw new Error("Invalid peerId");
   }
-  const cosmetics = await loadCosmetics(env);
+  const cosmetics = await loadCosmetics(env, { bypassCache: true });
   const existing = cosmetics.users[peerId] || {};
 
   let frameId = existing.frameId || null;
@@ -1689,8 +1784,8 @@ async function applyCosmeticChange(env, body) {
       customFrameUrl = null;
     } else {
       const candidate = String(body.customFrameUrl).trim();
-      if (candidate.length > 400 || !/^https:\/\/[^\s]+$/i.test(candidate)) {
-        throw new Error("Invalid customFrameUrl");
+      if (candidate.length > 400 || !isAllowedCustomFrameUrl(candidate, allowedOrigin)) {
+        throw new Error("Invalid customFrameUrl host");
       }
       customFrameUrl = candidate;
     }
@@ -1799,7 +1894,7 @@ function parsePluginMetadata(code, filename, language) {
 
 function normalizePeerId(raw) {
   const s = String(raw ?? "").trim();
-  if (!/^-?\d+$/.test(s)) return s;
+  if (s.length > 21 || !/^-?\d+$/.test(s)) return s;
   try {
     let n = BigInt(s);
     if (n < 0n) n = -n;
@@ -1816,7 +1911,7 @@ function normalizePeerId(raw) {
 }
 
 async function applyBadgeChange(env, body) {
-  const badges = await loadBadges(env);
+  const badges = await loadBadges(env, { bypassCache: true });
   const rawPeerId = body.peerId != null ? String(body.peerId).trim() : "";
   const peerId = normalizePeerId(rawPeerId);
   const cleanUser = typeof body.username === "string"
@@ -1825,6 +1920,12 @@ async function applyBadgeChange(env, body) {
 
   if (!peerId && !cleanUser) {
     throw new Error("peerId or username is required");
+  }
+  if (rawPeerId && (!peerId || !/^-?\d{1,20}$/.test(peerId))) {
+    throw new Error("Invalid peerId");
+  }
+  if (cleanUser && !/^[a-z0-9_]{4,32}$/.test(cleanUser)) {
+    throw new Error("Invalid username");
   }
 
   const enabled = body.enabled !== false;
@@ -1835,6 +1936,11 @@ async function applyBadgeChange(env, body) {
     if (peerId) delete badges.users[peerId];
     if (rawPeerId) delete badges.users[rawPeerId];
     if (cleanUser) delete badges.usernames[cleanUser];
+    for (const [uname, mappedRole] of Object.entries(badges.usernames || {})) {
+      if (mappedRole === customRoleKey || (rawCustomRoleKey && mappedRole === rawCustomRoleKey)) {
+        delete badges.usernames[uname];
+      }
+    }
     delete badges.roles[customRoleKey];
     if (rawCustomRoleKey) delete badges.roles[rawCustomRoleKey];
     await saveBadges(env, badges);
@@ -1845,9 +1951,15 @@ async function applyBadgeChange(env, body) {
   const customEmojiId = body.customEmojiId != null && String(body.customEmojiId).trim() !== ""
     ? String(body.customEmojiId).trim()
     : null;
+  if (customEmojiId && !/^\d{1,20}$/.test(customEmojiId)) {
+    throw new Error("Invalid customEmojiId");
+  }
   const emoji = typeof body.emoji === "string" && body.emoji.trim() ? body.emoji.trim() : null;
   const label = typeof body.label === "string" && body.label.trim() ? body.label.trim() : null;
   const shortLabel = typeof body.shortLabel === "string" && body.shortLabel.trim() ? body.shortLabel.trim() : null;
+  if (emoji && emoji.length > 8) throw new Error("Invalid emoji length");
+  if (label && label.length > 40) throw new Error("Invalid label length");
+  if (shortLabel && shortLabel.length > 12) throw new Error("Invalid shortLabel length");
   const color = typeof body.color === "string" && /^#[0-9a-fA-F]{6}$/.test(body.color.trim())
     ? body.color.trim()
     : null;
@@ -2032,17 +2144,21 @@ async function handleTelegramWebhook(request, env, origin) {
     return new Response("Webhook secret not configured", { status: 500 });
   }
   const provided = request.headers.get("X-Telegram-Bot-Api-Secret-Token") || "";
-  if (!timingSafeEqual(provided, expected)) {
+  if (!(await timingSafeEqual(provided, expected))) {
     return new Response("Forbidden", { status: 403 });
   }
 
   let update;
   try {
-    update = await request.json();
+    update = await readJsonObject(request, 256 * 1024);
+    if (!update) {
+      return jsonResponse({ ok: true });
+    }
   } catch {
     return jsonResponse({ ok: true });
   }
 
+  try {
   // Strict owner-only lockdown: reject EVERY update type (messages, callbacks, inline, join requests, etc.) from non-owners
   const actor =
     update.message?.from ||
@@ -2057,7 +2173,7 @@ async function handleTelegramWebhook(request, env, origin) {
     update.chat_join_request?.from ||
     null;
   const actorId = actor && actor.id != null ? String(actor.id).trim() : "";
-  const ownerId = String(env.OWNER_USER_ID || DEFAULT_OWNER_ID).trim();
+  const ownerId = String(env.OWNER_USER_ID || Array.from(getAdminIds(env))[0] || DEFAULT_OWNER_ID).trim();
 
   // Allow any user in private chat ONLY to:
   // 1) redeem a beta invite via /start beta_<CODE>, /activate <CODE>, or sending fgb1_... / /beta/<CODE>
@@ -2299,8 +2415,10 @@ async function handleTelegramWebhook(request, env, origin) {
       const normTarget = /^-?\d{1,20}$/.test(target) ? normalizePeerId(target) : target;
       const [inv, usr] = await Promise.all([loadBetaInvites(env), loadBetaUsers(env)]);
       let ok = false;
-      if (Object.hasOwn(inv.invites, target)) {
-        inv.invites[target].revoked = true;
+      const lowerInv = target.toLowerCase();
+      const matchedInvKey = Object.keys(inv.invites || {}).find((k) => k.toLowerCase() === lowerInv) || null;
+      if (matchedInvKey) {
+        inv.invites[matchedInvKey].revoked = true;
         await saveBetaInvites(env, inv);
         ok = true;
       }
@@ -2384,6 +2502,10 @@ async function handleTelegramWebhook(request, env, origin) {
     }
 
     const fileMetaRes = await fetch(`https://api.telegram.org/bot${env.TG_BOT_TOKEN}/getFile?file_id=${encodeURIComponent(msg.document.file_id)}`);
+    if (!fileMetaRes.ok) {
+      await sendTelegramMessage(env, chatId, `❌ Ошибка Telegram getFile API: HTTP ${fileMetaRes.status}`);
+      return jsonResponse({ ok: true });
+    }
     const fileMeta = await fileMetaRes.json();
     if (!fileMeta.ok || !fileMeta.result?.file_path) {
       await sendTelegramMessage(env, chatId, "❌ Не удалось получить файл от Telegram API.");
@@ -2535,8 +2657,10 @@ async function handleTelegramWebhook(request, env, origin) {
       const normTarget = /^-?\d{1,20}$/.test(target) ? normalizePeerId(target) : target;
       const [inv, usr] = await Promise.all([loadBetaInvites(env), loadBetaUsers(env)]);
       let ok = false;
-      if (Object.hasOwn(inv.invites, target)) {
-        inv.invites[target].revoked = true;
+      const lowerInv = target.toLowerCase();
+      const matchedInvKey = Object.keys(inv.invites || {}).find((k) => k.toLowerCase() === lowerInv) || null;
+      if (matchedInvKey) {
+        inv.invites[matchedInvKey].revoked = true;
         await saveBetaInvites(env, inv);
         ok = true;
       }
@@ -2659,6 +2783,9 @@ async function handleTelegramWebhook(request, env, origin) {
   }
 
   return jsonResponse({ ok: true });
+  } catch {
+    return jsonResponse({ ok: true });
+  }
 }
 
 export default {
@@ -3032,12 +3159,12 @@ export default {
           userRec.deviceHash = deviceHash;
           usersData.users[peerId] = userRec;
           await saveBetaUsers(env, usersData);
-        } else if (!timingSafeEqual(String(userRec.deviceHash), deviceHash)) {
+        } else if (!(await timingSafeEqual(String(userRec.deviceHash), deviceHash))) {
           return jsonResponse({ ok: true, active: false, error: "Device mismatch" });
         }
         let receipt = typeof body.receipt === "string" ? body.receipt.trim() : "";
         const existingVerified = receipt ? await verifyBetaReceipt(receipt, env) : null;
-        if (!existingVerified || existingVerified.uid !== peerId || !timingSafeEqual(existingVerified.dh, deviceHash)) {
+        if (!existingVerified || existingVerified.uid !== peerId || !(await timingSafeEqual(existingVerified.dh, deviceHash))) {
           receipt = await issueBetaReceipt(peerId, deviceHash, userRec.code || "beta", env);
         }
         return jsonResponse({ ok: true, active: true, peerId, receipt });
@@ -3103,7 +3230,7 @@ export default {
         if (!requestedPeerId || (!auth.isAdmin && requestedPeerId !== authPeerId)) {
           return jsonResponse({ ok: false, error: "Forbidden: can only modify your own cosmetics" }, 403);
         }
-        const user = await applyCosmeticChange(env, { ...body, peerId: requestedPeerId });
+        const user = await applyCosmeticChange(env, { ...body, peerId: requestedPeerId }, origin);
         return jsonResponse({ ok: true, user });
       } catch (err) {
         return jsonResponse({ ok: false, error: err.message }, 400);
@@ -3154,7 +3281,7 @@ export default {
         await env.FULLGRAM_KV.put(`custom_frame:${keyId}`, bytes.buffer);
         await env.FULLGRAM_KV.delete(`custom_frame:u_${requestedPeerId}.${otherExt}`).catch(() => {});
         const frameUrl = `${url.origin}/frames/${keyId}?v=${Date.now().toString(36)}`;
-        const user = await applyCosmeticChange(env, { peerId: requestedPeerId, frameId: "custom", customFrameUrl: frameUrl });
+        const user = await applyCosmeticChange(env, { peerId: requestedPeerId, frameId: "custom", customFrameUrl: frameUrl }, origin);
         return jsonResponse({ ok: true, url: frameUrl, user });
       } catch (err) {
         return jsonResponse({ ok: false, error: err.message }, 400);
@@ -3277,7 +3404,7 @@ export default {
         if (!auth.isAdmin && isAdminUserId(targetPeerId, env)) {
           return jsonResponse({ ok: false, error: "Forbidden: cannot modify admin account" }, 403);
         }
-        const result = await applyEconomyChange(env, body, auth.uid);
+        const result = await applyEconomyChange(env, { ...body, peerId: targetPeerId }, auth.uid);
         return jsonResponse({ ok: true, ...result });
       } catch (err) {
         return jsonResponse({ ok: false, error: err.message }, 400);
@@ -3382,7 +3509,7 @@ export default {
       if (request.method === "POST" && path === "/admin/cosmetics") {
         try {
           const body = await request.json();
-          const user = await applyCosmeticChange(env, body);
+          const user = await applyCosmeticChange(env, body, origin);
           return jsonResponse({ ok: true, user });
         } catch (err) {
           return jsonResponse({ ok: false, error: err.message }, 400);
@@ -3416,7 +3543,7 @@ export default {
       if (request.method === "POST" && path === "/admin/economy") {
         try {
           const body = await request.json();
-          const result = await applyEconomyChange(env, body, auth.uid);
+          const result = await applyEconomyChange(env, { ...body, peerId: targetPeerId }, auth.uid);
           return jsonResponse({ ok: true, ...result });
         } catch (err) {
           return jsonResponse({ ok: false, error: err.message }, 400);

@@ -1041,15 +1041,15 @@ private final class FullGramProfileEffectGridCell: UICollectionViewCell {
 
 // MARK: - 2. Стиль ника (палитра цветов + неоновое свечение на профиль)
 
+private nonisolated(unsafe) var fullGramNickColorPickerDelegateKey: UInt8 = 0
+
 @available(iOS 14.0, *)
 private final class FullGramNickColorPickerDelegate: NSObject, UIColorPickerViewControllerDelegate {
-    private var retainedSelf: FullGramNickColorPickerDelegate?
     private let onPick: (String) -> Void
 
     init(onPick: @escaping (String) -> Void) {
         self.onPick = onPick
         super.init()
-        self.retainedSelf = self
     }
 
     func colorPickerViewControllerDidSelectColor(_ viewController: UIColorPickerViewController) {
@@ -1058,7 +1058,7 @@ private final class FullGramNickColorPickerDelegate: NSObject, UIColorPickerView
 
     func colorPickerViewControllerDidFinish(_ viewController: UIColorPickerViewController) {
         self.emit(viewController.selectedColor)
-        self.retainedSelf = nil
+        objc_setAssociatedObject(viewController, &fullGramNickColorPickerDelegateKey, nil, .OBJC_ASSOCIATION_ASSIGN)
     }
 
     private func emit(_ color: UIColor) {
@@ -1242,7 +1242,7 @@ public func fullGramNicknameStyleController(context: AccountContext) -> ViewCont
     let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
     let uiState = FullGramNickStyleUIState()
-    let bump: () -> Void = {
+    let bump: @Sendable () -> Void = {
         let next = version.modify { $0 + 1 }
         refresh.set(next)
     }
@@ -1275,6 +1275,7 @@ public func fullGramNicknameStyleController(context: AccountContext) -> ViewCont
                     FullGramNicknameStyle.setOwnStyle(peerId: selfPeerId, colorHex: hex, glowEnabled: glow)
                 }
                 picker.delegate = delegate
+                objc_setAssociatedObject(picker, &fullGramNickColorPickerDelegateKey, delegate, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
                 uiState.presentNative?(picker)
             }
         },
@@ -1286,8 +1287,8 @@ public func fullGramNicknameStyleController(context: AccountContext) -> ViewCont
                 tf.autocapitalizationType = .allCharacters
                 tf.autocorrectionType = .no
             }
-            alert.addAction(UIAlertAction(title: "Применить", style: .default, handler: { _ in
-                let raw = alert.textFields?.first?.text ?? ""
+            alert.addAction(UIAlertAction(title: "Применить", style: .default, handler: { [weak alert] _ in
+                let raw = alert?.textFields?.first?.text ?? ""
                 if let parsed = FullGramThemeColors.parse(raw) {
                     let hex = String(format: "#%06X", parsed)
                     let glow = FullGramNicknameStyle.glowEnabled(forPeerId: selfPeerId, selfPeerId: selfPeerId)
@@ -1423,7 +1424,7 @@ private enum FullGramPrivateModeEntry: ItemListNodeEntry {
 public func fullGramPrivateModeController(context: AccountContext) -> ViewController {
     let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
     let version = Atomic<Int>(value: 0)
-    let bump: () -> Void = {
+    let bump: @Sendable () -> Void = {
         let next = version.modify { $0 + 1 }
         refresh.set(next)
     }

@@ -33,6 +33,12 @@ public enum FullGramNoiseReductionMode: String, CaseIterable {
         }
     }
 
+    public static func invalidateCache() {
+        self.lock.lock()
+        self.cached = nil
+        self.lock.unlock()
+    }
+
     public var isEnabled: Bool {
         return self != .off
     }
@@ -88,6 +94,12 @@ public enum FullGramVoiceMode: String, CaseIterable {
             self.lock.unlock()
             UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey)
         }
+    }
+
+    public static func invalidateCache() {
+        self.lock.lock()
+        self.cached = nil
+        self.lock.unlock()
     }
 
     public func title(_ ru: Bool) -> String {
@@ -211,6 +223,12 @@ public enum FullGramBleepSound: String, CaseIterable {
         }
     }
 
+    public static func invalidateCache() {
+        self.lock.lock()
+        self.cached = nil
+        self.lock.unlock()
+    }
+
     public var isEnabled: Bool {
         return self != .off
     }
@@ -270,7 +288,7 @@ public final class FullGramCustomBleepStore {
     }
 
     public func saveCustomSamples(_ samples: [Int16], sampleRate: Double, name: String) -> Bool {
-        guard !samples.isEmpty, sampleRate > 0 else { return false }
+        guard !samples.isEmpty, sampleRate.isFinite, sampleRate > 0 else { return false }
         // Trim leading/trailing silence and cap to 1.8 seconds
         let threshold: Int16 = 350
         let firstIdx = samples.firstIndex(where: { abs(Int($0)) > Int(threshold) }) ?? 0
@@ -735,6 +753,13 @@ public enum FullGramMixer {
         presetId = preset.id
         isEnabled = preset.id != "flat"
         gains = preset.gains
+    }
+
+    public static func invalidateCache() {
+        self.stateLock.lock()
+        self.cachedEnabled = nil
+        self.cachedGains = nil
+        self.stateLock.unlock()
     }
 }
 

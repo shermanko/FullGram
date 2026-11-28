@@ -283,6 +283,22 @@ public final class FullGramDocumentViewerController: ViewController, UISearchBar
         self.spinner.stopAnimating()
     }
 
+    public func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+    ) {
+        guard let url = navigationAction.request.url else {
+            decisionHandler(.cancel)
+            return
+        }
+        if url.absoluteString == "about:blank" || (url.isFileURL && url.standardizedFileURL == self.fileURL.standardizedFileURL) {
+            decisionHandler(.allow)
+        } else {
+            decisionHandler(.cancel)
+        }
+    }
+
     @objc private func pdfPageChanged() {
         guard let doc = self.pdfView.document, let current = self.pdfView.currentPage else { return }
         let idx = doc.index(for: current) + 1
@@ -373,10 +389,15 @@ public final class FullGramDocumentViewerController: ViewController, UISearchBar
 }
 
 private enum FullGramOfficeTextExtractor {
+    private static let maxTextBytes = 8 * 1024 * 1024
+
     static func extractText(from url: URL, extension ext: String) -> String {
         if ext == "csv" || ext == "txt" {
-            return (try? String(contentsOf: url, encoding: .utf8))
-                ?? (try? String(contentsOf: url, encoding: .windowsCP1251))
+            guard let handle = try? FileHandle(forReadingFrom: url) else { return "" }
+            defer { try? handle.close() }
+            let limited = (try? handle.read(upToCount: Self.maxTextBytes)) ?? Data()
+            return String(data: limited, encoding: .utf8)
+                ?? String(data: limited, encoding: .windowsCP1251)
                 ?? ""
         }
         let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
@@ -384,7 +405,7 @@ private enum FullGramOfficeTextExtractor {
         let entries = FullGramArchiveParser.parseZipEntries(data: data)
         if ext == "docx" {
             guard let docEntry = entries.first(where: { $0.name == "word/document.xml" }),
-                  let xmlData = FullGramArchiveParser.extractZipEntry(docEntry, from: data),
+                  let xmlData = FullGramArchiveParser.extractZipEntry(docEntry, from: data, maxBytes: Self.maxTextBytes),
                   let xml = String(data: xmlData, encoding: .utf8) else {
                 return ""
             }
@@ -393,7 +414,7 @@ private enum FullGramOfficeTextExtractor {
         if ext == "xlsx" {
             var sharedStrings: [String] = []
             if let ssEntry = entries.first(where: { $0.name == "xl/sharedStrings.xml" }),
-               let ssData = FullGramArchiveParser.extractZipEntry(ssEntry, from: data),
+               let ssData = FullGramArchiveParser.extractZipEntry(ssEntry, from: data, maxBytes: Self.maxTextBytes),
                let ssXML = String(data: ssData, encoding: .utf8) {
                 sharedStrings = extractSharedStrings(ssXML)
             }
@@ -401,7 +422,7 @@ private enum FullGramOfficeTextExtractor {
                 .sorted { $0.name < $1.name }
             var output: [String] = []
             for (idx, sheet) in sheetEntries.prefix(6).enumerated() {
-                guard let sData = FullGramArchiveParser.extractZipEntry(sheet, from: data),
+                guard let sData = FullGramArchiveParser.extractZipEntry(sheet, from: data, maxBytes: Self.maxTextBytes),
                       let sXML = String(data: sData, encoding: .utf8) else { continue }
                 let rows = parseXLSXSheet(sXML, sharedStrings: sharedStrings)
                 if !rows.isEmpty {
@@ -605,36 +626,89 @@ public enum FullGramArchiveParser {
         return fallback
     }
 
-    public static func extractZipEntry(_ entry: FullGramArchiveEntry, from data: Data) -> Data? {
-        guard !entry.isDirectory, entry.uncompressedSize <= UInt64(maxExtractBytes) else { return nil }
+    public static func extractZipEntry(_ entry: FullGramArchiveEntry, from data: Data, maxBytes: Int = FullGramArchiveParser.maxExtractBytes) -> Data? {
+        let effectiveLimit = max(0, min(maxBytes, Self.maxExtractBytes))
+        guard !entry.isDirectory, effectiveLimit > 0, entry.uncompressedSize <= UInt64(effectiveLimit) else { return nil }
+        guard entry.localHeaderOffset <= UInt64(Int.max) else { return nil }
         let off = Int(entry.localHeaderOffset)
-        guard off >= 0 && off + 30 <= data.count, readUInt32LE(data, at: off) == 0x04034B50 else { return nil }
+        guard off >= 0, off <= data.count - 30, readUInt32LE(data, at: off) == 0x04034B50 else { return nil }
+        let gpFlags = readUInt16LE(data, at: off + 6)
+        let hasDataDescriptor = (gpFlags & 0x0008) != 0
         let nameLen = Int(readUInt16LE(data, at: off + 26))
         let extraLen = Int(readUInt16LE(data, at: off + 28))
-        let dataStart = off + 30 + nameLen + extraLen
-        let compLen = Int(entry.compressedSize)
-        guard dataStart >= 0 && compLen >= 0 && dataStart + compLen <= data.count else { return nil }
-        let payload = data.subdata(in: dataStart ..< (dataStart + compLen))
+        let (start1, ov1) = off.addingReportingOverflow(30)
+        let (start2, ov2) = start1.addingReportingOverflow(nameLen)
+        let (dataStart, ov3) = start2.addingReportingOverflow(extraLen)
+        guard !ov1, !ov2, !ov3, dataStart >= 0, dataStart <= data.count else { return nil }
+
+        let availBytes: Int
+        if entry.compressedSize > 0 {
+            guard entry.compressedSize <= UInt64(data.count - dataStart) else { return nil }
+            availBytes = Int(entry.compressedSize)
+        } else if entry.method == 8 && hasDataDescriptor {
+            availBytes = data.count - dataStart
+        } else if entry.uncompressedSize == 0 {
+            return Data()
+        } else {
+            return nil
+        }
+
         if entry.method == 0 {
-            return payload
+            guard availBytes <= effectiveLimit else { return nil }
+            return data.subdata(in: dataStart ..< (dataStart + availBytes))
         }
         guard entry.method == 8 else { return nil }
-        if entry.uncompressedSize == 0 {
-            return Data()
+        if availBytes == 0 {
+            return entry.uncompressedSize == 0 ? Data() : nil
         }
-        let dstCapacity = Int(min(entry.uncompressedSize, UInt64(100 * 1024 * 1024)))
-        guard dstCapacity > 0 else { return nil }
-        var dst = Data(count: dstCapacity)
-        let decodedCount: Int = dst.withUnsafeMutableBytes { dstBuf in
-            payload.withUnsafeBytes { srcBuf in
-                guard let dstPtr = dstBuf.bindMemory(to: UInt8.self).baseAddress,
-                      let srcPtr = srcBuf.bindMemory(to: UInt8.self).baseAddress else { return 0 }
-                return compression_decode_buffer(dstPtr, dstCapacity, srcPtr, payload.count, nil, COMPRESSION_ZLIB)
+
+        let chunkSize = 64 * 1024
+        var scratch = [UInt8](repeating: 0, count: chunkSize)
+        var out = Data()
+        let ok: Bool = data.withUnsafeBytes { rawData in
+            guard let base = rawData.bindMemory(to: UInt8.self).baseAddress else { return false }
+            let srcBase = UnsafePointer<UInt8>(base.advanced(by: dataStart))
+            return scratch.withUnsafeMutableBytes { rawDst in
+                guard let dstBase = rawDst.bindMemory(to: UInt8.self).baseAddress else { return false }
+                var stream = compression_stream(
+                    dst_ptr: dstBase,
+                    dst_size: chunkSize,
+                    src_ptr: srcBase,
+                    src_size: availBytes,
+                    state: nil
+                )
+                guard compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB) == COMPRESSION_STATUS_OK else {
+                    return false
+                }
+                defer { compression_stream_destroy(&stream) }
+                stream.src_ptr = srcBase
+                stream.src_size = availBytes
+                stream.dst_ptr = dstBase
+                stream.dst_size = chunkSize
+                while true {
+                    let status = compression_stream_process(&stream, Int32(COMPRESSION_STREAM_FINALIZE.rawValue))
+                    let produced = chunkSize - stream.dst_size
+                    if produced > 0 {
+                        if out.count + produced > effectiveLimit {
+                            return false
+                        }
+                        out.append(dstBase, count: produced)
+                        stream.dst_ptr = dstBase
+                        stream.dst_size = chunkSize
+                    }
+                    if status == COMPRESSION_STATUS_END {
+                        return true
+                    }
+                    if status == COMPRESSION_STATUS_ERROR {
+                        return false
+                    }
+                    if produced == 0 && stream.src_size == 0 {
+                        return false
+                    }
+                }
             }
         }
-        guard decodedCount > 0 else { return nil }
-        dst.count = decodedCount
-        return dst
+        return ok ? out : nil
     }
 
     private static func readVInt(_ data: Data, cursor: inout Int) -> UInt64? {
@@ -664,24 +738,19 @@ public enum FullGramArchiveParser {
             let headerEnd = headerStart + Int(headerSize)
             guard let blockType = readVInt(data, cursor: &cursor),
                   let blockFlags = readVInt(data, cursor: &cursor) else { break }
+            var bodyPos = cursor
+            if (blockFlags & 0x01) != 0 {
+                // HFL_EXTRA: extraAreaSize precedes HFL_DATA in RAR5 headers
+                guard readVInt(data, cursor: &bodyPos) != nil, bodyPos <= headerEnd else { break }
+            }
             var dataSize: UInt64 = 0
             if (blockFlags & 0x02) != 0 {
-                var extPos = headerStart
-                _ = readVInt(data, cursor: &extPos)
-                _ = readVInt(data, cursor: &extPos)
-                if let ds = readVInt(data, cursor: &extPos) {
-                    dataSize = ds
-                }
+                guard let ds = readVInt(data, cursor: &bodyPos), bodyPos <= headerEnd else { break }
+                dataSize = ds
             }
             if blockType == 2 {
                 // File header (blockType 2)
-                var pos = headerStart
-                _ = readVInt(data, cursor: &pos)
-                _ = readVInt(data, cursor: &pos)
-                var packedSize: UInt64 = 0
-                if (blockFlags & 0x02) != 0 {
-                    packedSize = readVInt(data, cursor: &pos) ?? 0
-                }
+                var pos = bodyPos
                 let fileFlags = readVInt(data, cursor: &pos) ?? 0
                 let unpSize = readVInt(data, cursor: &pos) ?? 0
                 _ = readVInt(data, cursor: &pos) // attrs
@@ -689,13 +758,13 @@ public enum FullGramArchiveParser {
                 if (fileFlags & 0x04) != 0 && pos + 4 <= headerEnd { pos += 4 } // crc32
                 _ = readVInt(data, cursor: &pos) // compression info
                 _ = readVInt(data, cursor: &pos) // host os
-                if let nameLen = readVInt(data, cursor: &pos), nameLen > 0 && nameLen <= 4096 && pos + Int(nameLen) <= headerEnd {
+                if let nameLen = readVInt(data, cursor: &pos), nameLen > 0 && nameLen <= 4096 && headerEnd - pos >= Int(nameLen) {
                     let nameData = data.subdata(in: pos ..< (pos + Int(nameLen)))
                     let name = String(data: nameData, encoding: .utf8) ?? "file"
                     let isDir = (fileFlags & 0x01) != 0 || name.hasSuffix("/")
                     entries.append(FullGramArchiveEntry(
                         name: name,
-                        compressedSize: packedSize,
+                        compressedSize: dataSize,
                         uncompressedSize: unpSize,
                         method: 0,
                         localHeaderOffset: UInt64(headerEnd),
@@ -704,8 +773,8 @@ public enum FullGramArchiveParser {
                     ))
                 }
             }
-            let next = UInt64(headerEnd) + dataSize
-            if next <= UInt64(headerStart) || next > UInt64(data.count) { break }
+            let (next, overflow) = UInt64(headerEnd).addingReportingOverflow(dataSize)
+            if overflow || next <= UInt64(headerStart) || next > UInt64(data.count) { break }
             cursor = Int(next)
             if blockType == 5 { break }
         }
@@ -724,12 +793,18 @@ public enum FullGramArchiveParser {
             if (headFlags & 0x8000) != 0 && cursor + 11 <= data.count {
                 addSize = UInt64(readUInt32LE(data, at: cursor + 7))
             }
-            if headType == 0x74 && cursor + 32 <= data.count {
-                let packed = UInt64(readUInt32LE(data, at: cursor + 7))
-                let unp = UInt64(readUInt32LE(data, at: cursor + 11))
+            let isLarge = (headFlags & 0x0100) != 0
+            let fixedHeaderLen = isLarge ? 40 : 32
+            if headType == 0x74 && headSize >= fixedHeaderLen && cursor + fixedHeaderLen <= data.count {
+                let packLow = UInt64(readUInt32LE(data, at: cursor + 7))
+                let unpLow = UInt64(readUInt32LE(data, at: cursor + 11))
+                let packHigh = isLarge ? UInt64(readUInt32LE(data, at: cursor + 32)) : 0
+                let unpHigh = isLarge ? UInt64(readUInt32LE(data, at: cursor + 36)) : 0
+                let packed = (packHigh << 32) | packLow
+                let unp = (unpHigh << 32) | unpLow
                 let nameSize = Int(readUInt16LE(data, at: cursor + 26))
-                let nameStart = cursor + 32
-                if nameSize > 0 && nameSize <= 4096 && nameStart + nameSize <= cursor + headSize {
+                let nameStart = cursor + fixedHeaderLen
+                if nameSize > 0 && nameSize <= 4096 && (cursor + headSize - nameStart) >= nameSize {
                     let nameData = data.subdata(in: nameStart ..< (nameStart + nameSize))
                     let rawName = String(data: nameData, encoding: .utf8) ?? String(data: nameData, encoding: .isoLatin1) ?? "file"
                     let cleanName = rawName.components(separatedBy: "\0").first ?? rawName
@@ -746,8 +821,9 @@ public enum FullGramArchiveParser {
                 }
                 addSize = packed
             }
-            let next = UInt64(cursor) + UInt64(headSize) + addSize
-            if next <= UInt64(cursor) || next > UInt64(data.count) { break }
+            let (next1, ov1) = UInt64(cursor).addingReportingOverflow(UInt64(headSize))
+            let (next, ov2) = next1.addingReportingOverflow(addSize)
+            if ov1 || ov2 || next <= UInt64(cursor) || next > UInt64(data.count) { break }
             cursor = Int(next)
             if headType == 0x7B { break }
         }
@@ -946,8 +1022,18 @@ public final class FullGramArchivePreviewController: ViewController, UITableView
             self.present(alert, animated: true)
             return
         }
-        let safeBaseName = ((entry.name as NSString).lastPathComponent).isEmpty ? "extracted.bin" : (entry.name as NSString).lastPathComponent
-        let outURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("fg_archive_\(safeBaseName)")
+        var sanitized = (entry.name as NSString).lastPathComponent
+        sanitized = sanitized
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "\\", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
+            .replacingOccurrences(of: "\0", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if sanitized.isEmpty || sanitized == "." || sanitized == ".." {
+            sanitized = "extracted.bin"
+        }
+        let safeBaseName = sanitized
+        let outURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("fg_archive_\(UUID().uuidString)_\(safeBaseName)")
         try? fileData.write(to: outURL, options: .atomic)
 
         if FullGramDocumentViewerController.isSupportedDocument(fileName: safeBaseName, mimeType: "") {
@@ -966,6 +1052,14 @@ public final class FullGramArchivePreviewController: ViewController, UITableView
 
     @objc private func shareArchive() {
         let activity = UIActivityViewController(activityItems: [self.fileURL], applicationActivities: nil)
+        if let popover = activity.popoverPresentationController {
+            if let barButtonItem = self.navigationItem.rightBarButtonItem {
+                popover.barButtonItem = barButtonItem
+            } else {
+                popover.sourceView = self.view
+                popover.sourceRect = CGRect(x: self.view.bounds.midX, y: self.view.bounds.midY, width: 1, height: 1)
+            }
+        }
         self.present(activity, animated: true)
     }
 
@@ -1011,7 +1105,8 @@ public final class FullGramAudioTrimSpliceController: ViewController, UITableVie
     private let addClipButton = UIButton(type: .system)
     private let exportButton = UIButton(type: .system)
     private var topConstraint: NSLayoutConstraint?
-    private var player: AVAudioPlayer?
+    private nonisolated(unsafe) var player: AVAudioPlayer?
+    private nonisolated(unsafe) var createdTempURLs: [URL] = []
     private var isExporting = false
 
     public init(
@@ -1030,6 +1125,9 @@ public final class FullGramAudioTrimSpliceController: ViewController, UITableVie
         self.title = isVideoCircle ? "Нарезка и склейка кружка" : "Нарезка и склейка аудио"
         if let initialURL {
             let safeURL = fullGramEnsureExtensionURL(for: initialURL, preferredFileName: title, fallbackExtension: isVideoCircle ? "mp4" : "m4a")
+            if safeURL != initialURL {
+                self.createdTempURLs.append(safeURL)
+            }
             let asset = AVURLAsset(url: safeURL)
             let rawDur = CMTimeGetSeconds(asset.duration)
             let dur = rawDur.isFinite ? max(0.5, rawDur) : 0.5
@@ -1048,6 +1146,14 @@ public final class FullGramAudioTrimSpliceController: ViewController, UITableVie
     @available(*, unavailable)
     required init(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        self.player?.stop()
+        self.player = nil
+        for url in self.createdTempURLs {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     override public func loadDisplayNode() {
@@ -1208,9 +1314,15 @@ public final class FullGramAudioTrimSpliceController: ViewController, UITableVie
         guard self.selectedIndex >= 0 && self.selectedIndex < self.segments.count else { return }
         var seg = self.segments[self.selectedIndex]
         if sender === self.startSlider {
-            seg.trimStart = min(TimeInterval(sender.value), max(0.0, seg.trimEnd - 0.3))
+            let minSpan = min(0.3, seg.duration * 0.5)
+            let clamped = min(max(0.0, TimeInterval(sender.value)), max(0.0, seg.trimEnd - minSpan))
+            seg.trimStart = clamped
+            sender.value = Float(clamped)
         } else {
-            seg.trimEnd = max(TimeInterval(sender.value), min(seg.duration, seg.trimStart + 0.3))
+            let minSpan = min(0.3, seg.duration * 0.5)
+            let clamped = max(min(seg.duration, TimeInterval(sender.value)), min(seg.duration, seg.trimStart + minSpan))
+            seg.trimEnd = clamped
+            sender.value = Float(clamped)
         }
         self.segments[self.selectedIndex] = seg
         self.refreshSelectionUI()
@@ -1259,6 +1371,7 @@ public final class FullGramAudioTrimSpliceController: ViewController, UITableVie
 
     public func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         for url in urls {
+            self.createdTempURLs.append(url)
             let asset = AVURLAsset(url: url)
             let rawDur = CMTimeGetSeconds(asset.duration)
             let dur = rawDur.isFinite ? max(0.5, rawDur) : 0.5
@@ -1354,6 +1467,10 @@ public final class FullGramAudioTrimSpliceController: ViewController, UITableVie
                         onComplete(outURL, finalDuration)
                     } else {
                         let activity = UIActivityViewController(activityItems: [outURL], applicationActivities: nil)
+                        if let popover = activity.popoverPresentationController {
+                            popover.sourceView = self.exportButton
+                            popover.sourceRect = self.exportButton.bounds
+                        }
                         self.present(activity, animated: true)
                         var resetCfg = self.exportButton.configuration ?? UIButton.Configuration.filled()
                         resetCfg.title = "Склеить и сохранить"
@@ -1423,7 +1540,7 @@ public final class FullGramVideoCircleCoverPickerController: ViewController {
         onSelectCover: @escaping (Double, UIImage) -> Void
     ) {
         self.asset = asset
-        self.duration = max(0.5, duration)
+        self.duration = (duration.isFinite && duration > 0.0) ? max(0.5, duration) : 0.5
         self.selectedImage = initialThumbnail
         self.onSelectCover = onSelectCover
         super.init(navigationBarPresentationData: nil)
@@ -1544,18 +1661,20 @@ public final class FullGramVideoCircleCoverPickerController: ViewController {
             }
             let generatedFrames = frames
             DispatchQueue.main.async {
-                guard let self else { return }
-                self.frameThumbnails = generatedFrames
-                self.stripsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-                for img in generatedFrames {
-                    let iv = UIImageView(image: img)
-                    iv.contentMode = .scaleAspectFill
-                    iv.clipsToBounds = true
-                    self.stripsStack.addArrangedSubview(iv)
-                }
-                if let first = generatedFrames.first {
-                    self.selectedImage = first
-                    self.previewImageView.image = first
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.frameThumbnails = generatedFrames
+                    self.stripsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+                    for img in generatedFrames {
+                        let iv = UIImageView(image: img)
+                        iv.contentMode = .scaleAspectFill
+                        iv.clipsToBounds = true
+                        self.stripsStack.addArrangedSubview(iv)
+                    }
+                    if let first = generatedFrames.first {
+                        self.selectedImage = first
+                        self.previewImageView.image = first
+                    }
                 }
             }
         }

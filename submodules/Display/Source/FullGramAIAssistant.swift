@@ -1,7 +1,7 @@
 import Foundation
 import Security
 
-public enum FullGramAIProvider: String, CaseIterable, Codable {
+public enum FullGramAIProvider: String, CaseIterable, Codable, Sendable {
     case openAI = "openai"
     case openRouter = "openrouter"
     case groq = "groq"
@@ -129,15 +129,15 @@ public enum FullGramAINotifications {
     public static let conversationChanged = Notification.Name("FullGram.AI.ConversationChanged")
 }
 
-public struct FullGramAIProposedAction: Equatable {
-    public enum Kind: String {
+public struct FullGramAIProposedAction: Equatable, Sendable {
+    public enum Kind: String, Sendable {
         case insertDraft = "insert_draft"
         case sendMessage = "send_message"
         case openChat = "open_chat"
         case toggleSetting = "toggle_setting"
     }
 
-    public enum Status: Equatable {
+    public enum Status: Equatable, Sendable {
         case pending
         case applied
         case cancelled
@@ -190,7 +190,7 @@ public struct FullGramAIProposedAction: Equatable {
     }
 }
 
-public struct FullGramAIChatMessage: Equatable {
+public struct FullGramAIChatMessage: Equatable, Sendable {
     public let id: String
     public let isUser: Bool
     public let text: String
@@ -212,7 +212,7 @@ public struct FullGramAIChatMessage: Equatable {
     }
 }
 
-public final class FullGramAIStore {
+public final class FullGramAIStore: @unchecked Sendable {
     public static let shared = FullGramAIStore()
 
     private let defaults = UserDefaults.standard
@@ -224,6 +224,16 @@ public final class FullGramAIStore {
     private var cachedModelName: String?
 
     private init() {}
+
+    public static func invalidateCache() {
+        let store = Self.shared
+        store.lock.lock()
+        store.cachedIsEnabled = nil
+        store.cachedProvider = nil
+        store.cachedEndpoint = nil
+        store.cachedModelName = nil
+        store.lock.unlock()
+    }
 
     public var isEnabled: Bool {
         get {
@@ -584,7 +594,7 @@ public final class FullGramAIStore {
         }
     }
 
-    public func testConnection(completion: @escaping (Result<String, Error>) -> Void) {
+    public func testConnection(completion: @escaping @Sendable (Result<String, Error>) -> Void) {
         self.sendPrompt(
             userPrompt: "Ответь ровно одним словом: Готов.",
             contextBlock: nil,
@@ -603,7 +613,7 @@ public final class FullGramAIStore {
         userPrompt: String,
         contextBlock: String?,
         includeHistory: Bool = true,
-        completion: @escaping (Result<(text: String, action: FullGramAIProposedAction?), Error>) -> Void
+        completion: @escaping @Sendable (Result<(text: String, action: FullGramAIProposedAction?), Error>) -> Void
     ) {
         let provider = self.provider
         let apiKey = FullGramAIKeychain.apiKey(for: provider)

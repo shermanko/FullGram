@@ -60,7 +60,7 @@ public struct FullGramBadge: Equatable {
     }
 }
 
-public final class FullGramBadges {
+public final class FullGramBadges: @unchecked Sendable {
     public static let shared = FullGramBadges()
     public static let didChangeNotification = Notification.Name("FullGram.BadgesDidChange")
 
@@ -102,6 +102,14 @@ public final class FullGramBadges {
         self.usersById = Self.builtInUsersById
         self.usersByName = Self.builtInUsernames
         self.loadCache()
+    }
+
+    public static func invalidateCache() {
+        let mgr = Self.shared
+        mgr.lock.lock()
+        mgr.cachedIsEnabled = nil
+        mgr.cachedCustomPopupText = nil
+        mgr.lock.unlock()
     }
 
     public var isEnabled: Bool {

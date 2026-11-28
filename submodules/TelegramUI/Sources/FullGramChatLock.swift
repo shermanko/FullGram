@@ -54,16 +54,20 @@ private final class FullGramChatLockObserverToken {
     private nonisolated(unsafe) var tokens: [NSObjectProtocol] = []
 
     init(controller: ChatControllerImpl) {
-        let handler: (Notification) -> Void = { [weak controller] _ in
-            controller?.fullGramApplyChatLock()
-        }
-        let backgroundHandler: (Notification) -> Void = { [weak controller] _ in
-            if let peerId = controller?.chatLocation.peerId {
-                FullGramChatPrivacy.relock(peerId: peerId.toInt64())
-            } else {
-                FullGramChatPrivacy.relock()
+        let handler: @Sendable (Notification) -> Void = { [weak controller] _ in
+            MainActor.assumeIsolated {
+                controller?.fullGramApplyChatLock()
             }
-            controller?.fullGramApplyChatLock(promptImmediately: false)
+        }
+        let backgroundHandler: @Sendable (Notification) -> Void = { [weak controller] _ in
+            MainActor.assumeIsolated {
+                if let peerId = controller?.chatLocation.peerId {
+                    FullGramChatPrivacy.relock(peerId: peerId.toInt64())
+                } else {
+                    FullGramChatPrivacy.relock()
+                }
+                controller?.fullGramApplyChatLock(promptImmediately: false)
+            }
         }
         self.tokens.append(
             NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main, using: backgroundHandler)
@@ -138,26 +142,29 @@ extension ChatControllerImpl {
                 }
                 return
             }
-            context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: ru ? "Откройте заблокированный чат" : "Open the locked chat", reply: { success, _ in
+            context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: ru ? "Откройте заблокированный чат" : "Open the locked chat", reply: { [weak self, weak lockView] success, _ in
                 DispatchQueue.main.async {
-                    lockView.isAuthenticating = false
-                    // Prevent background-transition race: never unlock if the app is no longer active or view detached.
-                    let canUnlock = success && UIApplication.shared.applicationState == .active && self.view.window != nil
-                    if canUnlock {
-                        FullGramChatPrivacy.markUnlocked(value)
-                        UIView.animate(withDuration: 0.2, animations: { lockView.alpha = 0.0 }, completion: { finished in
-                            if finished && FullGramChatPrivacy.isUnlocked(value) && UIApplication.shared.applicationState == .active {
-                                lockView.removeFromSuperview()
+                    MainActor.assumeIsolated {
+                        guard let self, let lockView else { return }
+                        lockView.isAuthenticating = false
+                        // Prevent background-transition race: never unlock if the app is no longer active or view detached.
+                        let canUnlock = success && UIApplication.shared.applicationState == .active && self.view.window != nil
+                        if canUnlock {
+                            FullGramChatPrivacy.markUnlocked(value)
+                            UIView.animate(withDuration: 0.2, animations: { lockView.alpha = 0.0 }, completion: { finished in
+                                if finished && FullGramChatPrivacy.isUnlocked(value) && UIApplication.shared.applicationState == .active {
+                                    lockView.removeFromSuperview()
+                                } else {
+                                    lockView.alpha = 1.0
+                                }
+                            })
+                        } else if !success {
+                            let nav = self.effectiveNavigationController ?? (self.navigationController as? NavigationController)
+                            if let nav {
+                                nav.filterController(self, animated: true)
                             } else {
-                                lockView.alpha = 1.0
+                                let _ = self.navigationController?.popViewController(animated: true)
                             }
-                        })
-                    } else if !success {
-                        let nav = self.effectiveNavigationController ?? (self.navigationController as? NavigationController)
-                        if let nav {
-                            nav.filterController(self, animated: true)
-                        } else {
-                            let _ = self.navigationController?.popViewController(animated: true)
                         }
                     }
                 }

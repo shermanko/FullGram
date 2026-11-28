@@ -681,11 +681,19 @@ public final class SecretMediaPreviewController: ViewController {
                     videoSourcePath = path
                 }
                 break
-            } else if let image = media as? TelegramMediaImage,
-                      let representation = image.representations.last,
-                      let path = mediaBox.completedResourcePath(representation.resource) {
-                imageSourcePath = path
-                break
+            } else if let image = media as? TelegramMediaImage {
+                let sortedReps = image.representations.sorted { lhs, rhs in
+                    Int(lhs.dimensions.width) * Int(lhs.dimensions.height) > Int(rhs.dimensions.width) * Int(rhs.dimensions.height)
+                }
+                for representation in sortedReps {
+                    if let path = mediaBox.completedResourcePath(representation.resource) {
+                        imageSourcePath = path
+                        break
+                    }
+                }
+                if imageSourcePath != nil {
+                    break
+                }
             }
         }
         if videoSourcePath == nil, imageSourcePath == nil, let path = tempFilePath, FileManager.default.fileExists(atPath: path) {
@@ -694,11 +702,12 @@ public final class SecretMediaPreviewController: ViewController {
 
         if let sourcePath = videoSourcePath {
             let safeExt = videoExt
+            let tempURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("fullgram_\(UUID().uuidString).\(safeExt)")
+            let srcURL = URL(fileURLWithPath: sourcePath)
+            let copied = ((try? FileManager.default.linkItem(at: srcURL, to: tempURL)) != nil)
+                || ((try? FileManager.default.copyItem(at: srcURL, to: tempURL)) != nil)
+            guard copied else { return }
             DispatchQueue.global(qos: .utility).async {
-                let tempURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("fullgram_\(UUID().uuidString).\(safeExt)")
-                guard (try? FileManager.default.copyItem(at: URL(fileURLWithPath: sourcePath), to: tempURL)) != nil else {
-                    return
-                }
                 PHPhotoLibrary.shared().performChanges({
                     PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: tempURL)
                 }, completionHandler: { _, _ in
@@ -706,8 +715,14 @@ public final class SecretMediaPreviewController: ViewController {
                 })
             }
         } else if let sourcePath = imageSourcePath {
+            let tempURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("fullgram_img_\(UUID().uuidString).dat")
+            let srcURL = URL(fileURLWithPath: sourcePath)
+            let copied = ((try? FileManager.default.linkItem(at: srcURL, to: tempURL)) != nil)
+                || ((try? FileManager.default.copyItem(at: srcURL, to: tempURL)) != nil)
+            guard copied else { return }
             DispatchQueue.global(qos: .utility).async {
-                guard let data = try? Data(contentsOf: URL(fileURLWithPath: sourcePath)),
+                defer { try? FileManager.default.removeItem(at: tempURL) }
+                guard let data = try? Data(contentsOf: tempURL),
                       let uiImage = UIImage(data: data) else {
                     return
                 }

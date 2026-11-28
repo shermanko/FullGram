@@ -1,6 +1,6 @@
 import Foundation
 import AVFoundation
-import SwiftSignalKit
+@preconcurrency import SwiftSignalKit
 import Display
 import AccountContext
 import OpusBinding
@@ -29,16 +29,11 @@ enum FullGramProfanityBleep {
             }
             try? FileManager.default.removeItem(at: url)
 
-            let completionLock = NSLock()
-            var finished = false
-            let emitProcessed: ([ClosedRange<Double>]) -> Void = { ranges in
-                completionLock.lock()
-                if finished {
-                    completionLock.unlock()
+            let finished = Atomic<Bool>(value: false)
+            let emitProcessed: @Sendable ([ClosedRange<Double>]) -> Void = { ranges in
+                if finished.swap(true) {
                     return
                 }
-                finished = true
-                completionLock.unlock()
 
                 guard !ranges.isEmpty || requiresVoicePrivacy else {
                     subscriber.putNext(data)
@@ -77,9 +72,7 @@ enum FullGramProfanityBleep {
             }
             return ActionDisposable {
                 timeoutWork.cancel()
-                completionLock.lock()
-                finished = true
-                completionLock.unlock()
+                let _ = finished.swap(true)
             }
         }
         |> runOn(Queue.concurrentDefaultQueue())

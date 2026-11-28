@@ -381,6 +381,18 @@ private final class AudioPlayerRendererContext {
     
     fileprivate func reconfigureAudio(ambient: Bool) {
         self.ambient = ambient
+        if let equalizerAudioUnit = self.equalizerAudioUnit {
+            if self.forAudioVideoMessage && !self.ambient {
+                AudioUnitSetParameter(equalizerAudioUnit, kAUNBandEQParam_GlobalGain, kAudioUnitScope_Global, 0, self.forceAudioToSpeaker ? 0.0 : 12.0, 0)
+                let freqs = FullGramMixer.frequencies
+                for index in 0 ..< freqs.count {
+                    AudioUnitSetParameter(equalizerAudioUnit, AudioUnitParameterID(kAUNBandEQParam_BypassBand + UInt32(index)), kAudioUnitScope_Global, 0, 1.0, 0)
+                    AudioUnitSetParameter(equalizerAudioUnit, AudioUnitParameterID(kAUNBandEQParam_Gain + UInt32(index)), kAudioUnitScope_Global, 0, 0.0, 0)
+                }
+            } else {
+                self.applyMixerParameters(to: equalizerAudioUnit)
+            }
+        }
         
         if let audioGraph = self.audioGraph {
             var isRunning: DarwinBoolean = false
@@ -515,6 +527,13 @@ private final class AudioPlayerRendererContext {
             guard NewAUGraph(&maybeAudioGraph) == noErr, let audioGraph = maybeAudioGraph else {
                 return
             }
+            var graphCommitted = false
+            defer {
+                if !graphCommitted {
+                    AUGraphClose(audioGraph)
+                    DisposeAUGraph(audioGraph)
+                }
+            }
             
             var converterNode: AUNode = 0
             var converterDescription = AudioComponentDescription()
@@ -608,11 +627,11 @@ private final class AudioPlayerRendererContext {
                 return
             }
   
+            var bandCount = UInt32(FullGramMixer.frequencies.count)
+            AudioUnitSetProperty(equalizerAudioUnit, kAUNBandEQProperty_NumberOfBands, kAudioUnitScope_Global, 0, &bandCount, UInt32(MemoryLayout<UInt32>.size))
             if self.forAudioVideoMessage && !self.ambient {
                 AudioUnitSetParameter(equalizerAudioUnit, kAUNBandEQParam_GlobalGain, kAudioUnitScope_Global, 0, self.forceAudioToSpeaker ? 0.0 : 12.0, 0)
             } else {
-                var bandCount = UInt32(FullGramMixer.frequencies.count)
-                AudioUnitSetProperty(equalizerAudioUnit, kAUNBandEQProperty_NumberOfBands, kAudioUnitScope_Global, 0, &bandCount, UInt32(MemoryLayout<UInt32>.size))
                 self.applyMixerParameters(to: equalizerAudioUnit)
             }
             
@@ -664,6 +683,7 @@ private final class AudioPlayerRendererContext {
             self.mixerAudioUnit = mixerAudioUnit
             self.equalizerAudioUnit = equalizerAudioUnit
             self.outputAudioUnit = outputAudioUnit
+            graphCommitted = true
         }
     }
     
@@ -686,7 +706,7 @@ private final class AudioPlayerRendererContext {
     
     private func applyMixerParameters(to unit: AudioComponentInstance? = nil) {
         assert(audioPlayerRendererQueue.isCurrent())
-        guard !(self.forAudioVideoMessage && !self.ambient), !self.soundMuted else { return }
+        guard !(self.forAudioVideoMessage && !self.ambient) else { return }
         guard let equalizerAudioUnit = unit ?? self.equalizerAudioUnit else { return }
         let enabled = FullGramMixer.isEnabled
         let gains = FullGramMixer.gains
@@ -759,23 +779,26 @@ private final class AudioPlayerRendererContext {
                 break
             }
             
-            let overflowTakenLength = self.bufferContext.with { context -> Int in
+            let overflowChunk = self.bufferContext.with { context -> (Data, Int64)? in
                 let takeLength = min(context.overflowData.count, bytesToRequest)
-                if takeLength != 0 {
-                    if takeLength == context.overflowData.count {
-                        let data = context.overflowData
-                        context.overflowData = Data()
-                        self.enqueueSamples(data, sampleIndex: context.overflowDataMaxChannelSampleIndex - Int64(data.count / (2 * 2)))
-                    } else {
-                        let data = context.overflowData.subdata(in: 0 ..< takeLength)
-                        self.enqueueSamples(data, sampleIndex: context.overflowDataMaxChannelSampleIndex - Int64(context.overflowData.count / (2 * 2)))
-                        context.overflowData.replaceSubrange(0 ..< takeLength, with: Data())
-                    }
+                guard takeLength != 0 else {
+                    return nil
                 }
-                return takeLength
+                let totalOverflowCount = context.overflowData.count
+                let chunkStartSampleIndex = context.overflowDataMaxChannelSampleIndex - Int64(totalOverflowCount / (2 * 2))
+                let data: Data
+                if takeLength == totalOverflowCount {
+                    data = context.overflowData
+                    context.overflowData = Data()
+                } else {
+                    data = context.overflowData.subdata(in: 0 ..< takeLength)
+                    context.overflowData.replaceSubrange(0 ..< takeLength, with: Data())
+                }
+                return (data, chunkStartSampleIndex)
             }
             
-            if overflowTakenLength != 0 {
+            if let (overflowData, overflowSampleIndex) = overflowChunk {
+                self.enqueueSamples(overflowData, sampleIndex: overflowSampleIndex)
                 continue
             }
             
@@ -809,6 +832,7 @@ private final class AudioPlayerRendererContext {
                                                 }
                                                 CMBlockBufferCopyDataBytes(dataBuffer, atOffset: takeLength, dataLength: dataLength - takeLength, destination: bytes.advanced(by: copyOffset))
                                             }
+                                            context.overflowDataMaxChannelSampleIndex = bufferSampleIndex + Int64(dataLength / (2 * 2))
                                         }
                                     }
                                     

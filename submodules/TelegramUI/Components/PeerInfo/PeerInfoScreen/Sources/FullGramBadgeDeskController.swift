@@ -16,7 +16,7 @@ import UndoUI
 
 private final class FullGramBadgeDeskPresenterBox: @unchecked Sendable {
     weak var controller: ItemListController?
-    var presentNative: ((UIViewController) -> Void)?
+    var presentNative: (@MainActor @Sendable (UIViewController) -> Void)?
     var presentController: ((ViewController) -> Void)?
     var push: ((ViewController) -> Void)?
 }
@@ -665,8 +665,8 @@ func fullGramBadgeDeskController(
                 tf.text = currentText
                 tf.placeholder = "FullGram+"
             }
-            alert.addAction(UIAlertAction(title: ru ? "Сохранить" : "Save", style: .default, handler: { _ in
-                let val = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            alert.addAction(UIAlertAction(title: ru ? "Сохранить" : "Save", style: .default, handler: { [weak alert] _ in
+                let val = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 if !val.isEmpty {
                     updateState { $0.draft.label = val }
                 }
@@ -682,8 +682,8 @@ func fullGramBadgeDeskController(
                 tf.text = currentShort
                 tf.placeholder = "FG+"
             }
-            alert.addAction(UIAlertAction(title: ru ? "Сохранить" : "Save", style: .default, handler: { _ in
-                let val = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            alert.addAction(UIAlertAction(title: ru ? "Сохранить" : "Save", style: .default, handler: { [weak alert] _ in
+                let val = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 if !val.isEmpty {
                     updateState { $0.draft.shortLabel = val }
                 }
@@ -712,8 +712,8 @@ func fullGramBadgeDeskController(
                 tf.placeholder = "123456789"
                 tf.keyboardType = .numberPad
             }
-            alert.addAction(UIAlertAction(title: ru ? "Выбрать NFT →" : "Choose NFT →", style: .default, handler: { _ in
-                let raw = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            alert.addAction(UIAlertAction(title: ru ? "Выбрать NFT →" : "Choose NFT →", style: .default, handler: { [weak alert] _ in
+                let raw = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 guard let uid = Int64(raw), uid > 0 else { return }
                 presenter.push?(fullGramNFTCatalogController(
                     context: context,
@@ -739,8 +739,8 @@ func fullGramBadgeDeskController(
                 tf.placeholder = String(myId)
                 tf.keyboardType = .numberPad
             }
-            alert.addAction(UIAlertAction(title: ru ? "Далее →" : "Next →", style: .default, handler: { _ in
-                let raw = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            alert.addAction(UIAlertAction(title: ru ? "Далее →" : "Next →", style: .default, handler: { [weak alert] _ in
+                let raw = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 guard let uid = Int64(raw), uid > 0 else { return }
                 fullGramPresentGrantEconomyMenu(context: context, targetPeerId: uid, targetDisplayName: "ID \(uid)", presentNative: presenter.presentNative)
             }))
@@ -1031,9 +1031,11 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
 
     let showAlert: @Sendable (String, String) -> Void = { title, message in
         DispatchQueue.main.async {
-            let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "OK", style: .default))
-            presenter.presentNative?(alert)
+            MainActor.assumeIsolated {
+                let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "OK", style: .default))
+                presenter.presentNative?(alert)
+            }
         }
     }
 
@@ -1106,9 +1108,9 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
                 tf.autocorrectionType = .no
                 tf.autocapitalizationType = .none
             }
-            alert.addAction(UIAlertAction(title: ru ? "Применить" : "Apply", style: .default, handler: { _ in
-                let target = (alert.textFields?[0].text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                let role = (alert.textFields?[1].text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            alert.addAction(UIAlertAction(title: ru ? "Применить" : "Apply", style: .default, handler: { [weak alert] _ in
+                let target = (alert?.textFields?[0].text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let role = (alert?.textFields?[1].text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 guard !target.isEmpty, !role.isEmpty else { return }
                 let numericId = Int64(target)
                 let enabled = role != "off" && role != "none" && role != "remove"
@@ -1148,8 +1150,8 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
                 tf.autocorrectionType = .no
                 tf.autocapitalizationType = .none
             }
-            let performSponsorAction: (Bool, FullGramSponsorTier) -> Void = { enabled, tier in
-                let target = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let performSponsorAction: (Bool, FullGramSponsorTier) -> Void = { [weak alert] enabled, tier in
+                let target = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !target.isEmpty else { return }
                 let numericId = Int64(target)
                 FullGramAdmin.shared.setSponsor(
@@ -1199,8 +1201,8 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
                 tf.placeholder = String(myId)
                 tf.keyboardType = .numberPad
             }
-            alert.addAction(UIAlertAction(title: ru ? "Выбрать NFT →" : "Choose NFT →", style: .default, handler: { _ in
-                let raw = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            alert.addAction(UIAlertAction(title: ru ? "Выбрать NFT →" : "Choose NFT →", style: .default, handler: { [weak alert] _ in
+                let raw = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 guard let uid = Int64(raw), uid > 0 else { return }
                 presenter.push?(fullGramNFTCatalogController(context: context, targetPeerId: uid, targetDisplayName: "ID \(uid)"))
             }))
@@ -1220,8 +1222,8 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
                 tf.placeholder = String(myId)
                 tf.keyboardType = .numberPad
             }
-            alert.addAction(UIAlertAction(title: ru ? "Далее →" : "Next →", style: .default, handler: { _ in
-                let raw = (alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            alert.addAction(UIAlertAction(title: ru ? "Далее →" : "Next →", style: .default, handler: { [weak alert] _ in
+                let raw = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 guard let uid = Int64(raw), uid > 0 else { return }
                 fullGramPresentGrantEconomyMenu(context: context, targetPeerId: uid, targetDisplayName: "ID \(uid)", presentNative: presenter.presentNative)
             }))
@@ -1263,29 +1265,31 @@ func fullGramAdminController(context: AccountContext) -> ViewController {
             let ru = context.sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode.hasPrefix("ru")
             FullGramPluginManager.shared.fetchRemoteCatalog { res in
                 DispatchQueue.main.async {
-                    switch res {
-                    case let .failure(err):
-                        showAlert(ru ? "Ошибка" : "Error", err.localizedDescription)
-                    case let .success(catalog):
-                        guard !catalog.plugins.isEmpty else {
-                            showAlert(ru ? "Маркет пуст" : "Market is empty", ru ? "В маркете сейчас нет плагинов." : "No plugins in market.")
-                            return
-                        }
-                        let sheet = UIAlertController(title: ru ? "Удалить из маркета" : "Delete from market", message: nil, preferredStyle: .actionSheet)
-                        for item in catalog.plugins {
-                            sheet.addAction(UIAlertAction(title: "\(item.name) (\(item.id))", style: .destructive, handler: { _ in
-                                FullGramAdmin.shared.deleteMarketPlugin(id: item.id) { delRes in
-                                    switch delRes {
-                                    case .success:
-                                        showAlert(ru ? "Удалено" : "Deleted", item.name)
-                                    case let .failure(err):
-                                        showAlert(ru ? "Ошибка" : "Error", err.localizedDescription)
+                    MainActor.assumeIsolated {
+                        switch res {
+                        case let .failure(err):
+                            showAlert(ru ? "Ошибка" : "Error", err.localizedDescription)
+                        case let .success(catalog):
+                            guard !catalog.plugins.isEmpty else {
+                                showAlert(ru ? "Маркет пуст" : "Market is empty", ru ? "В маркете сейчас нет плагинов." : "No plugins in market.")
+                                return
+                            }
+                            let sheet = UIAlertController(title: ru ? "Удалить из маркета" : "Delete from market", message: nil, preferredStyle: .actionSheet)
+                            for item in catalog.plugins {
+                                sheet.addAction(UIAlertAction(title: "\(item.name) (\(item.id))", style: .destructive, handler: { _ in
+                                    FullGramAdmin.shared.deleteMarketPlugin(id: item.id) { delRes in
+                                        switch delRes {
+                                        case .success:
+                                            showAlert(ru ? "Удалено" : "Deleted", item.name)
+                                        case let .failure(err):
+                                            showAlert(ru ? "Ошибка" : "Error", err.localizedDescription)
+                                        }
                                     }
-                                }
-                            }))
+                                }))
+                            }
+                            sheet.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
+                            presenter.presentNative?(sheet)
                         }
-                        sheet.addAction(UIAlertAction(title: ru ? "Отмена" : "Cancel", style: .cancel))
-                        presenter.presentNative?(sheet)
                     }
                 }
             }

@@ -113,8 +113,8 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
     private var usersById: [Int64: [FullGramGrantedNFT]] = [:]
     private var isRefreshing = false
     private var needsFollowUpRefresh = false
-    private var pendingCompletions: [(Bool) -> Void] = []
-    public var onServerNFTAction: (@Sendable (
+    private var pendingCompletions: [@Sendable (Bool) -> Void] = []
+    private var _onServerNFTAction: (@Sendable (
         _ actorPeerId: Int64,
         _ targetPeerId: Int64,
         _ toPeerId: Int64?,
@@ -127,6 +127,31 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
         _ patternName: String?,
         _ number: Int32?
     ) -> Void)?
+
+    public var onServerNFTAction: (@Sendable (
+        _ actorPeerId: Int64,
+        _ targetPeerId: Int64,
+        _ toPeerId: Int64?,
+        _ entryId: String,
+        _ slug: String,
+        _ action: String,
+        _ modelName: String?,
+        _ backdropName: String?,
+        _ backdropId: Int32?,
+        _ patternName: String?,
+        _ number: Int32?
+    ) -> Void)? {
+        get {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            return self._onServerNFTAction
+        }
+        set {
+            self.lock.lock()
+            self._onServerNFTAction = newValue
+            self.lock.unlock()
+        }
+    }
 
     public static func candidatePeerIds(for raw: Int64) -> [Int64] {
         var ids: [Int64] = [raw]
@@ -573,6 +598,12 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
         self.saveLocalItemsLocked()
         self.rebuildCombinedLocked()
         self.lock.unlock()
+        if transferred.id.hasPrefix("eco_") {
+            FullGramEconomy.shared.syncOwnedGiftOwnerFromProfile(
+                ecoEntryId: String(transferred.id.dropFirst(4)),
+                toPeerId: toPeerId
+            )
+        }
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
         }
@@ -665,7 +696,7 @@ public final class FullGramGrantedNFTStore: @unchecked Sendable {
         self.refreshNow(completion: nil)
     }
 
-    public func refreshNow(completion: ((Bool) -> Void)? = nil) {
+    public func refreshNow(completion: (@Sendable (Bool) -> Void)? = nil) {
         guard let url = URL(string: Self.nftsURL) else {
             DispatchQueue.main.async { completion?(false) }
             return

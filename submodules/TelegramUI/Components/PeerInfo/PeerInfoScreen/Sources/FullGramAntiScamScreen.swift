@@ -2,11 +2,11 @@ import Foundation
 import UIKit
 import Display
 import AsyncDisplayKit
-import SwiftSignalKit
+@preconcurrency import SwiftSignalKit
 import TelegramCore
 import TelegramPresentationData
 import ItemListUI
-import AccountContext
+@preconcurrency import AccountContext
 
 // MARK: - Гайд «Не попадись» (структурированный экран, легко наполняемый через массив блоков)
 

@@ -49,7 +49,15 @@ public final class FullGramAdmin: @unchecked Sendable {
         return self.verifiedAuthMethod
     }
 
+    private let keychainLock = NSLock()
+
     private func readKeychain(account: String) -> String? {
+        self.keychainLock.lock()
+        defer { self.keychainLock.unlock() }
+        return self.readKeychainUnlocked(account: account)
+    }
+
+    private func readKeychainUnlocked(account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: self.keychainService,
@@ -66,8 +74,6 @@ public final class FullGramAdmin: @unchecked Sendable {
         }
         return str.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-
-    private let keychainLock = NSLock()
 
     private func writeKeychain(_ rawValue: String, account: String) {
         self.keychainLock.lock()
@@ -137,13 +143,15 @@ public final class FullGramAdmin: @unchecked Sendable {
         self.verifiedAdminUserId = nil
         self.verifiedAuthMethod = nil
         self.lock.unlock()
+        self.keychainLock.lock()
         if trimmed.contains("hash=") && (trimmed.contains("auth_date=") || trimmed.contains("user=")) {
-            self.writeKeychain(trimmed, account: self.initDataAccount)
-            self.deleteKeychain(account: self.keychainAccount)
+            self.writeKeychainUnlocked(trimmed, account: self.initDataAccount)
+            self.deleteKeychainUnlocked(account: self.keychainAccount)
         } else {
-            self.writeKeychain(trimmed, account: self.keychainAccount)
-            self.deleteKeychain(account: self.initDataAccount)
+            self.writeKeychainUnlocked(trimmed, account: self.keychainAccount)
+            self.deleteKeychainUnlocked(account: self.initDataAccount)
         }
+        self.keychainLock.unlock()
     }
 
     public func clearToken() {
@@ -151,18 +159,24 @@ public final class FullGramAdmin: @unchecked Sendable {
         self.verifiedAdminUserId = nil
         self.verifiedAuthMethod = nil
         self.lock.unlock()
-        self.deleteKeychain(account: self.keychainAccount)
-        self.deleteKeychain(account: self.initDataAccount)
+        self.keychainLock.lock()
+        self.deleteKeychainUnlocked(account: self.keychainAccount)
+        self.deleteKeychainUnlocked(account: self.initDataAccount)
+        self.keychainLock.unlock()
     }
 
     @discardableResult
     public func applyAuthHeaders(to request: inout URLRequest) -> Bool {
+        self.keychainLock.lock()
+        let initData = self.readKeychainUnlocked(account: self.initDataAccount)
+        let token = self.readKeychainUnlocked(account: self.keychainAccount)
+        self.keychainLock.unlock()
         var applied = false
-        if let initData = self.getTelegramInitData(), !initData.isEmpty {
+        if let initData, !initData.isEmpty {
             request.setValue(initData, forHTTPHeaderField: "X-Telegram-Init-Data")
             applied = true
         }
-        if let token = self.getToken(), !token.isEmpty {
+        if let token, !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             applied = true
         }
@@ -192,7 +206,7 @@ public final class FullGramAdmin: @unchecked Sendable {
     private func getOrCreateDeviceSecret() -> String {
         self.keychainLock.lock()
         defer { self.keychainLock.unlock() }
-        if let existing = self.readKeychain(account: self.deviceSecretAccount), existing.count >= 16 {
+        if let existing = self.readKeychainUnlocked(account: self.deviceSecretAccount), existing.count >= 16 {
             return existing
         }
         var bytes = [UInt8](repeating: 0, count: 32)
@@ -208,8 +222,10 @@ public final class FullGramAdmin: @unchecked Sendable {
     }
 
     public func clearClientSession() {
-        self.deleteKeychain(account: self.clientSessionTokenAccount)
-        self.deleteKeychain(account: self.clientSessionUidAccount)
+        self.keychainLock.lock()
+        self.deleteKeychainUnlocked(account: self.clientSessionTokenAccount)
+        self.deleteKeychainUnlocked(account: self.clientSessionUidAccount)
+        self.keychainLock.unlock()
     }
 
     public func ensureClientSession(
@@ -224,13 +240,15 @@ public final class FullGramAdmin: @unchecked Sendable {
             }
             return
         }
-        if !forceRefresh,
-           let token = self.readKeychain(account: self.clientSessionTokenAccount),
-           !token.isEmpty,
-           let uid = self.readKeychain(account: self.clientSessionUidAccount),
-           uid == String(normId) {
-            completion(.success(token))
-            return
+        if !forceRefresh {
+            self.keychainLock.lock()
+            let cachedToken = self.readKeychainUnlocked(account: self.clientSessionTokenAccount)
+            let cachedUid = self.readKeychainUnlocked(account: self.clientSessionUidAccount)
+            self.keychainLock.unlock()
+            if let cachedToken, !cachedToken.isEmpty, cachedUid == String(normId) {
+                completion(.success(cachedToken))
+                return
+            }
         }
 
         self.lock.lock()
@@ -271,8 +289,12 @@ public final class FullGramAdmin: @unchecked Sendable {
             switch result {
             case let .success(json):
                 if let token = json["token"] as? String, !token.isEmpty {
-                    self?.writeKeychain(token, account: self?.clientSessionTokenAccount ?? "client_session_token")
-                    self?.writeKeychain(String(normId), account: self?.clientSessionUidAccount ?? "client_session_uid")
+                    if let self {
+                        self.keychainLock.lock()
+                        self.writeKeychainUnlocked(token, account: self.clientSessionTokenAccount)
+                        self.writeKeychainUnlocked(String(normId), account: self.clientSessionUidAccount)
+                        self.keychainLock.unlock()
+                    }
                     finish(.success(token))
                 } else {
                     finish(.failure(NSError(domain: "FullGramAdmin", code: 500, userInfo: [NSLocalizedDescriptionKey: "Сервер не выдал токен сессии."])))
@@ -949,7 +971,7 @@ public final class FullGramAdmin: @unchecked Sendable {
             "peerId": String(normTarget)
         ]
         if let toPeerId { payload["toPeerId"] = String(FullGramCloudCosmetics.normalizedPeerId(toPeerId)) }
-        if let amount { payload["amount"] = amount }
+        if let amount, amount.isFinite { payload["amount"] = amount }
         if let username, !username.isEmpty { payload["username"] = username }
         if let number, !number.isEmpty { payload["number"] = number }
         if let entryId, !entryId.isEmpty { payload["id"] = entryId }
@@ -986,10 +1008,10 @@ public final class FullGramAdmin: @unchecked Sendable {
             "peerId": String(normTarget),
             "isPrimary": isPrimary
         ]
-        if let amount { payload["amount"] = amount }
+        if let amount, amount.isFinite { payload["amount"] = amount }
         if let username, !username.isEmpty { payload["username"] = username }
         if let number, !number.isEmpty { payload["number"] = number }
-        if let priceTon { payload["priceTon"] = priceTon }
+        if let priceTon, priceTon.isFinite { payload["priceTon"] = priceTon }
         if let entryId, !entryId.isEmpty { payload["id"] = entryId }
 
         if useAdminEndpoint && self.hasToken {
@@ -1002,13 +1024,19 @@ public final class FullGramAdmin: @unchecked Sendable {
                 return
             }
         }
-        self.sendClientSessionJSONRequest(path: "/sponsor/economy", peerId: normActor, payload: payload, didRetry: false, completion: completion)
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: payload, options: []) else {
+            DispatchQueue.main.async {
+                completion(.failure(NSError(domain: "FullGramAdmin", code: 400, userInfo: [NSLocalizedDescriptionKey: "Ошибка формирования запроса."])))
+            }
+            return
+        }
+        self.sendClientSessionJSONRequest(path: "/sponsor/economy", peerId: normActor, bodyData: bodyData, didRetry: false, completion: completion)
     }
 
     private func sendClientSessionJSONRequest(
         path: String,
         peerId: Int64,
-        payload: [String: Any],
+        bodyData: Data,
         didRetry: Bool,
         completion: @escaping @Sendable (Result<[String: Any], Error>) -> Void
     ) {
@@ -1018,8 +1046,7 @@ public final class FullGramAdmin: @unchecked Sendable {
             case let .failure(err):
                 DispatchQueue.main.async { completion(.failure(err)) }
             case let .success(token):
-                guard let url = URL(string: Self.workerBaseURL + path),
-                      let bodyData = try? JSONSerialization.data(withJSONObject: payload, options: []) else {
+                guard let url = URL(string: Self.workerBaseURL + path) else {
                     DispatchQueue.main.async {
                         completion(.failure(NSError(domain: "FullGramAdmin", code: 400, userInfo: [NSLocalizedDescriptionKey: "Ошибка формирования запроса."])))
                     }
@@ -1037,7 +1064,7 @@ public final class FullGramAdmin: @unchecked Sendable {
                     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                     if status == 401 && !didRetry {
                         self?.clearClientSession()
-                        self?.sendClientSessionJSONRequest(path: path, peerId: peerId, payload: payload, didRetry: true, completion: completion)
+                        self?.sendClientSessionJSONRequest(path: path, peerId: peerId, bodyData: bodyData, didRetry: true, completion: completion)
                         return
                     }
                     if let error {
@@ -1343,9 +1370,9 @@ public final class FullGramBetaAccess: @unchecked Sendable {
         self.cachedActivated = false
         self.cachedPeerId = nil
         self.lastServerCheck = 0
-        self.lock.unlock()
         self.deleteKeychain(self.receiptAccount)
         self.deleteKeychain(self.peerIdAccount)
+        self.lock.unlock()
         if wasActive {
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
@@ -1484,13 +1511,15 @@ public final class FullGramBetaAccess: @unchecked Sendable {
                 }
                 return
             }
-            self?.writeKeychain(receipt, account: self?.receiptAccount ?? "beta_receipt_v1")
-            self?.writeKeychain(String(normId), account: self?.peerIdAccount ?? "beta_peer_v1")
-            self?.lock.lock()
-            self?.cachedActivated = true
-            self?.cachedPeerId = String(normId)
-            self?.lastServerCheck = Date().timeIntervalSince1970
-            self?.lock.unlock()
+            if let self {
+                self.lock.lock()
+                self.writeKeychain(receipt, account: self.receiptAccount)
+                self.writeKeychain(String(normId), account: self.peerIdAccount)
+                self.cachedActivated = true
+                self.cachedPeerId = String(normId)
+                self.lastServerCheck = Date().timeIntervalSince1970
+                self.lock.unlock()
+            }
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
                 completion(.success(()))
@@ -1569,9 +1598,9 @@ public final class FullGramBetaAccess: @unchecked Sendable {
 
             if active {
                 if let receipt = parsed["receipt"] as? String, Self.isStructurallyValidReceipt(receipt) {
+                    self.lock.lock()
                     self.writeKeychain(receipt, account: self.receiptAccount)
                     self.writeKeychain(String(normId), account: self.peerIdAccount)
-                    self.lock.lock()
                     let changed = self.cachedActivated != true || self.cachedPeerId != String(normId)
                     self.cachedActivated = true
                     self.cachedPeerId = String(normId)

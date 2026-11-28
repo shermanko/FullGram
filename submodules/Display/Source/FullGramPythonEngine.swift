@@ -346,9 +346,18 @@ private indirect enum PyStmt {
 private struct PyParser {
     private let tokens: [PyToken]
     private var pos = 0
+    private var depth = 0
+    private let maxDepth = 64
 
     init(tokens: [PyToken]) {
         self.tokens = tokens
+    }
+
+    private mutating func enterDepth() throws {
+        self.depth += 1
+        if self.depth > self.maxDepth {
+            throw FullGramPluginError("Python line \(self.current.line): nesting depth limit exceeded (\(self.maxDepth))")
+        }
     }
 
     private var current: PyToken {
@@ -397,6 +406,7 @@ private struct PyParser {
     }
 
     private mutating func parseSuite() throws -> [PyStmt] {
+        try self.enterDepth()
         if self.match(.newline) {
             try self.expect(.indent, "indented block")
             var stmts: [PyStmt] = []
@@ -406,9 +416,11 @@ private struct PyParser {
                 self.skipNewlines()
             }
             _ = self.match(.dedent)
+            self.depth -= 1
             return stmts
         } else {
             let single = try self.parseSimpleStmt()
+            self.depth -= 1
             return [single]
         }
     }
@@ -576,6 +588,7 @@ private struct PyParser {
     }
 
     mutating func parseExpr() throws -> PyExpr {
+        try self.enterDepth()
         if self.match(.lambda) {
             var params: [String] = []
             if self.current.kind != .colon {
@@ -587,15 +600,19 @@ private struct PyParser {
                 } while self.match(.comma)
             }
             try self.expect(.colon, "':'")
-            return .lambda(params, try self.parseExpr())
+            let body = try self.parseExpr()
+            self.depth -= 1
+            return .lambda(params, body)
         }
         let expr = try self.parseOr()
         if self.match(.if) {
             let cond = try self.parseOr()
             try self.expect(.else, "'else'")
             let falsy = try self.parseExpr()
+            self.depth -= 1
             return .ternary(cond, expr, falsy)
         }
+        self.depth -= 1
         return expr
     }
 
@@ -612,7 +629,12 @@ private struct PyParser {
     }
 
     private mutating func parseNot() throws -> PyExpr {
-        if self.match(.not) { return .unary(.not, try self.parseNot()) }
+        if self.match(.not) {
+            try self.enterDepth()
+            let inner = try self.parseNot()
+            self.depth -= 1
+            return .unary(.not, inner)
+        }
         return try self.parseCmp()
     }
 
@@ -659,8 +681,18 @@ private struct PyParser {
     }
 
     private mutating func parseUnary() throws -> PyExpr {
-        if self.match(.minus) { return .unary(.minus, try self.parseUnary()) }
-        if self.match(.plus) { return try self.parseUnary() }
+        if self.match(.minus) {
+            try self.enterDepth()
+            let inner = try self.parseUnary()
+            self.depth -= 1
+            return .unary(.minus, inner)
+        }
+        if self.match(.plus) {
+            try self.enterDepth()
+            let inner = try self.parseUnary()
+            self.depth -= 1
+            return inner
+        }
         return try self.parsePower()
     }
 
@@ -711,6 +743,8 @@ private struct PyParser {
     }
 
     private mutating func parsePrimary() throws -> PyExpr {
+        try self.enterDepth()
+        defer { self.depth -= 1 }
         switch self.current.kind {
         case .none: self.pos += 1; return .none
         case .true: self.pos += 1; return .bool(true)
@@ -812,6 +846,8 @@ public final class FullGramPythonVM {
     private let maxSteps = 120_000
     private var callDepth = 0
     private let maxCallDepth = 64
+    private static let maxStringBytes = 1_048_576
+    private static let maxCollectionItems = 10_000
 
     public init(hostAPI: [String: FullGramPluginValue], printHandler: @escaping (String) -> Void) {
         self.registerBuiltins(hostAPI: hostAPI, printHandler: printHandler)
@@ -850,6 +886,16 @@ public final class FullGramPythonVM {
         }
         self.steps = 0
         self.callDepth = 0
+        return try fn(args)
+    }
+
+    @discardableResult
+    public func invoke(_ fn: ([FullGramPluginValue]) throws -> FullGramPluginValue, args: [FullGramPluginValue]) throws -> FullGramPluginValue {
+        self.vmLock.lock()
+        defer { self.vmLock.unlock() }
+        if self.callDepth == 0 {
+            self.steps = 0
+        }
         return try fn(args)
     }
 
@@ -1020,10 +1066,19 @@ public final class FullGramPythonVM {
             if let v = env.get(id) { return v }
             throw FullGramPluginError("Python: name '\(id)' is not defined")
         case let .list(items):
+            guard items.count <= Self.maxCollectionItems else {
+                throw FullGramPluginError("Python list size limit exceeded")
+            }
             return .list(try items.map { try self.evalExpr($0, env: env) })
         case let .tuple(items):
+            guard items.count <= Self.maxCollectionItems else {
+                throw FullGramPluginError("Python tuple size limit exceeded")
+            }
             return .list(try items.map { try self.evalExpr($0, env: env) })
         case let .dict(pairs):
+            guard pairs.count <= Self.maxCollectionItems else {
+                throw FullGramPluginError("Python dict size limit exceeded")
+            }
             let box = FullGramPluginTableBox()
             for (kE, vE) in pairs {
                 let k = try self.evalExpr(kE, env: env)
@@ -1035,6 +1090,9 @@ public final class FullGramPythonVM {
             let items = self.iterableItems(try self.evalExpr(iterExpr, env: env))
             var out: [FullGramPluginValue] = []
             for item in items {
+                guard out.count < Self.maxCollectionItems else {
+                    throw FullGramPluginError("Python list comprehension limit exceeded")
+                }
                 let compEnv = PyEnv(parent: env)
                 compEnv.set(varName, item)
                 if let condExpr, !(try self.evalExpr(condExpr, env: compEnv).isTruthy) { continue }
@@ -1108,15 +1166,19 @@ public final class FullGramPythonVM {
     private func mutateList(_ arr: inout [FullGramPluginValue], method: String, args: [FullGramPluginValue]) -> FullGramPluginValue? {
         switch method {
         case "append":
-            arr.append(args.first ?? .nil)
+            if arr.count < Self.maxCollectionItems {
+                arr.append(args.first ?? .nil)
+            }
             return .nil
         case "extend":
             if let first = args.first {
-                arr.append(contentsOf: self.iterableItems(first))
+                let extra = self.iterableItems(first)
+                let remain = max(0, Self.maxCollectionItems - arr.count)
+                arr.append(contentsOf: extra.prefix(remain))
             }
             return .nil
         case "insert":
-            if args.count >= 2, let idx = args[0].asInt {
+            if arr.count < Self.maxCollectionItems, args.count >= 2, let idx = args[0].asInt {
                 let pos = max(0, min(arr.count, Int(idx) < 0 ? arr.count + Int(idx) : Int(idx)))
                 arr.insert(args[1], at: pos)
             }
@@ -1160,6 +1222,8 @@ public final class FullGramPythonVM {
     }
 
     private func evalFString(_ template: String, env: PyEnv) throws -> FullGramPluginValue {
+        try self.enterCall()
+        defer { self.callDepth -= 1 }
         var out = ""
         let chars = Array(template)
         var i = 0
@@ -1180,7 +1244,11 @@ public final class FullGramPythonVM {
                 let toks = try lex.tokenize()
                 var p = PyParser(tokens: toks)
                 let e = try p.parseExpr()
-                out.append(try self.evalExpr(e, env: env).asString)
+                let piece = try self.evalExpr(e, env: env).asString
+                guard out.utf8.count + piece.utf8.count <= Self.maxStringBytes else {
+                    throw FullGramPluginError("Python string size limit exceeded")
+                }
+                out.append(piece)
                 i = j
             } else {
                 out.append(chars[i])
@@ -1193,15 +1261,29 @@ public final class FullGramPythonVM {
     private func evalBinary(_ op: PyTokenKind, _ l: FullGramPluginValue, _ r: FullGramPluginValue) throws -> FullGramPluginValue {
         switch op {
         case .plus:
-            if case let (.string(a), .string(b)) = (l, r) { return .string(a + b) }
-            if case let (.list(a), .list(b)) = (l, r) { return .list(a + b) }
+            if case let (.string(a), .string(b)) = (l, r) {
+                guard a.utf8.count + b.utf8.count <= Self.maxStringBytes else {
+                    throw FullGramPluginError("Python string size limit exceeded")
+                }
+                return .string(a + b)
+            }
+            if case let (.list(a), .list(b)) = (l, r) {
+                guard a.count + b.count <= Self.maxCollectionItems else {
+                    throw FullGramPluginError("Python list size limit exceeded")
+                }
+                return .list(a + b)
+            }
             if case let (.int(a), .int(b)) = (l, r) { return .int(a &+ b) }
             return .double((l.asDouble ?? 0) + (r.asDouble ?? 0))
         case .minus:
             if case let (.int(a), .int(b)) = (l, r) { return .int(a &- b) }
             return .double((l.asDouble ?? 0) - (r.asDouble ?? 0))
         case .star:
-            if case let (.string(s), .int(n)) = (l, r) { return .string(String(repeating: s, count: max(0, min(1000, Int(n))))) }
+            if case let (.string(s), .int(n)) = (l, r) {
+                let unitBytes = max(1, s.utf8.count)
+                let count = max(0, min(Int(n), min(10_000, Self.maxStringBytes / unitBytes)))
+                return .string(String(repeating: s, count: count))
+            }
             if case let (.int(a), .int(b)) = (l, r) { return .int(a &* b) }
             return .double((l.asDouble ?? 0) * (r.asDouble ?? 0))
         case .slash:
@@ -1255,6 +1337,56 @@ public final class FullGramPythonVM {
         case let .table(box): return box.mapPart[needle.asString] != nil
         default: return false
         }
+    }
+
+    private static func isSafeRegex(pattern: String, subject: String) -> Bool {
+        guard !pattern.isEmpty, pattern.count <= 128, subject.count <= 16_384 else {
+            return false
+        }
+        let chars = Array(pattern)
+        var groupHasQuantifierStack: [Bool] = []
+        var escaped = false
+        var prevQuantifier = false
+        for i in 0 ..< chars.count {
+            let c = chars[i]
+            if escaped {
+                escaped = false
+                prevQuantifier = false
+                continue
+            }
+            if c == "\\" {
+                escaped = true
+                prevQuantifier = false
+                continue
+            }
+            let isQuantifier = (c == "*" || c == "+" || c == "?" || c == "{")
+            if isQuantifier {
+                if prevQuantifier && c != "?" {
+                    return false
+                }
+                if let lastIdx = groupHasQuantifierStack.indices.last {
+                    groupHasQuantifierStack[lastIdx] = true
+                }
+                prevQuantifier = true
+            } else {
+                prevQuantifier = false
+            }
+            if c == "(" {
+                groupHasQuantifierStack.append(false)
+            } else if c == ")" {
+                let hadQuantifier = groupHasQuantifierStack.popLast() ?? false
+                if hadQuantifier {
+                    if let lastIdx = groupHasQuantifierStack.indices.last {
+                        groupHasQuantifierStack[lastIdx] = true
+                    }
+                    let next = (i + 1 < chars.count) ? chars[i + 1] : "\0"
+                    if next == "*" || next == "+" || next == "?" || next == "{" {
+                        return false
+                    }
+                }
+            }
+        }
+        return true
     }
 
     private static func pyEqual(_ a: FullGramPluginValue, _ b: FullGramPluginValue) -> Bool {
@@ -1354,7 +1486,18 @@ public final class FullGramPythonVM {
             case "join": return .function { [weak self] args in
                 guard let self else { return .string("") }
                 let items = self.iterableItems(args.first ?? .nil)
-                return .string(items.map { $0.asString }.joined(separator: s))
+                var totalBytes = 0
+                var parts: [String] = []
+                parts.reserveCapacity(items.count)
+                for item in items {
+                    let piece = item.asString
+                    totalBytes += piece.utf8.count + (parts.isEmpty ? 0 : s.utf8.count)
+                    guard totalBytes <= Self.maxStringBytes else {
+                        throw FullGramPluginError("Python string size limit exceeded")
+                    }
+                    parts.append(piece)
+                }
+                return .string(parts.joined(separator: s))
             }
             case "replace": return .function { args in
                 let old = args.count > 0 ? args[0].asString : ""
@@ -1373,7 +1516,10 @@ public final class FullGramPythonVM {
         }
         if case let .list(arr) = obj {
             switch field {
-            case "append": return .function { args in .list(arr + [args.first ?? .nil]) } // Note: functional list in Swift enum; mutable lists best handled via local table/helper
+            case "append": return .function { args in
+                guard arr.count < Self.maxCollectionItems else { return .list(arr) }
+                return .list(arr + [args.first ?? .nil])
+            } // Note: functional list in Swift enum; mutable lists best handled via local table/helper
             case "copy": return .function { _ in .list(arr) }
             default: break
             }
@@ -1502,7 +1648,8 @@ public final class FullGramPythonVM {
                 let pat = args.count > 0 ? args[0].asString : ""
                 let rawRepl = args.count > 1 ? args[1].asString : ""
                 let text = args.count > 2 ? args[2].asString : ""
-                guard let regex = try? NSRegularExpression(pattern: pat) else { return .string(text) }
+                guard Self.isSafeRegex(pattern: pat, subject: text),
+                      let regex = try? NSRegularExpression(pattern: pat) else { return .string(text) }
                 var repl = rawRepl
                 for groupIdx in 1 ... 9 {
                     repl = repl.replacingOccurrences(of: "\\\(groupIdx)", with: "$\(groupIdx)")
@@ -1514,7 +1661,8 @@ public final class FullGramPythonVM {
             "search": .function { args in
                 let pat = args.count > 0 ? args[0].asString : ""
                 let text = args.count > 1 ? args[1].asString : ""
-                guard let regex = try? NSRegularExpression(pattern: pat) else { return .nil }
+                guard Self.isSafeRegex(pattern: pat, subject: text),
+                      let regex = try? NSRegularExpression(pattern: pat) else { return .nil }
                 let ns = text as NSString
                 guard let m = regex.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)) else { return .nil }
                 return .string(ns.substring(with: m.range))
@@ -1522,10 +1670,11 @@ public final class FullGramPythonVM {
             "findall": .function { args in
                 let pat = args.count > 0 ? args[0].asString : ""
                 let text = args.count > 1 ? args[1].asString : ""
-                guard let regex = try? NSRegularExpression(pattern: pat) else { return .list([]) }
+                guard Self.isSafeRegex(pattern: pat, subject: text),
+                      let regex = try? NSRegularExpression(pattern: pat) else { return .list([]) }
                 let ns = text as NSString
                 let matches = regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
-                return .list(matches.map { m in
+                return .list(matches.prefix(Self.maxCollectionItems).map { m in
                     let r = m.numberOfRanges > 1 ? m.range(at: 1) : m.range
                     return r.location != NSNotFound ? .string(ns.substring(with: r)) : .string("")
                 })
@@ -1664,32 +1813,40 @@ public final class FullGramPythonVM {
             ]))
         }
 
+        let safeTimeInterval: (Double?) -> Double = { raw in
+            let now = Date().timeIntervalSince1970
+            guard let raw, raw.isFinite, raw >= -62_135_596_800.0, raw <= 253_402_300_799.0 else {
+                return now
+            }
+            return raw
+        }
+
         let timeMod = FullGramPluginTableBox(dict: [
             "time": .function { _ in .double(Date().timeIntervalSince1970) },
             "monotonic": .function { _ in .double(ProcessInfo.processInfo.systemUptime) },
             "perf_counter": .function { _ in .double(ProcessInfo.processInfo.systemUptime) },
             "localtime": .function { args in
-                let ts = args.first?.asDouble ?? Date().timeIntervalSince1970
+                let ts = safeTimeInterval(args.first?.asDouble)
                 return makeStructTime(Date(timeIntervalSince1970: ts), TimeZone.current)
             },
             "gmtime": .function { args in
-                let ts = args.first?.asDouble ?? Date().timeIntervalSince1970
+                let ts = safeTimeInterval(args.first?.asDouble)
                 return makeStructTime(Date(timeIntervalSince1970: ts), TimeZone(secondsFromGMT: 0) ?? TimeZone.current)
             },
             "strftime": .function { args in
                 let fmt = args.first?.asString ?? "%Y-%m-%d %H:%M:%S"
                 var date = Date()
                 if args.count > 1 {
-                    if let ts = args[1].asDouble {
-                        date = Date(timeIntervalSince1970: ts)
+                    if let rawTs = args[1].asDouble {
+                        date = Date(timeIntervalSince1970: safeTimeInterval(rawTs))
                     } else if case let .table(box) = args[1] {
                         var comps = DateComponents()
-                        comps.year = Int(box.get(key: .string("tm_year")).asInt ?? box.get(key: .string("year")).asInt ?? 1970)
-                        comps.month = Int(box.get(key: .string("tm_mon")).asInt ?? box.get(key: .string("month")).asInt ?? 1)
-                        comps.day = Int(box.get(key: .string("tm_mday")).asInt ?? box.get(key: .string("day")).asInt ?? 1)
-                        comps.hour = Int(box.get(key: .string("tm_hour")).asInt ?? box.get(key: .string("hour")).asInt ?? 0)
-                        comps.minute = Int(box.get(key: .string("tm_min")).asInt ?? box.get(key: .string("minute")).asInt ?? 0)
-                        comps.second = Int(box.get(key: .string("tm_sec")).asInt ?? box.get(key: .string("second")).asInt ?? 0)
+                        comps.year = max(1, min(9999, Int(box.get(key: .string("tm_year")).asInt ?? box.get(key: .string("year")).asInt ?? 1970)))
+                        comps.month = max(1, min(12, Int(box.get(key: .string("tm_mon")).asInt ?? box.get(key: .string("month")).asInt ?? 1)))
+                        comps.day = max(1, min(31, Int(box.get(key: .string("tm_mday")).asInt ?? box.get(key: .string("day")).asInt ?? 1)))
+                        comps.hour = max(0, min(23, Int(box.get(key: .string("tm_hour")).asInt ?? box.get(key: .string("hour")).asInt ?? 0)))
+                        comps.minute = max(0, min(59, Int(box.get(key: .string("tm_min")).asInt ?? box.get(key: .string("minute")).asInt ?? 0)))
+                        comps.second = max(0, min(59, Int(box.get(key: .string("tm_sec")).asInt ?? box.get(key: .string("second")).asInt ?? 0)))
                         if let resolved = Calendar.current.date(from: comps) {
                             date = resolved
                         }
@@ -1698,7 +1855,7 @@ public final class FullGramPythonVM {
                 return .string(formatPyStrftime(fmt, date, TimeZone.current))
             },
             "ctime": .function { args in
-                let ts = args.first?.asDouble ?? Date().timeIntervalSince1970
+                let ts = safeTimeInterval(args.first?.asDouble)
                 return .string(formatPyStrftime("%a %b %d %H:%M:%S %Y", Date(timeIntervalSince1970: ts), TimeZone.current))
             }
         ])
@@ -1736,7 +1893,7 @@ public final class FullGramPythonVM {
         let dtClass = FullGramPluginTableBox(dict: [
             "now": .function { _ in makeDateTimeObj(Date()) },
             "fromtimestamp": .function { args in
-                let ts = args.first?.asDouble ?? Date().timeIntervalSince1970
+                let ts = safeTimeInterval(args.first?.asDouble)
                 return makeDateTimeObj(Date(timeIntervalSince1970: ts))
             }
         ])
@@ -1744,7 +1901,7 @@ public final class FullGramPythonVM {
             "datetime": .table(dtClass),
             "now": .function { _ in makeDateTimeObj(Date()) },
             "fromtimestamp": .function { args in
-                let ts = args.first?.asDouble ?? Date().timeIntervalSince1970
+                let ts = safeTimeInterval(args.first?.asDouble)
                 return makeDateTimeObj(Date(timeIntervalSince1970: ts))
             }
         ])

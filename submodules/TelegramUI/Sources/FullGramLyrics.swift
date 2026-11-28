@@ -1,6 +1,6 @@
 import Foundation
 import UIKit
-import SwiftSignalKit
+@preconcurrency import SwiftSignalKit
 import Display
 import AccountContext
 
@@ -32,18 +32,18 @@ enum FullGramLyricsFetcher {
         return URLSession(configuration: config)
     }()
 
+    private static let featRegex = try? NSRegularExpression(pattern: "\\s*[\\(\\[]?(?:feat\\.?|ft\\.?)\\s+[^\\)\\]]+[\\)\\]]?", options: .caseInsensitive)
     private static let extRegex = try? NSRegularExpression(pattern: #"\.(mp3|flac|m4a|wav|ogg|aac|opus)$"#, options: .caseInsensitive)
     private static let tagRegex = try? NSRegularExpression(pattern: #"\s*[\(\[](?:official\s*(?:music\s*)?(?:video|audio|lyric\s*video)|lyrics?|hd|hq|4k|320\s*kbps|prod\.[^\)\]]*)[\)\]]"#, options: .caseInsensitive)
 
     private static let cacheLock = NSLock()
-    private static var lyricsCache: [String: FullGramLyricsResult] = [:]
-    private static var lyricsCacheOrder: [String] = []
+    private nonisolated(unsafe) static var lyricsCache: [String: FullGramLyricsResult] = [:]
+    private nonisolated(unsafe) static var lyricsCacheOrder: [String] = []
 
     private static func normalizeMetadata(rawTitle: String, rawArtist: String?) -> (title: String, artist: String?) {
-        let featRegex = try? NSRegularExpression(pattern: "\\s*[\\(\\[]?(?:feat\\.?|ft\\.?)\\s+[^\\)\\]]+[\\)\\]]?", options: .caseInsensitive)
         var title = rawTitle.replacingOccurrences(of: "_", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         var artist = rawArtist?.replacingOccurrences(of: "_", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-        if let featRegex {
+        if let featRegex = self.featRegex {
             let tns = title as NSString
             title = featRegex.stringByReplacingMatches(in: title, range: NSRange(location: 0, length: tns.length), withTemplate: "").trimmingCharacters(in: .whitespacesAndNewlines)
             if let a = artist {
@@ -225,7 +225,11 @@ enum FullGramLyricsFetcher {
 
     private static func fetchLRCLIB(title: String, artist: String?, duration: Double) -> Signal<FullGramLyricsResult?, NoError> {
         return Signal { subscriber in
-            var components = URLComponents(string: "https://lrclib.net/api/get")!
+            guard var components = URLComponents(string: "https://lrclib.net/api/get") else {
+                subscriber.putNext(nil)
+                subscriber.putCompletion()
+                return EmptyDisposable
+            }
             var query: [URLQueryItem] = [URLQueryItem(name: "track_name", value: title)]
             if let artist, !artist.isEmpty {
                 query.append(URLQueryItem(name: "artist_name", value: artist))
@@ -262,7 +266,10 @@ enum FullGramLyricsFetcher {
     }
 
     private static func searchLRCLIB(title: String, artist: String?, duration: Double, completion: @escaping @Sendable (FullGramLyricsResult?) -> Void) {
-        var components = URLComponents(string: "https://lrclib.net/api/search")!
+        guard var components = URLComponents(string: "https://lrclib.net/api/search") else {
+            completion(nil)
+            return
+        }
         let q = [artist ?? "", title].filter { !$0.isEmpty }.joined(separator: " ")
         components.queryItems = [URLQueryItem(name: "q", value: q)]
         guard let url = components.url else {
@@ -270,23 +277,24 @@ enum FullGramLyricsFetcher {
             return
         }
         session.dataTask(with: makeLRCLIBRequest(url: url)) { data, _, _ in
-            if let data, let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]], !array.isEmpty {
-                let best = array.first(where: { ($0["syncedLyrics"] as? String)?.isEmpty == false }) ?? array.first!
-                if let parsed = parseLRCLIBEntry(best, duration: duration) {
-                    completion(parsed)
-                    return
-                }
+            if let data,
+               let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+               let best = array.first(where: { ($0["syncedLyrics"] as? String)?.isEmpty == false }) ?? array.first,
+               let parsed = parseLRCLIBEntry(best, duration: duration) {
+                completion(parsed)
+                return
             }
-            if artist?.isEmpty == false && !title.isEmpty {
-                var fallbackComp = URLComponents(string: "https://lrclib.net/api/search")!
+            if artist?.isEmpty == false && !title.isEmpty,
+               var fallbackComp = URLComponents(string: "https://lrclib.net/api/search") {
                 fallbackComp.queryItems = [URLQueryItem(name: "q", value: title)]
                 if let fallbackUrl = fallbackComp.url {
                     session.dataTask(with: makeLRCLIBRequest(url: fallbackUrl)) { fData, _, _ in
-                        guard let fData, let arr = try? JSONSerialization.jsonObject(with: fData) as? [[String: Any]], !arr.isEmpty else {
+                        guard let fData,
+                              let arr = try? JSONSerialization.jsonObject(with: fData) as? [[String: Any]],
+                              let best = arr.first(where: { ($0["syncedLyrics"] as? String)?.isEmpty == false }) ?? arr.first else {
                             completion(nil)
                             return
                         }
-                        let best = arr.first(where: { ($0["syncedLyrics"] as? String)?.isEmpty == false }) ?? arr.first!
                         completion(parseLRCLIBEntry(best, duration: duration))
                     }.resume()
                     return

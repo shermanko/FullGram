@@ -518,15 +518,19 @@ private func fullGramModelPresets(for provider: FullGramAIProvider) -> [String] 
     }
 }
 
+private final class FullGramAINativePresenterBox: @unchecked Sendable {
+    var present: (@MainActor @Sendable (UIViewController) -> Void)?
+}
+
 public func fullGramAIAssistantController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
-    var presentNativeImpl: ((UIViewController) -> Void)?
+    let presenter = FullGramAINativePresenterBox()
 
     let refresh = ValuePromise<Int>(0, ignoreRepeated: false)
     let tick = Atomic<Int>(value: 0)
     let testingState = Atomic<Bool>(value: false)
 
-    let bump: () -> Void = {
+    let bump: @Sendable () -> Void = {
         refresh.set(tick.modify { $0 + 1 })
     }
 
@@ -554,7 +558,7 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
                 }))
             }
             alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            presentNativeImpl?(alert)
+            presenter.present?(alert)
         },
         editApiKey: {
             let provider = FullGramAIStore.shared.provider
@@ -584,7 +588,7 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
                 FullGramAIKeychain.setApiKey("", for: provider)
             }))
             alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            presentNativeImpl?(alert)
+            presenter.present?(alert)
         },
         editModel: {
             let provider = FullGramAIStore.shared.provider
@@ -612,10 +616,10 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
                     FullGramAIStore.shared.modelName = alert?.textFields?.first?.text ?? ""
                 }))
                 alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-                presentNativeImpl?(alert)
+                presenter.present?(alert)
             }))
             sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            presentNativeImpl?(sheet)
+            presenter.present?(sheet)
         },
         editEndpoint: {
             let provider = FullGramAIStore.shared.provider
@@ -635,7 +639,7 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
                 FullGramAIStore.shared.customEndpoint = alert?.textFields?.first?.text ?? ""
             }))
             alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            presentNativeImpl?(alert)
+            presenter.present?(alert)
         },
         testConnection: {
             let wasTesting = testingState.swap(true)
@@ -645,19 +649,21 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
                 DispatchQueue.main.async {
                     _ = testingState.swap(false)
                     bump()
-                    let title: String
-                    let message: String
-                    switch result {
-                    case let .success(reply):
-                        title = "Подключение работает"
-                        message = "Ответ модели: «\(reply)»"
-                    case let .failure(error):
-                        title = "Ошибка подключения"
-                        message = error.localizedDescription
+                    MainActor.assumeIsolated {
+                        let title: String
+                        let message: String
+                        switch result {
+                        case let .success(reply):
+                            title = "Подключение работает"
+                            message = "Ответ модели: «\(reply)»"
+                        case let .failure(error):
+                            title = "Ошибка подключения"
+                            message = error.localizedDescription
+                        }
+                        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+                        alert.addAction(UIAlertAction(title: "OK", style: .default))
+                        presenter.present?(alert)
                     }
-                    let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-                    alert.addAction(UIAlertAction(title: "OK", style: .default))
-                    presentNativeImpl?(alert)
                 }
             }
         },
@@ -697,10 +703,10 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
                     FullGramAIStore.shared.customInstructions = alert?.textFields?.first?.text ?? ""
                 }))
                 alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-                presentNativeImpl?(alert)
+                presenter.present?(alert)
             }))
             sheet.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            presentNativeImpl?(sheet)
+            presenter.present?(sheet)
         },
         openSecurityPrompt: {
             pushImpl?(fullGramAISecurityPromptController(context: context))
@@ -759,7 +765,7 @@ public func fullGramAIAssistantController(context: AccountContext) -> ViewContro
 
     let controller = ItemListController(context: context, state: signal)
     pushImpl = { [weak controller] c in controller?.push(c) }
-    presentNativeImpl = { [weak controller] vc in
+    presenter.present = { [weak controller] vc in
         if let pop = vc.popoverPresentationController, let view = controller?.view {
             pop.sourceView = view
             pop.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1.0, height: 1.0)

@@ -636,6 +636,10 @@ public final class FullGramEconomy: @unchecked Sendable {
             return nil
         }
         var gift = self.state.ownedGifts[idx]
+        guard gift.isUpgraded || gift.canUpgradeToNFT else {
+            self.lock.unlock()
+            return nil
+        }
         if chargeStars && !gift.isUpgraded && gift.upgradeStars > 0 {
             guard self.state.starsBalance >= gift.upgradeStars else {
                 self.lock.unlock()
@@ -731,6 +735,17 @@ public final class FullGramEconomy: @unchecked Sendable {
             Self.syncToGrantedNFTStore(updated)
         }
         return updated
+    }
+
+    public func syncOwnedGiftOwnerFromProfile(ecoEntryId: String, toPeerId: Int64) {
+        self.lock.lock()
+        if let idx = self.state.ownedGifts.firstIndex(where: { $0.id == ecoEntryId }) {
+            self.state.ownedGifts[idx].ownerPeerId = toPeerId
+            self.state.ownedGifts[idx].pinnedToProfile = true
+            self.state.ownedGifts[idx].hiddenFromProfile = false
+            self.saveLocked()
+        }
+        self.lock.unlock()
     }
 
     public func syncOwnedGiftStateFromProfile(ecoEntryId: String, pinned: Bool, hidden: Bool) {
@@ -1071,6 +1086,8 @@ public final class FullGramEconomy: @unchecked Sendable {
         self.refreshCloudNow(selfPeerId: selfPeerId)
     }
 
+    private static let cloudSession = URLSession(configuration: .ephemeral)
+
     public func refreshCloudNow(selfPeerId: Int64? = nil, completion: (@Sendable (Bool) -> Void)? = nil) {
         guard let url = URL(string: Self.economyURL) else {
             completion?(false)
@@ -1088,8 +1105,7 @@ public final class FullGramEconomy: @unchecked Sendable {
         var req = URLRequest(url: url)
         req.timeoutInterval = 10.0
         req.cachePolicy = .reloadIgnoringLocalCacheData
-        let ephemeral = URLSession(configuration: .ephemeral)
-        ephemeral.dataTask(with: req) { [weak self] data, response, _ in
+        Self.cloudSession.dataTask(with: req) { [weak self] data, response, _ in
             guard let self else { return }
             defer {
                 self.lock.lock()

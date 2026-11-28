@@ -36,9 +36,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 jobs:
   checks:
@@ -54,6 +52,10 @@ jobs:
   build:
     name: Build FullGram iOS
     needs: checks
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: xcode-27
     timeout-minutes: 240
@@ -423,40 +425,61 @@ jobs:
       - name: Free disk space before saving cache
         if: always()
         run: |
+          /Users/Shared/telegram-ios/build-input/bazel-9.2.0-darwin-arm64 --output_user_root=/private/var/tmp/_bazel_containerhost shutdown 2>/dev/null || true
           chmod -R u+w /private/var/tmp/_bazel_containerhost 2>/dev/null || true
           rm -rf /Users/Shared/telegram-ios /private/var/tmp/_bazel_containerhost || true
           python3 - <<'PY'
           import os
           from pathlib import Path
 
-          cache_dir = Path("/Users/Shared/bazel-disk-cache")
-          if not cache_dir.is_dir():
-              raise SystemExit(0)
+          def dir_files(root_path: Path):
+              items = []
+              total = 0
+              if not root_path.is_dir():
+                  return items, total
+              for root, _, names in os.walk(root_path):
+                  for name in names:
+                      p = Path(root) / name
+                      try:
+                          st = p.stat()
+                          items.append((st.st_mtime, st.st_size, p))
+                          total += st.st_size
+                      except OSError:
+                          pass
+              return items, total
 
-          max_bytes = 5_200 * 1024 * 1024
-          files = []
-          total = 0
-          for root, _, names in os.walk(cache_dir):
-              for name in names:
-                  p = Path(root) / name
-                  try:
-                      st = p.stat()
-                      files.append((st.st_mtime, st.st_size, p))
-                      total += st.st_size
-                  except OSError:
-                      pass
+          disk_dir = Path("/Users/Shared/bazel-disk-cache")
+          repo_dir = Path("/Users/Shared/bazel-repo-cache")
 
-          if total > max_bytes:
-              files.sort(key=lambda item: item[0])
-              for _, size, p in files:
-                  if total <= max_bytes:
+          disk_files, disk_total = dir_files(disk_dir)
+          max_disk_bytes = 5_200 * 1024 * 1024
+          if disk_total > max_disk_bytes:
+              disk_files.sort(key=lambda item: item[0])
+              for _, size, p in disk_files:
+                  if disk_total <= max_disk_bytes:
                       break
                   try:
                       p.unlink()
-                      total -= size
+                      disk_total -= size
                   except OSError:
                       pass
-          print(f"Bazel disk cache size ready for save: {total / (1024 * 1024):.1f} MB")
+
+          repo_files, repo_total = dir_files(repo_dir)
+          max_combined_bytes = 8_500 * 1024 * 1024
+          if disk_total + repo_total > max_combined_bytes:
+              repo_files.sort(key=lambda item: item[0])
+              for _, size, p in repo_files:
+                  if disk_total + repo_total <= max_combined_bytes:
+                      break
+                  try:
+                      p.unlink()
+                      repo_total -= size
+                  except OSError:
+                      pass
+          print(
+              f"Bazel cache ready for save: disk={disk_total / (1024 * 1024):.1f} MB, "
+              f"repo={repo_total / (1024 * 1024):.1f} MB"
+          )
           PY
 
       - name: Save Bazel disk and repo caches

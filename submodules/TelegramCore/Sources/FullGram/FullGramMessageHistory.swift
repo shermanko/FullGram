@@ -272,9 +272,9 @@ public struct FullGramMessageHistoryState: Codable, Equatable {
     }
 }
 
-public final class FullGramArchiveFileStore {
+public final class FullGramArchiveFileStore: @unchecked Sendable {
     private static let registryLock = NSLock()
-    private static var stores: [String: FullGramArchiveFileStore] = [:]
+    private nonisolated(unsafe) static var stores: [String: FullGramArchiveFileStore] = [:]
 
     public static func shared(basePath: String) -> FullGramArchiveFileStore {
         let normalized = URL(fileURLWithPath: basePath).standardizedFileURL.path

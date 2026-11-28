@@ -330,7 +330,9 @@ enum FullGramScreenshotPrompt {
                 guard let controller,
                       controller.viewIfLoaded?.window != nil,
                       controller.presentedViewController == nil,
-                      let hostView = controller.view else {
+                      let hostView = controller.view,
+                      hostView.bounds.width > 0.0,
+                      hostView.bounds.height > 0.0 else {
                     return
                 }
                 let renderer = UIGraphicsImageRenderer(bounds: hostView.bounds)

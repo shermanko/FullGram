@@ -3,12 +3,12 @@ import UIKit
 import UniformTypeIdentifiers
 import Display
 import AsyncDisplayKit
-import SwiftSignalKit
+@preconcurrency import SwiftSignalKit
 import TelegramCore
 import TelegramPresentationData
 import ItemListUI
 import PresentationDataUtils
-import AccountContext
+@preconcurrency import AccountContext
 import UndoUI
 
 // MARK: - Для работы (Подтверждение важных чатов, Архивы ZIP/RAR, Документы, Переименование)
@@ -123,13 +123,17 @@ private final class FullGramWorkFilePickerDelegate: NSObject, UIDocumentPickerDe
     let onPick: (URL) -> Void
     init(onPick: @escaping (URL) -> Void) { self.onPick = onPick }
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        activeWorkFilePickerDelegate = nil
         if let first = urls.first {
             self.onPick(first)
         }
     }
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        activeWorkFilePickerDelegate = nil
+    }
 }
 
-private var activeWorkFilePickerDelegate: FullGramWorkFilePickerDelegate?
+@MainActor private var activeWorkFilePickerDelegate: FullGramWorkFilePickerDelegate?
 
 public func fullGramWorkController(context: AccountContext) -> ViewController {
     var pushImpl: ((ViewController) -> Void)?
@@ -500,8 +504,8 @@ public func fullGramBookmarksController(context: AccountContext) -> ViewControll
                 tf.placeholder = "Текст закладки…"
             }
             alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-            alert.addAction(UIAlertAction(title: "Сохранить", style: .default) { _ in
-                let text = alert.textFields?.first?.text ?? ""
+            alert.addAction(UIAlertAction(title: "Сохранить", style: .default) { [weak alert] _ in
+                let text = alert?.textFields?.first?.text ?? ""
                 FullGramExtras.shared.addBookmark(peerId: context.account.peerId.toInt64(), peerTitle: "Заметка", text: text)
             })
             presentNativeImpl?(alert)

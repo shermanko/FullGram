@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import ImageIO
 import Vision
 import TelegramCore
 import AsyncDisplayKit
@@ -1648,48 +1649,9 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
                     f(.default)
                 })))
             }
-            if !isVideo,
-               let image = message.effectiveMedia.compactMap({ $0 as? TelegramMediaImage }).first,
-               let rep = largestImageRepresentation(image.representations) {
+            if !isVideo {
                 let ru = chatPresentationInterfaceState.strings.baseLanguageCode.hasPrefix("ru")
-                actions.append(.action(ContextMenuActionItem(text: ru ? "Распознать текст (OCR)" : "Copy Text from Image (OCR)", icon: { theme in
-                    return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Copy"), color: theme.actionSheet.primaryTextColor)
-                }, action: { _, f in
-                    let _ = (context.engine.resources.data(resource: EngineMediaResource(rep.resource), incremental: false)
-                    |> take(1)
-                    |> map { data -> String? in
-                        guard data.isComplete,
-                              let uiImage = UIImage(contentsOfFile: data.path),
-                              let cgImage = uiImage.cgImage else {
-                            return nil
-                        }
-                        var extracted: String?
-                        let request = VNRecognizeTextRequest { req, _ in
-                            let obs = (req.results as? [VNRecognizedTextObservation]) ?? []
-                            let lines = obs.compactMap { $0.topCandidates(1).first?.string }
-                            let joined = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-                            if !joined.isEmpty {
-                                extracted = joined
-                            }
-                        }
-                        request.recognitionLevel = .accurate
-                        request.usesLanguageCorrection = true
-                        request.recognitionLanguages = ["ru-RU", "en-US", "uk-UA"]
-                        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-                        try? handler.perform([request])
-                        return extracted
-                    }
-                    |> deliverOnMainQueue).startStandalone(next: { recognized in
-                        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-                        if let recognized, !recognized.isEmpty {
-                            UIPasteboard.general.string = recognized
-                            controllerInteraction.presentControllerInCurrent(UndoOverlayController(presentationData: presentationData, content: .copy(text: ru ? "Текст с фото скопирован" : "Text copied from image"), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return true }), nil)
-                        } else {
-                            controllerInteraction.presentControllerInCurrent(UndoOverlayController(presentationData: presentationData, content: .info(title: nil, text: ru ? "Текст на изображении не найден" : "No text found on image", timeout: nil, customUndoText: nil), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
-                        }
-                    })
-                    f(.default)
-                })))
+                fullGramAppendOCRAction(to: &actions, message: message, context: context, isRussian: ru, controllerInteraction: controllerInteraction)
             }
         } else if resourceAvailable, message.containsSecretMedia, FullGramExtras.shared.saveViewOnce && FullGramExtras.shared.viewOnceMenuSave {
             var mediaReference: AnyMediaReference?
@@ -1718,48 +1680,9 @@ func contextMenuForChatPresentationInterfaceState(chatPresentationInterfaceState
                     f(.default)
                 })))
             }
-            if !isVideo,
-               let image = message.effectiveMedia.compactMap({ $0 as? TelegramMediaImage }).first,
-               let rep = largestImageRepresentation(image.representations) {
+            if !isVideo {
                 let ru = chatPresentationInterfaceState.strings.baseLanguageCode.hasPrefix("ru")
-                actions.append(.action(ContextMenuActionItem(text: ru ? "Распознать текст (OCR)" : "Copy Text from Image (OCR)", icon: { theme in
-                    return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Copy"), color: theme.actionSheet.primaryTextColor)
-                }, action: { _, f in
-                    let _ = (context.engine.resources.data(resource: EngineMediaResource(rep.resource), incremental: false)
-                    |> take(1)
-                    |> map { data -> String? in
-                        guard data.isComplete,
-                              let uiImage = UIImage(contentsOfFile: data.path),
-                              let cgImage = uiImage.cgImage else {
-                            return nil
-                        }
-                        var extracted: String?
-                        let request = VNRecognizeTextRequest { req, _ in
-                            let obs = (req.results as? [VNRecognizedTextObservation]) ?? []
-                            let lines = obs.compactMap { $0.topCandidates(1).first?.string }
-                            let joined = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-                            if !joined.isEmpty {
-                                extracted = joined
-                            }
-                        }
-                        request.recognitionLevel = .accurate
-                        request.usesLanguageCorrection = true
-                        request.recognitionLanguages = ["ru-RU", "en-US", "uk-UA"]
-                        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-                        try? handler.perform([request])
-                        return extracted
-                    }
-                    |> deliverOnMainQueue).startStandalone(next: { recognized in
-                        let presentationData = context.sharedContext.currentPresentationData.with { $0 }
-                        if let recognized, !recognized.isEmpty {
-                            UIPasteboard.general.string = recognized
-                            controllerInteraction.presentControllerInCurrent(UndoOverlayController(presentationData: presentationData, content: .copy(text: ru ? "Текст с фото скопирован" : "Text copied from image"), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return true }), nil)
-                        } else {
-                            controllerInteraction.presentControllerInCurrent(UndoOverlayController(presentationData: presentationData, content: .info(title: nil, text: ru ? "Текст на изображении не найден" : "No text found on image", timeout: nil, customUndoText: nil), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
-                        }
-                    })
-                    f(.default)
-                })))
+                fullGramAppendOCRAction(to: &actions, message: message, context: context, isRussian: ru, controllerInteraction: controllerInteraction)
             }
         }
         
@@ -4391,4 +4314,70 @@ private final class ChatRateTranscriptionContextItemNode: ASDisplayNode, Context
     func actionNode(at point: CGPoint) -> ContextActionNodeProtocol {
         return self
     }
+}
+
+private func fullGramCGImageOrientation(for orientation: UIImage.Orientation) -> CGImagePropertyOrientation {
+    switch orientation {
+    case .up: return .up
+    case .down: return .down
+    case .left: return .left
+    case .right: return .right
+    case .upMirrored: return .upMirrored
+    case .downMirrored: return .downMirrored
+    case .leftMirrored: return .leftMirrored
+    case .rightMirrored: return .rightMirrored
+    @unknown default: return .up
+    }
+}
+
+private func fullGramRecognizeText(atPath path: String) -> String? {
+    guard let uiImage = UIImage(contentsOfFile: path),
+          let cgImage = uiImage.cgImage else {
+        return nil
+    }
+    let request = VNRecognizeTextRequest()
+    request.recognitionLevel = .accurate
+    request.usesLanguageCorrection = true
+    request.recognitionLanguages = ["ru-RU", "en-US", "uk-UA"]
+    let handler = VNImageRequestHandler(cgImage: cgImage, orientation: fullGramCGImageOrientation(for: uiImage.imageOrientation), options: [:])
+    try? handler.perform([request])
+    let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+    let joined = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    return joined.isEmpty ? nil : joined
+}
+
+private func fullGramAppendOCRAction(
+    to actions: inout [ContextMenuItem],
+    message: EngineRawMessage,
+    context: AccountContext,
+    isRussian: Bool,
+    controllerInteraction: ChatControllerInteraction
+) {
+    guard let image = message.effectiveMedia.compactMap({ $0 as? TelegramMediaImage }).first,
+          let rep = largestImageRepresentation(image.representations) else {
+        return
+    }
+    actions.append(.action(ContextMenuActionItem(text: isRussian ? "Распознать текст (OCR)" : "Copy Text from Image (OCR)", icon: { theme in
+        return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Copy"), color: theme.actionSheet.primaryTextColor)
+    }, action: { _, f in
+        let _ = (context.engine.resources.data(resource: EngineMediaResource(rep.resource), incremental: false)
+        |> take(1)
+        |> deliverOn(Queue.concurrentDefaultQueue())
+        |> map { data -> String? in
+            guard data.isComplete else {
+                return nil
+            }
+            return fullGramRecognizeText(atPath: data.path)
+        }
+        |> deliverOnMainQueue).startStandalone(next: { recognized in
+            let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+            if let recognized, !recognized.isEmpty {
+                UIPasteboard.general.string = recognized
+                controllerInteraction.presentControllerInCurrent(UndoOverlayController(presentationData: presentationData, content: .copy(text: isRussian ? "Текст с фото скопирован" : "Text copied from image"), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return true }), nil)
+            } else {
+                controllerInteraction.presentControllerInCurrent(UndoOverlayController(presentationData: presentationData, content: .info(title: nil, text: isRussian ? "Текст на изображении не найден" : "No text found on image", timeout: nil, customUndoText: nil), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), nil)
+            }
+        })
+        f(.default)
+    })))
 }

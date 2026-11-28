@@ -575,14 +575,14 @@ final class RoundVideoFrameProcessor {
 
     private func prepareInputTextures(y: MTLTexture, cbcr: MTLTexture, commandBuffer: MTLCommandBuffer, secondary: Bool) -> (y: MTLTexture, cbcr: MTLTexture)? {
         // VGA is already a 480-pixel square crop. Avoid a redundant filtering pass.
-        guard self.mode == .hdLanczos, min(y.width, y.height) > Self.outputWidth else {
+        guard self.mode == .hdLanczos, min(y.width, y.height) > self.outputWidth else {
             return (y, cbcr)
         }
         let scaler: RoundVideoLanczosScaler
         if let current = secondary ? self.secondaryLanczosScaler : self.primaryLanczosScaler {
             scaler = current
         } else {
-            guard let current = RoundVideoLanczosScaler(device: self.device, width: Self.outputWidth, height: Self.outputHeight) else {
+            guard let current = RoundVideoLanczosScaler(device: self.device, width: self.outputWidth, height: self.outputHeight) else {
                 return nil
             }
             if secondary {
